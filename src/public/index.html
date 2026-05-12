@@ -1,0 +1,345 @@
+﻿<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>時分居酒屋</title>
+    <link rel="icon" type="image/png" href="/assets/img/icon.png" />
+    <link rel="apple-touch-icon" href="/assets/img/icon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <canvas id="background-canvas" aria-hidden="true"></canvas>
+    <canvas id="spark-canvas" aria-hidden="true"></canvas>
+    <img id="mouse-follower" src="/assets/img/014_animation.gif" alt="" aria-hidden="true" />
+    <div class="bg-shape one"></div>
+    <div class="bg-shape two"></div>
+    <main class="layout">
+      <button id="mobileInfoToggleBtn" type="button" class="mobile-info-toggle" aria-expanded="false" aria-controls="mobileInfoDrawer">▸</button>
+
+      <section id="mobileInfoDrawer" class="mobile-info-drawer">
+        <header class="hero">
+          <h1>時分居酒屋</h1>
+          <p>現在可直接在網頁送出主對話；Discord Bot 仍可並行使用。</p>
+          <span id="startStatus" class="status-pill">尚未開始</span>
+        </header>
+
+        <nav class="mobile-nav" aria-label="手機分頁切換">
+          <button id="mobilePageChatBtn" type="button" class="secondary">對話</button>
+          <button id="mobilePageControlsBtn" type="button" class="muted">功能</button>
+        </nav>
+      </section>
+
+      <section class="panel sidebar mobile-controls-page">
+        <h2>使用者設定</h2>
+        <form id="profileForm" class="stack">
+          <label>
+            稱呼
+            <input id="displayName" type="text" placeholder="例如：小翼" />
+          </label>
+          <label>
+            自訂補充
+            <textarea id="identityText" rows="3" placeholder="會附加到每次使用者發言最後"></textarea>
+          </label>
+          <button type="submit">保存使用者設定</button>
+        </form>
+
+        <div class="actions-block">
+          <h2>對話模型設定</h2>
+          <p class="form-hint">正式使用上下文壓縮模式；正文輸出會使用最近對話與目前壓縮內容。</p>
+          <label>
+            正文輸出模型
+            <select id="chatOutputModelSelect">
+              <option value="deepseek-reasoner">deepseek-reasoner</option>
+              <option value="deepseek-chat">deepseek-chat</option>
+              <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+              <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+            </select>
+          </label>
+          <label>
+            正文對話上下文輪數
+            <input id="dialogueContextRoundsInput" type="number" min="1" max="100" value="20" />
+          </label>
+          <button id="editModularPromptsBtn" type="button" class="secondary">編輯 Prompt</button>
+          <p class="form-hint">可編輯正文輸出 Prompt 與壓縮 Prompt。</p>
+          <p id="contextCompressionModeHint" class="form-hint">壓縮模式固定啟用。</p>
+          <button id="applyConversationSettingsBtn" type="button" class="secondary">確認套用模型與輪數</button>
+          <p class="form-hint">調整模型或上下文輪數後，請按此按鈕一次套用。</p>
+        </div>
+
+        <div class="actions-block">
+          <h2>角色卡</h2>
+          <button id="selectRoleCardBtn" type="button" class="secondary desktop-role-picker-btn">選擇角色卡</button>
+          <button id="createRoleCardBtn" type="button">建立角色卡</button>
+          <div id="roleCardList" class="card-list role-card-inline-list"></div>
+        </div>
+
+        <div class="actions-block">
+          <h2>對話存檔</h2>
+          <button id="selectSessionBtn" type="button" class="secondary desktop-session-picker-btn">選擇對話存檔</button>
+          <button id="saveSessionBtn" type="button">保存目前整體對話</button>
+          <div id="sessionList" class="card-list session-inline-list"></div>
+        </div>
+
+        <div class="actions-block">
+          <h2>功能按鈕</h2>
+          <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
+          <button id="contextCompressionInspectBtn" type="button">查看/編輯壓縮內容</button>
+          <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
+        </div>
+      </section>
+
+      <section class="panel chat-panel">
+        <section class="chat-primary mobile-chat-page">
+          <div id="messages" class="messages"></div>
+
+          <form id="chatForm" class="chat-input">
+            <textarea id="chatInput" rows="5" readonly placeholder="請把 Bot 新增到你的應用程式，然後使用 Slash 指令 /ai"></textarea>
+            <button id="sendBtn" type="submit" disabled>回 Discord 輸入</button>
+          </form>
+        </section>
+
+        <section class="chat-secondary mobile-controls-page">
+          <details class="meta-box ai-log-box" open>
+            <summary>AI 呼叫紀錄</summary>
+            <div id="aiLogs" class="ai-log-list"></div>
+          </details>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="roleCardDialog" class="dialog">
+      <form id="roleCardForm" method="dialog" class="stack">
+        <h3 id="roleCardDialogTitle">建立角色卡</h3>
+        <input id="roleCardId" type="hidden" />
+        <label>
+          角色模式
+          <select id="roleCardMode">
+            <option value="single">單角色</option>
+            <option value="multi">多角色</option>
+            <option value="no_role">無角色</option>
+          </select>
+        </label>
+        <label>
+          名字
+          <input id="roleCardName" type="text" />
+        </label>
+        <label>
+          封面
+          <input id="roleCardCoverImageFile" type="file" accept="image/*" />
+        </label>
+        <input id="roleCardCoverImage" type="hidden" />
+        <div class="cover-editor">
+          <div class="cover-preview" id="roleCardCoverPreview">未設定封面</div>
+          <div class="cover-editor-actions">
+            <button id="editRoleCardCoverCropBtn" type="button" class="secondary">編輯封面取景</button>
+            <button id="removeRoleCardCoverBtn" type="button" class="muted">移除封面</button>
+          </div>
+        </div>
+        <section class="stack">
+          <h4>自定義內容</h4>
+          <p class="form-hint">可自由建立「名字 + 內容」欄位，例如：性格、場景、系統指令、詳細描述、人物關係。</p>
+          <div id="roleCardCustomSectionList" class="custom-section-list"></div>
+          <button id="addRoleCardCustomSectionBtn" type="button" class="secondary">＋ 新增自定義內容</button>
+        </section>
+        <label>
+          開場對話
+          <textarea id="roleCardOpening" rows="4"></textarea>
+        </label>
+        <section class="stack">
+          <h4>世界書 Lorebooks</h4>
+          <p class="form-hint">條目會在最近對話或本輪輸入命中關鍵字時，自動插入到角色卡區塊下方。</p>
+          <div id="roleCardLorebookList"></div>
+          <button id="addRoleCardLorebookBtn" type="button" class="secondary">＋ 新增世界書條目</button>
+        </section>
+        <div class="dialog-actions">
+          <button type="submit">保存</button>
+          <button type="button" id="cancelRoleCardDialog">取消</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="coverCropDialog" class="dialog cover-crop-dialog">
+      <section class="cover-crop-shell">
+        <div class="role-picker-header">
+          <h3>編輯縮圖</h3>
+          <button id="cancelCoverCropBtn" type="button" class="muted">關閉</button>
+        </div>
+        <div class="cover-crop-layout">
+          <div class="cover-crop-pane">
+            <p class="form-hint">原圖：拖曳紅框移動，拖右下角調整大小。</p>
+            <div id="coverCropStage" class="cover-crop-stage">
+              <img id="coverCropImage" alt="封面原圖" />
+              <div id="coverCropBox" class="cover-crop-box">
+                <span class="cover-crop-handle" aria-hidden="true"></span>
+              </div>
+            </div>
+          </div>
+          <div class="cover-crop-pane">
+            <p class="form-hint">縮圖預覽：</p>
+            <canvas id="coverCropPreview" class="cover-crop-preview"></canvas>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button id="changeCoverCropImageBtn" type="button" class="secondary">更改圖片</button>
+          <button id="confirmCoverCropBtn" type="button">確定</button>
+        </div>
+      </section>
+    </dialog>
+
+    <dialog id="roleCardPickerDialog" class="dialog role-picker-dialog">
+      <section class="stack role-picker-shell">
+        <div class="role-picker-header">
+          <h3>選擇角色卡</h3>
+          <button id="closeRoleCardPickerBtn" type="button" class="muted">關閉</button>
+        </div>
+        <div id="roleCardPickerGrid" class="role-picker-grid"></div>
+        <div class="role-picker-pagination">
+          <button id="roleCardPickerPrevBtn" type="button" class="secondary">上一頁</button>
+          <span id="roleCardPickerPageInfo">第 1 / 1 頁</span>
+          <button id="roleCardPickerNextBtn" type="button" class="secondary">下一頁</button>
+        </div>
+      </section>
+    </dialog>
+
+    <dialog id="sessionPickerDialog" class="dialog session-picker-dialog">
+      <section class="stack session-picker-shell">
+        <div class="role-picker-header">
+          <h3>選擇對話存檔</h3>
+          <button id="closeSessionPickerBtn" type="button" class="muted">關閉</button>
+        </div>
+        <div id="sessionPickerGrid" class="session-picker-grid"></div>
+        <div class="role-picker-pagination">
+          <button id="sessionPickerPrevBtn" type="button" class="secondary">上一頁</button>
+          <span id="sessionPickerPageInfo">第 1 / 1 頁</span>
+          <button id="sessionPickerNextBtn" type="button" class="secondary">下一頁</button>
+        </div>
+      </section>
+    </dialog>
+
+    <dialog id="editAiDialog" class="dialog">
+      <form id="editAiForm" method="dialog" class="stack">
+        <h3>編輯AI的輸出對話</h3>
+        <label>
+          選擇訊息
+          <select id="assistantMessageSelect"></select>
+        </label>
+        <label>
+          內容
+          <textarea id="assistantMessageContent" rows="8" required></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button type="submit">保存修改</button>
+          <button type="button" id="cancelEditAiDialog">取消</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="contextCompressionDialog" class="dialog prompt-viewer-dialog">
+      <form id="contextCompressionForm" method="dialog" class="stack">
+        <h3>查看/編輯壓縮內容</h3>
+        <p id="contextCompressionMeta" class="form-hint">尚未啟用或尚未產生壓縮內容。</p>
+        <label>
+          壓縮內容
+          <textarea id="contextCompressionContentView" rows="16" placeholder="尚未產生壓縮內容。"></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button type="submit" id="saveContextCompressionDialog">保存壓縮內容</button>
+          <button type="button" id="closeContextCompressionDialog">關閉</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="envSettingsDialog" class="dialog prompt-viewer-dialog">
+      <form id="envSettingsForm" method="dialog" class="stack">
+        <h3>環境設定 .env</h3>
+        <p id="envSettingsHint" class="form-hint">保存後會寫入專案根目錄 .env。DeepSeek API key 等多數設定會立即同步；Discord Bot Token、Port 等啟動期設定建議重啟 npm start。</p>
+        <label>
+          .env 內容
+          <textarea id="envSettingsContent" rows="18" spellcheck="false"></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button type="submit">保存 .env</button>
+          <button type="button" id="restartServerBtn" class="secondary">重啟伺服器</button>
+          <button type="button" id="cancelEnvSettingsDialog">關閉</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="assistantPromptDialog" class="dialog prompt-viewer-dialog">
+      <form id="assistantPromptForm" method="dialog" class="stack">
+        <h3>編輯助手 Prompt</h3>
+        <p class="form-hint">這會更新 CharacterCardCreationAssistant 使用的 system prompt，保存後立即生效。</p>
+        <label>
+          CharacterCardCreationAssistant Prompt
+          <textarea id="assistantPromptInput" rows="18" required></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button type="submit">保存助手 Prompt</button>
+          <button type="button" id="cancelAssistantPromptDialog">關閉</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="modularPromptDialog" class="dialog prompt-viewer-dialog">
+      <form id="modularPromptForm" method="dialog" class="stack">
+        <h3>Prompt 編輯</h3>
+        <label>
+          角色模式
+          <select id="modularPromptModeSelect">
+            <option value="single">單角色</option>
+            <option value="multi">多角色</option>
+            <option value="no_role">無角色</option>
+          </select>
+        </label>
+        <div class="prompt-grid prompt-stack">
+          <section class="stack">
+            <label>
+              壓縮主要規則
+              <textarea id="modularCompressionMainRules" rows="8" required></textarea>
+            </label>
+            <div class="inline-actions">
+              <strong>壓縮模型</strong>
+              <button id="addCompressionModelBtn" type="button" class="secondary">＋ 新增模型</button>
+            </div>
+            <p class="form-hint">每個模型會輸出 `model.ID` 與 `delete.ID`。AI 新輸出會追加合併，不會覆蓋既有壓縮內容。</p>
+            <div id="modularCompressionModelList" class="custom-section-list"></div>
+          </section>
+          <label>
+            正文主要規則
+            <textarea id="modularReasonerMainRules" rows="8" required></textarea>
+          </label>
+          <label>
+            正文輸出規則
+            <textarea id="modularReasonerContextRules" rows="8" required></textarea>
+          </label>
+        </div>
+        <div class="prompt-toolbar">
+          <div>
+            <strong>最終 Prompt 預覽</strong>
+            <p class="form-hint">會套用 `{{user}}` 稱呼替換。</p>
+          </div>
+          <button id="previewModularPromptBtn" type="button" class="secondary">更新預覽</button>
+        </div>
+        <div class="prompt-grid">
+          <label>
+            正文 system prompt
+            <textarea id="modularPreviewReasonerSystem" rows="12" readonly></textarea>
+          </label>
+          <label>
+            壓縮 Prompt 預覽
+            <textarea id="modularPreviewCompressionPrompt" rows="12" readonly></textarea>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button type="submit">保存 Prompt</button>
+          <button type="button" id="cancelModularPromptDialog">關閉</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast"></div>
+    <script src="/effects.js" defer></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

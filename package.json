@@ -1,0 +1,18 @@
+{
+  "name": "discord-deepseek-bot",
+  "version": "1.0.0",
+  "description": "Discord chat bot powered by DeepSeek API",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:all": "node scripts/start-all-apps.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.6.1"
+  }
+}
