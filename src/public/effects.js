@@ -10,6 +10,31 @@
   const backgroundCtx = backgroundCanvas.getContext("2d");
   const sparkCtx = sparkCanvas.getContext("2d");
   const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  const userAgent = navigator.userAgent || "";
+  const platform = navigator.userAgentData && typeof navigator.userAgentData.platform === "string"
+    ? navigator.userAgentData.platform
+    : navigator.platform || "";
+  const isWindows = /Win/i.test(platform) || /Windows/i.test(userAgent);
+  const isAppleTouchDevice = /iPhone|iPad|iPod/i.test(userAgent) ||
+    (/Mac/i.test(platform) && Number(navigator.maxTouchPoints || 0) > 1);
+  const isMacDesktop = !isWindows && /Mac/i.test(platform) && !isAppleTouchDevice;
+  const effectsEnabled = isWindows || !prefersReducedMotion;
+  const followerEnabled = effectsEnabled && !isMacDesktop;
+  const targetFrameMs = isMacDesktop ? 1000 / 30 : 0;
+  document.documentElement.classList.toggle("is-mac-desktop", isMacDesktop);
+  document.documentElement.classList.toggle("is-windows", isWindows);
+  document.documentElement.classList.toggle("prefers-reduced-motion", Boolean(prefersReducedMotion));
+  document.documentElement.classList.toggle("effects-disabled", !effectsEnabled);
+  window.timeTavernEffects = {
+    platform,
+    isWindows,
+    isAppleTouchDevice,
+    isMacDesktop,
+    prefersReducedMotion: Boolean(prefersReducedMotion),
+    effectsEnabled,
+    followerEnabled
+  };
+  mouseFollower.hidden = !followerEnabled;
 
   let width = 0;
   let height = 0;
@@ -17,6 +42,8 @@
   let particles = [];
   let sparks = [];
   let animationFrameId = 0;
+  let lastFrameTime = 0;
+  let lastMacClickEffectTime = 0;
 
   const followerAngleOffset = Math.PI / 2;
   const followerOrbitRadius = 32;
@@ -54,7 +81,9 @@
   }
 
   function createParticles() {
-    const count = Math.min(1200, Math.floor((width * height) / 900));
+    const count = isMacDesktop
+      ? Math.min(320, Math.max(90, Math.floor((width * height) / 4200)))
+      : Math.min(1200, Math.floor((width * height) / 900));
     const centerX = width * 0.5;
     const centerY = height * 0.5;
     const spreadX = width * 0.42;
@@ -92,7 +121,9 @@
   }
 
   function resizeCanvas() {
-    pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    pixelRatio = isMacDesktop
+      ? Math.min(window.devicePixelRatio || 1, 1.25)
+      : Math.min(window.devicePixelRatio || 1, 2);
     width = window.innerWidth;
     height = window.innerHeight;
 
@@ -221,8 +252,12 @@
 
       backgroundCtx.beginPath();
       backgroundCtx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-      backgroundCtx.shadowColor = `rgba(${red}, ${green}, 255, 1)`;
-      backgroundCtx.shadowBlur = 4 + twinkle * 26;
+      if (isMacDesktop) {
+        backgroundCtx.shadowBlur = 0;
+      } else {
+        backgroundCtx.shadowColor = `rgba(${red}, ${green}, 255, 1)`;
+        backgroundCtx.shadowBlur = 4 + twinkle * 26;
+      }
       backgroundCtx.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
       backgroundCtx.fill();
     }
@@ -282,7 +317,7 @@
   }
 
   function updateMouseFollower() {
-    if (!follower.visible) {
+    if (!followerEnabled || !follower.visible) {
       return;
     }
 
@@ -308,18 +343,63 @@
       `translate3d(${follower.x}px, ${follower.y}px, 0) translate(-50%, -50%) rotate(${follower.angle}rad)`;
   }
 
-  function animate() {
-    drawBackground();
-    drawSparks();
-    updateMouseFollower();
+  function animate(timestamp = 0) {
+    if (!targetFrameMs || timestamp - lastFrameTime >= targetFrameMs) {
+      drawBackground();
+      drawSparks();
+      updateMouseFollower();
+      lastFrameTime = timestamp;
+    }
     animationFrameId = requestAnimationFrame(animate);
   }
 
+  function startAnimation() {
+    if (animationFrameId || !effectsEnabled || document.hidden) {
+      return;
+    }
+    lastFrameTime = 0;
+    animationFrameId = requestAnimationFrame(animate);
+  }
+
+  function stopAnimation() {
+    if (!animationFrameId) {
+      return;
+    }
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = 0;
+  }
+
+  function createMacClickEffect(x, y) {
+    if (!effectsEnabled) {
+      return;
+    }
+
+    const now = performance.now();
+    if (now - lastMacClickEffectTime < 90) {
+      return;
+    }
+    lastMacClickEffectTime = now;
+
+    const ripple = document.createElement("span");
+    ripple.className = "click-ripple";
+    ripple.style.left = `${x}px`;
+    ripple.style.top = `${y}px`;
+    document.body.appendChild(ripple);
+
+    ripple.addEventListener("animationend", () => ripple.remove(), { once: true });
+    setTimeout(() => ripple.remove(), 700);
+  }
+
   function updatePointer(event) {
-    const target = getFollowerTarget(event.clientX, event.clientY);
     mouse.x = event.clientX;
     mouse.y = event.clientY;
     mouse.active = true;
+
+    if (!followerEnabled) {
+      return;
+    }
+
+    const target = getFollowerTarget(event.clientX, event.clientY);
     follower.targetX = target.x;
     follower.targetY = target.y;
 
@@ -332,25 +412,32 @@
   }
 
   window.addEventListener("resize", resizeCanvas);
-  window.addEventListener("pointermove", updatePointer);
+  window.addEventListener("pointermove", updatePointer, { passive: true });
   window.addEventListener("pointerleave", () => {
     mouse.active = false;
   });
   window.addEventListener("blur", () => {
     mouse.active = false;
   });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopAnimation();
+    } else {
+      startAnimation();
+    }
+  });
   window.addEventListener("pointerdown", (event) => {
     updatePointer(event);
+    if (isMacDesktop) {
+      createMacClickEffect(event.clientX, event.clientY);
+      return;
+    }
     pushNearestParticles(event.clientX, event.clientY);
     createSpark(event.clientX, event.clientY);
-  });
+  }, { passive: true });
 
   resizeCanvas();
   drawBackground();
 
-  if (!prefersReducedMotion) {
-    animate();
-  } else {
-    cancelAnimationFrame(animationFrameId);
-  }
+  startAnimation();
 })();

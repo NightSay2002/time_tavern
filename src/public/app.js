@@ -86,7 +86,9 @@
 
   envSettingsDialog: document.getElementById("envSettingsDialog"),
   envSettingsForm: document.getElementById("envSettingsForm"),
-  envSettingsContent: document.getElementById("envSettingsContent"),
+  envSettingsFields: document.getElementById("envSettingsFields"),
+  envSettingsExtraList: document.getElementById("envSettingsExtraList"),
+  addEnvExtraBtn: document.getElementById("addEnvExtraBtn"),
   envSettingsHint: document.getElementById("envSettingsHint"),
   restartServerBtn: document.getElementById("restartServerBtn"),
   cancelEnvSettingsDialog: document.getElementById("cancelEnvSettingsDialog"),
@@ -126,11 +128,123 @@ let roleCardPickerPage = 1;
 let sessionPickerPage = 1;
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
+let envExtraEntries = [];
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
 const SESSION_PICKER_PAGE_SIZE = 9;
 const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
+const ENV_FIELD_GROUPS = [
+  {
+    title: "伺服器",
+    description: "Port 變更後需要重啟 npm start。",
+    fields: [
+      {
+        key: "PORT",
+        label: "本地伺服器 Port",
+        type: "number",
+        placeholder: "3234",
+        help: "預設 3234。改完後請重啟伺服器。"
+      }
+    ]
+  },
+  {
+    title: "Discord Bot",
+    description: "不填 Bot Token 時，只會啟動本地網頁管理端。",
+    fields: [
+      {
+        key: "DISCORD_BOT_TOKEN",
+        label: "Discord Bot Token",
+        type: "password",
+        autocomplete: "off",
+        help: "填入後需要重啟，Bot 才會重新登入。"
+      },
+      {
+        key: "DISCORD_CLIENT_ID",
+        label: "Discord Client ID",
+        type: "text",
+        help: "選填。無法從 Token 解出 Client ID 時，用它產生邀請連結。"
+      },
+      {
+        key: "COMMAND_PREFIX",
+        label: "文字指令前綴",
+        type: "text",
+        placeholder: "!ai",
+        help: "例如：!ai 你好"
+      },
+      {
+        key: "DISCORD_TEXT_ATTACHMENT_MAX_BYTES",
+        label: ".txt 附件大小上限",
+        type: "number",
+        placeholder: "1048576",
+        help: "單位 bytes。1048576 = 1 MB。"
+      }
+    ]
+  },
+  {
+    title: "DeepSeek API",
+    description: "API key 多數情況保存後會立即同步。",
+    fields: [
+      {
+        key: "DEEPSEEK_API_KEY",
+        label: "DeepSeek API Key",
+        type: "password",
+        autocomplete: "off"
+      },
+      {
+        key: "DEEPSEEK_REQUEST_TIMEOUT_MS",
+        label: "API 請求逾時",
+        type: "number",
+        placeholder: "600000",
+        help: "單位毫秒。600000 = 10 分鐘。"
+      },
+      {
+        key: "DEEPSEEK_MAX_TOKENS",
+        label: "輸出 token 上限",
+        type: "number",
+        help: "選填。主聊天／壓縮呼叫預設 32000，仍會受模型上限限制。"
+      },
+      {
+        key: "DEEPSEEK_API_KEY2",
+        label: "壓縮用 DeepSeek API Key",
+        type: "password",
+        autocomplete: "off",
+        help: "選填。舊版 deepseek_key2 / DEEPSEEK_KEY2 會自動帶入這裡。"
+      }
+    ]
+  },
+  {
+    title: "回覆行為",
+    fields: [
+      {
+        key: "AI_MIN_REPLY_CHARS",
+        label: "最少可見字數",
+        type: "number",
+        placeholder: "600",
+        help: "最終回覆太短時會觸發提示或補救流程。"
+      }
+    ]
+  }
+];
+const ENV_ALIAS_KEYS = {
+  DEEPSEEK_API_KEY2: ["DEEPSEEK_KEY2", "deepseek_key2"]
+};
+const ENV_KNOWN_KEYS = new Set(ENV_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key)));
+Object.values(ENV_ALIAS_KEYS).flat().forEach((key) => ENV_KNOWN_KEYS.add(key));
+const ENV_DROPPED_KEYS = new Set([
+  "AI_REPLY_LENGTH_RULE",
+  "DEEPSEEK_MODEL",
+  "DEEPSEEK_BASE_URL",
+  "DEEPSEEK_CALL_MODE",
+  "DEEPSEEK_DIALOGUE_CONTEXT_ROUNDS",
+  "DEEPSEEK_CHAT_MAX_TOKENS",
+  "AI_REASONER_HISTORY_SYSTEM_PROMPT_FILE",
+  "AI_STATE_PREP_SYSTEM_PROMPT_FILE",
+  "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT_FILE",
+  "CONTEXT_COMPRESSION_PROMPT_FILE",
+  "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT",
+  "CONTEXT_COMPRESSION_PROMPT"
+]);
 
 function normalizeRoleCardMode(mode = "") {
   const normalized = String(mode)
@@ -435,6 +549,238 @@ function renderMarkdownToHtml(markdown = "") {
   flushParagraph();
   closeList();
   return html.join("\n");
+}
+
+function parseEnvValue(rawValue = "") {
+  let value = String(rawValue ?? "").trim();
+  if (!value) {
+    return "";
+  }
+
+  const quote = value[0];
+  if ((quote === "\"" || quote === "'" || quote === "`") && value.endsWith(quote)) {
+    value = value.slice(1, -1);
+  }
+
+  return value
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, "\"")
+    .replace(/\\'/g, "'")
+    .replace(/\\\\/g, "\\");
+}
+
+function parseEnvContent(content = "") {
+  const parsed = {};
+  const orderedEntries = [];
+  String(content || "").split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      return;
+    }
+
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!match) {
+      return;
+    }
+
+    const key = match[1];
+    const value = parseEnvValue(match[2]);
+    parsed[key] = value;
+    orderedEntries.push({ key, value });
+  });
+
+  return { parsed, orderedEntries };
+}
+
+function formatEnvValue(value = "") {
+  const raw = String(value ?? "");
+  if (!raw) {
+    return "";
+  }
+
+  if (/^[^\s#"'`=]+$/.test(raw)) {
+    return raw;
+  }
+
+  return JSON.stringify(raw);
+}
+
+function getEnvFieldValue(parsedEnv, key) {
+  if (Object.prototype.hasOwnProperty.call(parsedEnv, key)) {
+    return parsedEnv[key];
+  }
+
+  const aliases = ENV_ALIAS_KEYS[key] || [];
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(parsedEnv, alias)) {
+      return parsedEnv[alias];
+    }
+  }
+
+  return "";
+}
+
+function createEnvField(field, parsedEnv) {
+  const wrapper = document.createElement("label");
+  wrapper.className = `env-field env-field-${field.type === "textarea" ? "wide" : "normal"}`;
+
+  const title = document.createElement("span");
+  title.className = "env-field-title";
+  title.textContent = field.label;
+
+  const keyLabel = document.createElement("code");
+  keyLabel.className = "env-field-key";
+  keyLabel.textContent = field.key;
+
+  const input = field.type === "textarea"
+    ? document.createElement("textarea")
+    : document.createElement("input");
+  input.dataset.envKey = field.key;
+  input.id = `envField_${field.key}`;
+  input.name = field.key;
+  input.value = getEnvFieldValue(parsedEnv, field.key);
+  input.placeholder = field.placeholder || "";
+  input.spellcheck = false;
+
+  if (field.type === "textarea") {
+    input.rows = field.rows || 4;
+  } else {
+    input.type = field.type || "text";
+    if (field.autocomplete) {
+      input.autocomplete = field.autocomplete;
+    }
+  }
+
+  wrapper.append(title, keyLabel, input);
+
+  if (field.help) {
+    const help = document.createElement("span");
+    help.className = "env-field-help";
+    help.textContent = field.help;
+    wrapper.appendChild(help);
+  }
+
+  return wrapper;
+}
+
+function createEnvExtraRow(entry = {}) {
+  const row = document.createElement("div");
+  row.className = "env-extra-row";
+
+  const keyInput = document.createElement("input");
+  keyInput.type = "text";
+  keyInput.placeholder = "KEY";
+  keyInput.value = entry.key || "";
+  keyInput.dataset.envExtraKey = "true";
+  keyInput.spellcheck = false;
+
+  const valueInput = document.createElement("input");
+  valueInput.type = "text";
+  valueInput.placeholder = "value";
+  valueInput.value = entry.value || "";
+  valueInput.dataset.envExtraValue = "true";
+  valueInput.spellcheck = false;
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "muted";
+  removeBtn.textContent = "刪除";
+  removeBtn.addEventListener("click", () => row.remove());
+
+  row.append(keyInput, valueInput, removeBtn);
+  return row;
+}
+
+function renderEnvExtraRows(entries = []) {
+  if (!el.envSettingsExtraList) {
+    return;
+  }
+  el.envSettingsExtraList.innerHTML = "";
+  entries.forEach((entry) => el.envSettingsExtraList.appendChild(createEnvExtraRow(entry)));
+}
+
+function renderEnvSettingsForm(content = "") {
+  if (!el.envSettingsFields) {
+    return;
+  }
+
+  const { parsed, orderedEntries } = parseEnvContent(content);
+  el.envSettingsFields.innerHTML = "";
+
+  ENV_FIELD_GROUPS.forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "env-section";
+
+    const heading = document.createElement("h4");
+    heading.textContent = group.title;
+    section.appendChild(heading);
+
+    if (group.description) {
+      const description = document.createElement("p");
+      description.className = "form-hint";
+      description.textContent = group.description;
+      section.appendChild(description);
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "env-grid";
+    group.fields.forEach((field) => grid.appendChild(createEnvField(field, parsed)));
+    section.appendChild(grid);
+    el.envSettingsFields.appendChild(section);
+  });
+
+  envExtraEntries = orderedEntries.filter((entry) => !ENV_KNOWN_KEYS.has(entry.key) && !ENV_DROPPED_KEYS.has(entry.key));
+  renderEnvExtraRows(envExtraEntries);
+}
+
+function collectEnvFieldValues() {
+  const values = {};
+  el.envSettingsForm?.querySelectorAll("[data-env-key]").forEach((input) => {
+    values[input.dataset.envKey] = input.value || "";
+  });
+  return values;
+}
+
+function collectEnvExtraEntries() {
+  const rows = Array.from(el.envSettingsExtraList?.querySelectorAll(".env-extra-row") || []);
+  return rows
+    .map((row) => {
+      const key = row.querySelector("[data-env-extra-key]")?.value.trim() || "";
+      const value = row.querySelector("[data-env-extra-value]")?.value || "";
+      return { key, value };
+    })
+    .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.key));
+}
+
+function buildEnvContentFromForm() {
+  const values = collectEnvFieldValues();
+  const lines = [
+    "# 由網頁環境設定表單自動生成。",
+    "# 保存後會寫入專案根目錄 .env。"
+  ];
+
+  ENV_FIELD_GROUPS.forEach((group) => {
+    lines.push("", `# ${group.title}`);
+    if (group.description) {
+      lines.push(`# ${group.description}`);
+    }
+    group.fields.forEach((field) => {
+      if (field.help) {
+        lines.push(`# ${field.help}`);
+      }
+      lines.push(`${field.key}=${formatEnvValue(values[field.key] || "")}`);
+    });
+  });
+
+  const extraEntries = collectEnvExtraEntries();
+  if (extraEntries.length) {
+    lines.push("", "# 其他自訂環境變數");
+    extraEntries.forEach((entry) => {
+      lines.push(`${entry.key}=${formatEnvValue(entry.value)}`);
+    });
+  }
+
+  return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
 }
 
 function formatUsage(usage) {
@@ -2065,7 +2411,7 @@ async function saveContextCompressionContent() {
 async function openEnvSettingsDialog() {
   try {
     const payload = await request("/api/env", { method: "GET" });
-    el.envSettingsContent.value = payload?.content || "";
+    renderEnvSettingsForm(payload?.content || "");
     if (el.envSettingsHint) {
       el.envSettingsHint.textContent = payload?.restartHint || "保存後會寫入專案根目錄 .env。";
     }
@@ -2593,6 +2939,12 @@ function bindEvents() {
     });
   }
 
+  if (el.addEnvExtraBtn) {
+    el.addEnvExtraBtn.addEventListener("click", () => {
+      el.envSettingsExtraList?.appendChild(createEnvExtraRow());
+    });
+  }
+
   if (el.closeContextCompressionDialog) {
     el.closeContextCompressionDialog.addEventListener("click", () => el.contextCompressionDialog.close());
   }
@@ -2624,12 +2976,12 @@ function bindEvents() {
       try {
         const payload = await request("/api/env", {
           method: "PUT",
-          body: JSON.stringify({ content: el.envSettingsContent.value })
+          body: JSON.stringify({ content: buildEnvContentFromForm() })
         });
         if (el.envSettingsHint) {
           el.envSettingsHint.textContent = payload?.restartHint || "已保存 .env。";
         }
-        el.envSettingsContent.value = payload?.content || el.envSettingsContent.value;
+        renderEnvSettingsForm(payload?.content || buildEnvContentFromForm());
         showToast("環境設定已保存");
       } catch (error) {
         showToast(error.message, "error");

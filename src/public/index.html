@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260513-env-form" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -250,10 +250,13 @@
       <form id="envSettingsForm" method="dialog" class="stack">
         <h3>環境設定 .env</h3>
         <p id="envSettingsHint" class="form-hint">保存後會寫入專案根目錄 .env。DeepSeek API key 等多數設定會立即同步；Discord Bot Token、Port 等啟動期設定建議重啟 npm start。</p>
-        <label>
-          .env 內容
-          <textarea id="envSettingsContent" rows="18" spellcheck="false"></textarea>
-        </label>
+        <div id="envSettingsFields" class="env-settings-fields"></div>
+        <details class="meta-box env-extra-box">
+          <summary>其他環境變數</summary>
+          <p class="form-hint">只在你有自訂 key 時使用。保存時會一起寫入 .env。</p>
+          <div id="envSettingsExtraList" class="env-extra-list"></div>
+          <button type="button" id="addEnvExtraBtn" class="secondary">新增其他設定</button>
+        </details>
         <div class="dialog-actions">
           <button type="submit">保存 .env</button>
           <button type="button" id="restartServerBtn" class="secondary">重啟伺服器</button>
@@ -339,7 +342,7 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script src="/effects.js" defer></script>
-    <script type="module" src="/app.js"></script>
+    <script src="/effects.js?v=20260513-env-form" defer></script>
+    <script type="module" src="/app.js?v=20260513-env-form"></script>
   </body>
 </html>

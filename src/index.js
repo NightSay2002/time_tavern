@@ -209,11 +209,6 @@ function finalizePromptTemplate(template, variables) {
     .trim();
 }
 
-const AI_REPLY_LENGTH_RULE = envText(
-  "AI_REPLY_LENGTH_RULE",
-  "針對每次對話的輸出需要多於600字,但不超過1000字,每段约60-80字.具體字數由他決定"
-);
-
 const CHARACTER_CARD_CREATION_ASSISTANT_PROMPT_FILE = path.join(PROMPTS_DIR, "CharacterCardCreationAssistant.txt");
 let characterCardCreationAssistantPrompt = envTextOrFile(
   "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT",
@@ -1203,7 +1198,29 @@ function getContentType(filePath) {
   if (filePath.endsWith(".json")) {
     return "application/json; charset=utf-8";
   }
+  if (filePath.endsWith(".woff2")) {
+    return "font/woff2";
+  }
+  if (filePath.endsWith(".png")) {
+    return "image/png";
+  }
+  if (filePath.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (filePath.endsWith(".cur")) {
+    return "image/x-icon";
+  }
   return "application/octet-stream";
+}
+
+function getStaticHeaders(filePath) {
+  const headers = { "Content-Type": getContentType(filePath) };
+  if (/\.(?:woff2|png|gif|cur)$/i.test(filePath)) {
+    headers["Cache-Control"] = "public, max-age=31536000, immutable";
+  } else {
+    headers["Cache-Control"] = "no-cache";
+  }
+  return headers;
 }
 
 function getActiveRoleCard(state) {
@@ -2432,8 +2449,7 @@ function getDialogueContextRounds(currentState = null) {
 function buildCharacterCardCreationAssistantSystemPrompt(state, runtimeUserName = "") {
 	  const resolvedUserName = resolveUserDisplayName(state.userProfile, runtimeUserName);
 	  return finalizePromptTemplate(getCharacterCardCreationAssistantPrompt(), {
-	    user: resolvedUserName,
-	    REPLY_LENGTH_RULE: ""
+	    user: resolvedUserName
 	  }).trim();
 }
 
@@ -5235,7 +5251,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        res.writeHead(200, { "Content-Type": getContentType(filePath) });
+        res.writeHead(200, getStaticHeaders(filePath));
         fs.createReadStream(filePath).pipe(res);
         return;
       }
