@@ -20,7 +20,7 @@
       <section id="mobileInfoDrawer" class="mobile-info-drawer">
         <header class="hero">
           <h1>時分居酒屋</h1>
-          <p>現在可直接在網頁送出主對話；Discord Bot 仍可並行使用。</p>
+          <p>還沒想到寫什麼好</p>
           <span id="startStatus" class="status-pill">尚未開始</span>
         </header>
 
@@ -114,11 +114,7 @@
         <input id="roleCardId" type="hidden" />
         <label>
           角色模式
-          <select id="roleCardMode">
-            <option value="single">單角色</option>
-            <option value="multi">多角色</option>
-            <option value="no_role">無角色</option>
-          </select>
+          <select id="roleCardMode"></select>
         </label>
         <label>
           名字
@@ -284,13 +280,17 @@
     <dialog id="modularPromptDialog" class="dialog prompt-viewer-dialog">
       <form id="modularPromptForm" method="dialog" class="stack">
         <h3>Prompt 編輯</h3>
+        <div class="mode-editor-row">
+          <label>
+            角色模式
+            <select id="modularPromptModeSelect"></select>
+          </label>
+          <button id="addModularPromptModeBtn" type="button" class="secondary">＋ 新增模式</button>
+          <button id="deleteModularPromptModeBtn" type="button" class="muted">刪除模式</button>
+        </div>
         <label>
-          角色模式
-          <select id="modularPromptModeSelect">
-            <option value="single">單角色</option>
-            <option value="multi">多角色</option>
-            <option value="no_role">無角色</option>
-          </select>
+          模式名字
+          <input id="modularPromptModeName" type="text" placeholder="例如：單角色" />
         </label>
         <div class="prompt-grid prompt-stack">
           <section class="stack">
@@ -303,7 +303,7 @@
               <button id="addCompressionModelBtn" type="button" class="secondary">＋ 新增模型</button>
             </div>
             <p class="form-hint">每個模型會輸出 `model.ID` 與 `delete.ID`。AI 新輸出會追加合併，不會覆蓋既有壓縮內容。</p>
-            <div id="modularCompressionModelList" class="custom-section-list"></div>
+            <div id="modularCompressionModelList" class="custom-section-list compression-model-list"></div>
           </section>
           <label>
             正文主要規則

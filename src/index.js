@@ -1494,14 +1494,31 @@ function normalizeRoleCardRelationships(value) {
 }
 
 function normalizeRoleCardMode(value) {
-  const normalized = safeText(value).toLowerCase();
+  const normalized = safeText(value)
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .replace(/^_+|_+$/g, "");
   if (normalized === "multi") {
     return "multi";
   }
   if (normalized === "no_role" || normalized === "norole" || normalized === "none") {
     return "no_role";
   }
-  return "single";
+  return normalized || "single";
+}
+
+function getDefaultModularPromptModeName(mode = "single") {
+  const normalizedMode = normalizeRoleCardMode(mode);
+  if (normalizedMode === "multi") {
+    return "多角色";
+  }
+  if (normalizedMode === "no_role") {
+    return "無角色";
+  }
+  if (normalizedMode === "single") {
+    return "單角色";
+  }
+  return normalizedMode;
 }
 
 function createDefaultModularPromptConfig(mode = "single") {
@@ -1509,6 +1526,7 @@ function createDefaultModularPromptConfig(mode = "single") {
   return {
     version: 2,
     mode: normalizedMode,
+    name: getDefaultModularPromptModeName(normalizedMode),
     contextCompression: {
       mainRules: getContextCompressionPrompt(),
       models: [
@@ -1576,6 +1594,7 @@ function normalizeModularPromptConfig(input, mode = "single") {
   return {
     version: 2,
     mode: normalizedMode,
+    name: safeText(source.name || source.title || source.displayName) || defaults.name,
     contextCompression,
     contextCompressionPrompt: contextCompression.mainRules,
     reasonerHistory: {
@@ -1604,9 +1623,7 @@ function loadModularPromptConfig(mode = "single") {
       return defaults;
     }
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    const normalized = normalizeModularPromptConfig(parsed, normalizedMode);
-    fs.writeFileSync(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
-    return normalized;
+    return normalizeModularPromptConfig(parsed, normalizedMode);
   } catch {
     return defaults;
   }
@@ -1619,6 +1636,18 @@ function getModularPromptConfigStore() {
       multi: loadModularPromptConfig("multi"),
       no_role: loadModularPromptConfig("no_role")
     };
+    try {
+      if (fs.existsSync(MODULAR_PROMPTS_DIR)) {
+        fs.readdirSync(MODULAR_PROMPTS_DIR)
+          .filter((fileName) => fileName.endsWith(".json"))
+          .forEach((fileName) => {
+            const mode = normalizeRoleCardMode(path.basename(fileName, ".json"));
+            modularPromptConfigStore[mode] = loadModularPromptConfig(mode);
+          });
+      }
+    } catch {
+      // Ignore optional custom prompt mode discovery failures.
+    }
   }
   return modularPromptConfigStore;
 }
@@ -1644,6 +1673,25 @@ function saveModularPromptConfig(mode = "single", config = {}) {
     [normalizedMode]: normalized
   };
   return normalized;
+}
+
+function deleteModularPromptConfig(mode = "single") {
+  const normalizedMode = normalizeRoleCardMode(mode);
+  if (["single", "multi", "no_role"].includes(normalizedMode)) {
+    return { ok: false, error: "內建模式不可刪除。" };
+  }
+  if (state.roleCards.some((card) => normalizeRoleCardMode(card.mode) === normalizedMode)) {
+    return { ok: false, error: "仍有角色卡使用此模式，請先切換那些角色卡的模式。" };
+  }
+
+  const filePath = getModularPromptConfigFilePath(normalizedMode);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+  const store = getModularPromptConfigStore();
+  delete store[normalizedMode];
+  modularPromptConfigStore = store;
+  return { ok: true, mode: normalizedMode };
 }
 
 function isMultiRoleCard(card) {
@@ -2225,6 +2273,43 @@ function getRoleCardOpeningDialogueMessage(currentState, runtimeUserName = "") {
   };
 }
 
+function getStoredOpeningDialogueMessage(currentState) {
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  const leadingAssistantMessages = [];
+
+  for (const message of conversation) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    if (message.role === "user") {
+      break;
+    }
+    if (message.role === "assistant" && safeText(message.content)) {
+      leadingAssistantMessages.push(message);
+    }
+  }
+
+  const openingMessage = leadingAssistantMessages.find((message) => message.source === "opening") ||
+    leadingAssistantMessages[0];
+  return openingMessage
+    ? { ...openingMessage, role: "assistant", content: safeText(openingMessage.content) }
+    : null;
+}
+
+function getOpeningDialogueContextMessage(currentState, runtimeUserName = "") {
+  return getStoredOpeningDialogueMessage(currentState) ||
+    getRoleCardOpeningDialogueMessage(currentState, runtimeUserName);
+}
+
+function messageListHasSameContent(messages = [], content = "") {
+  const normalizedContent = safeText(content);
+  if (!normalizedContent) {
+    return false;
+  }
+  return (Array.isArray(messages) ? messages : [])
+    .some((message) => safeText(message?.content) === normalizedContent);
+}
+
 function getRecentDialogueContextMessages(
   currentState,
   latestUserMessageId = "",
@@ -2234,7 +2319,7 @@ function getRecentDialogueContextMessages(
   const normalizedMaxRounds = Math.max(0, Number(maxRounds) || 0);
   const latestUserIndex = findLatestUserIndex(currentState, latestUserMessageId);
   if (latestUserIndex <= 0) {
-    const openingDialogueMessage = getRoleCardOpeningDialogueMessage(currentState, runtimeUserName);
+    const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
     return openingDialogueMessage ? [openingDialogueMessage] : [];
   }
 
@@ -2270,7 +2355,7 @@ function getRecentDialogueContextMessages(
 
   const selectedRounds = rounds.slice(-normalizedMaxRounds);
   const contextMessages = selectedRounds.flat();
-  const openingDialogueMessage = getRoleCardOpeningDialogueMessage(currentState, runtimeUserName);
+  const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
 
   // Keep the context-round limit strict when the user sets it to a very small
   // number. Otherwise "補開場對話" makes DEEPSEEK_DIALOGUE_CONTEXT_ROUNDS=1 look
@@ -2646,6 +2731,12 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
   }
 
   const messagesToCompress = uncompressedRounds.flat();
+  const openingDialogueMessage = compressionState.compressedThroughTurnNumber <= 0
+    ? getOpeningDialogueContextMessage(currentState, runtimeUserName)
+    : null;
+  if (openingDialogueMessage && !messageListHasSameContent(messagesToCompress, openingDialogueMessage.content)) {
+    messagesToCompress.unshift(openingDialogueMessage);
+  }
   const compressedThroughTurnNumber = getRoundTurnNumber(uncompressedRounds[uncompressedRounds.length - 1]) ||
     compressionState.compressedThroughTurnNumber;
   const activeCompressionConfig = normalizeContextCompressionPromptConfig(
@@ -2724,13 +2815,12 @@ function buildSimpleCompressedReasonerSupportMessage(currentState, runtimeUserNa
 function getSimpleCompressedContextMessages(currentState, runtimeUserName = "") {
   const latestUser = getLatestUserMessage(currentState);
   if (!latestUser) {
-    const openingDialogueMessage = getRoleCardOpeningDialogueMessage(currentState, runtimeUserName);
+    const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
     return openingDialogueMessage ? [openingDialogueMessage] : [];
   }
   const compressionState = normalizeContextCompressionState(currentState.contextCompression);
   const contextLimit = Math.max(1, getDialogueContextRounds(currentState));
-  const currentTurnNumber = Math.max(1, countConversationTurns(currentState, latestUser.id));
-  const openingDialogueMessage = getRoleCardOpeningDialogueMessage(currentState, runtimeUserName);
+  const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
   const allRounds = getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUser.id);
   const rounds = allRounds
     .filter((round) => getRoundTurnNumber(round) > compressionState.compressedThroughTurnNumber)
@@ -2744,9 +2834,9 @@ function getSimpleCompressedContextMessages(currentState, runtimeUserName = "") 
     }
   }
   if (
-    currentTurnNumber <= 1 &&
+    compressionState.compressedThroughTurnNumber <= 0 &&
     openingDialogueMessage &&
-    !messages.some((message) => safeText(message?.content) === openingDialogueMessage.content)
+    !messageListHasSameContent(messages, openingDialogueMessage.content)
   ) {
     messages.unshift(openingDialogueMessage);
   }
@@ -3068,9 +3158,135 @@ function appendReloadFeedbackMessage(messages, reloadFeedback = "") {
   ];
 }
 
-function finalizeAssistantOutputContent(content = "") {
+function normalizeOpeningEchoComparisonText(content = "") {
+  return safeText(content)
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, "");
+}
+
+function stripRoleplayActionMarkup(content = "") {
+  return safeText(content)
+    .replace(/[\(（][^()（）\r\n]{0,200}[\)）]/gu, "")
+    .replace(/[［\[][^［\]\[\]\r\n]{0,200}[］\]]/gu, "")
+    .trim();
+}
+
+function collectOpeningEchoComparisonTargets(userInput = "") {
+  const rawInput = safeText(userInput);
+  const targets = new Set();
+  const addTarget = (value = "") => {
+    const normalized = normalizeOpeningEchoComparisonText(value);
+    if (normalized) {
+      targets.add(normalized);
+    }
+  };
+
+  addTarget(rawInput);
+  addTarget(stripRoleplayActionMarkup(rawInput));
+
+  rawInput.split(/\r?\n/u).forEach((line) => {
+    addTarget(line);
+    addTarget(stripRoleplayActionMarkup(line));
+  });
+
+  return targets;
+}
+
+function isOpeningEchoWrapperChar(char = "") {
+  return /[\p{P}\p{S}]/u.test(char);
+}
+
+function nextCodePointIndex(text = "", index = 0) {
+  const codePoint = text.codePointAt(index);
+  return index + (codePoint && codePoint > 0xffff ? 2 : 1);
+}
+
+function extendOpeningEchoRemovalEnd(text = "", endIndex = 0) {
+  let index = endIndex;
+  while (index < text.length) {
+    const char = text.slice(index, nextCodePointIndex(text, index));
+    if (!isOpeningEchoWrapperChar(char)) {
+      break;
+    }
+    index = nextCodePointIndex(text, index);
+  }
+  while (index < text.length) {
+    const char = text.slice(index, nextCodePointIndex(text, index));
+    if (!/\s/u.test(char)) {
+      break;
+    }
+    index = nextCodePointIndex(text, index);
+  }
+  return index;
+}
+
+function collectOpeningEchoCandidateEnds(text = "") {
+  const scanLimit = Math.min(text.length, 400);
+  const candidateEnds = new Set();
+  const lineBreakIndex = text.search(/\r?\n/u);
+  if (lineBreakIndex >= 0 && lineBreakIndex <= scanLimit) {
+    candidateEnds.add(lineBreakIndex);
+  }
+
+  const sentenceBoundaryPattern = /[。！？!?]+|\.{1,3}(?=[\s"'’”」』）】》〉〕〗〙〛]|$)|…+/gu;
+  const sentenceBoundaryMatch = sentenceBoundaryPattern.exec(text.slice(0, scanLimit));
+  if (sentenceBoundaryMatch) {
+    candidateEnds.add(sentenceBoundaryMatch.index + sentenceBoundaryMatch[0].length);
+  }
+
+  const firstChar = text.slice(0, nextCodePointIndex(text, 0));
+  const quotePairs = {
+    "\"": "\"",
+    "'": "'",
+    "“": "”",
+    "‘": "’",
+    "「": "」",
+    "『": "』",
+    "（": "）",
+    "(": ")",
+    "【": "】",
+    "《": "》",
+    "〈": "〉"
+  };
+  const closingQuote = quotePairs[firstChar];
+  if (closingQuote) {
+    const closingQuoteIndex = text.indexOf(closingQuote, firstChar.length);
+    if (closingQuoteIndex > 0 && closingQuoteIndex <= scanLimit) {
+      candidateEnds.add(closingQuoteIndex + closingQuote.length);
+    }
+  }
+
+  return [...candidateEnds].sort((a, b) => a - b);
+}
+
+function removeRepeatedOpeningUserEcho(content = "", userInput = "") {
+  const targets = collectOpeningEchoComparisonTargets(userInput);
+  const rawContent = safeText(content);
+  if (targets.size === 0 || !rawContent) {
+    return rawContent;
+  }
+
+  const trimmedContent = rawContent.trimStart();
+  for (const candidateEnd of collectOpeningEchoCandidateEnds(trimmedContent)) {
+    const candidate = trimmedContent.slice(0, candidateEnd);
+    if (!targets.has(normalizeOpeningEchoComparisonText(candidate))) {
+      continue;
+    }
+    const removalEnd = extendOpeningEchoRemovalEnd(trimmedContent, candidateEnd);
+    return trimmedContent.slice(removalEnd).trimStart();
+  }
+
+  return rawContent;
+}
+
+function finalizeAssistantOutputContent(content = "", options = {}) {
+  const userInput = safeText(options.userInput);
+  const cleanedContent = userInput
+    ? removeRepeatedOpeningUserEcho(content, userInput)
+    : safeText(content);
   return {
-    content: safeText(content)
+    content: cleanedContent
   };
 }
 
@@ -3914,8 +4130,10 @@ async function runConversationTurnStreaming({
       assistantText = expanded.content;
       fullReasoning = [fullReasoning, expanded.reasoningContent].filter(Boolean).join("\n\n").trim();
     }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText);
-    assistantText = finalizedAssistantOutput.content || assistantText;
+    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
+      userInput: storedUserContent
+    });
+    assistantText = finalizedAssistantOutput.content;
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -4193,8 +4411,10 @@ async function regenerateLatestAssistantReply({
     if (!isCharacterCardCreationAssistantActive(state)) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText);
-    assistantText = finalizedAssistantOutput.content || assistantText;
+    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
+      userInput: latestUser?.content
+    });
+    assistantText = finalizedAssistantOutput.content;
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -4287,8 +4507,10 @@ async function replayConversationFromMessageNumber({
     if (!isCharacterCardCreationAssistantActive(state)) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText);
-    assistantText = finalizedAssistantOutput.content || assistantText;
+    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
+      userInput: storedUserContent
+    });
+    assistantText = finalizedAssistantOutput.content;
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -4383,8 +4605,10 @@ async function replayConversationFromDiscordMessageId({
     if (!isCharacterCardCreationAssistantActive(state)) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText);
-    assistantText = finalizedAssistantOutput.content || assistantText;
+    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
+      userInput: storedUserContent
+    });
+    assistantText = finalizedAssistantOutput.content;
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -4447,8 +4671,10 @@ async function runConversationTurn({ content, source, extra = {} }) {
     if (!isCharacterCardCreationAssistantActive(state)) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText);
-    assistantText = finalizedAssistantOutput.content || assistantText;
+    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
+      userInput: storedUserContent
+    });
+    assistantText = finalizedAssistantOutput.content;
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -4482,6 +4708,7 @@ function getDiscordGuidance() {
     "從指定訊息分支：`/replay message_number:訊息編號 content:新的使用者內容`",
     "自動推演多輪：`/run_time number:10 message:你的要求`",
     "存檔指令：`/session_save`、`/session_list`、`/session_load`",
+    `文字指令：伺服器頻道使用 \`${COMMAND_PREFIX} 指令\`；DM 若要執行文字指令也請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
     `網頁目前只負責角色卡與後台欄位編輯。`
   ].filter(Boolean).join("\n");
 }
@@ -4614,6 +4841,19 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         mode,
         config,
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (modularPromptUpdateMatch && method === "DELETE") {
+      const result = deleteModularPromptConfig(modularPromptUpdateMatch[1]);
+      if (!result.ok) {
+        sendJson(res, 400, { error: result.error || "無法刪除 Prompt 模式" });
+        return;
+      }
+      sendJson(res, 200, {
+        mode: result.mode,
         state: statePayload(state)
       });
       return;
@@ -5022,7 +5262,8 @@ function shouldTreatAsStatusCommand(input) {
   return normalized === "status" || normalized === "狀態";
 }
 
-function parseDiscordTextInput(input) {
+function parseDiscordTextInput(input, options = {}) {
+  const allowBareMetaCommands = options.allowBareMetaCommands !== false;
   const trimmed = safeText(input);
   if (!trimmed) {
     return { type: "meta", command: "help", args: [] };
@@ -5031,6 +5272,10 @@ function parseDiscordTextInput(input) {
   const parts = trimmed.split(/\s+/);
   const keyword = safeText(parts[0]).replace(/^\//, "").toLowerCase();
   const args = parts.slice(1);
+
+  if (!allowBareMetaCommands) {
+    return { type: "chat", content: trimmed };
+  }
 
   if (shouldTreatAsHelpCommand(keyword)) {
     return { type: "meta", command: "help", args };
@@ -5072,6 +5317,9 @@ function extractDiscordInput(message) {
 
   const isDm = !message.guildId;
   if (isDm) {
+    if (raw.startsWith(COMMAND_PREFIX)) {
+      return safeText(raw.slice(COMMAND_PREFIX.length));
+    }
     return raw;
   }
 
@@ -5890,7 +6138,9 @@ function setupDiscordBot() {
 
     try {
       const parsedInput = extractedInput
-        ? parseDiscordTextInput(extractedInput)
+        ? parseDiscordTextInput(extractedInput, {
+            allowBareMetaCommands: Boolean(message.guildId) || safeText(message.content).startsWith(COMMAND_PREFIX)
+          })
         : { type: "chat", content: "" };
 
       if (parsedInput.type === "meta") {
@@ -5964,7 +6214,9 @@ function setupDiscordBot() {
     }
 
     try {
-      const parsedInput = parseDiscordTextInput(extractedInput);
+      const parsedInput = parseDiscordTextInput(extractedInput, {
+        allowBareMetaCommands: Boolean(message.guildId) || safeText(message.content).startsWith(COMMAND_PREFIX)
+      });
       if (parsedInput.type !== "chat") {
         return;
       }

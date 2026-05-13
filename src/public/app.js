@@ -99,6 +99,9 @@
   modularPromptDialog: document.getElementById("modularPromptDialog"),
   modularPromptForm: document.getElementById("modularPromptForm"),
   modularPromptModeSelect: document.getElementById("modularPromptModeSelect"),
+  modularPromptModeName: document.getElementById("modularPromptModeName"),
+  addModularPromptModeBtn: document.getElementById("addModularPromptModeBtn"),
+  deleteModularPromptModeBtn: document.getElementById("deleteModularPromptModeBtn"),
   modularCompressionMainRules: document.getElementById("modularCompressionMainRules"),
   modularCompressionModelList: document.getElementById("modularCompressionModelList"),
   addCompressionModelBtn: document.getElementById("addCompressionModelBtn"),
@@ -127,16 +130,21 @@ const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
 const SESSION_PICKER_PAGE_SIZE = 9;
+const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
 
 function normalizeRoleCardMode(mode = "") {
-  const normalized = String(mode).trim().toLowerCase();
+  const normalized = String(mode)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .replace(/^_+|_+$/g, "");
   if (normalized === "multi") {
     return "multi";
   }
   if (normalized === "no_role" || normalized === "norole" || normalized === "none") {
     return "no_role";
   }
-  return "single";
+  return normalized || "single";
 }
 
 function isMultiRoleCard(card) {
@@ -148,13 +156,7 @@ function isNoRoleCard(card) {
 }
 
 function getRoleCardModeLabel(card) {
-  if (isNoRoleCard(card)) {
-    return "無角色";
-  }
-  if (isMultiRoleCard(card)) {
-    return "多角色";
-  }
-  return "單角色";
+  return getPromptModeDisplayName(normalizeRoleCardMode(card?.mode));
 }
 
 function normalizeRoleCardLorebookEntry(entry = {}) {
@@ -1421,10 +1423,80 @@ function renderConversationModelSettings(state) {
   }
 }
 
+function getDefaultPromptModeDisplayName(mode = "single") {
+  const normalizedMode = normalizeRoleCardMode(mode);
+  if (normalizedMode === "multi") {
+    return "多角色";
+  }
+  if (normalizedMode === "no_role") {
+    return "無角色";
+  }
+  if (normalizedMode === "single") {
+    return "單角色";
+  }
+  return normalizedMode;
+}
+
+function getPromptModeDisplayName(mode = "") {
+  const promptMode = normalizeRoleCardMode(mode);
+  const config = appState?.modularPromptConfigs?.[promptMode];
+  return String(config?.name || config?.title || config?.displayName || getDefaultPromptModeDisplayName(promptMode)).trim();
+}
+
+function getPromptModeEntries() {
+  const configs = appState?.modularPromptConfigs || {};
+  const seen = new Set();
+  return [
+    ...BUILTIN_PROMPT_MODES,
+    ...Object.keys(configs)
+  ]
+    .map((mode) => normalizeRoleCardMode(mode))
+    .filter((mode) => {
+      if (!mode || seen.has(mode)) {
+        return false;
+      }
+      seen.add(mode);
+      return true;
+    })
+    .map((mode) => ({
+      mode,
+      name: getPromptModeDisplayName(mode)
+    }));
+}
+
+function renderPromptModeOptions(select, selectedMode = "single") {
+  if (!select) {
+    return;
+  }
+  const normalizedSelectedMode = normalizeRoleCardMode(selectedMode);
+  const modes = getPromptModeEntries();
+  if (!modes.some((entry) => entry.mode === normalizedSelectedMode)) {
+    modes.push({
+      mode: normalizedSelectedMode,
+      name: getPromptModeDisplayName(normalizedSelectedMode)
+    });
+  }
+  select.innerHTML = "";
+  modes.forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.mode;
+    option.textContent = entry.name || entry.mode;
+    select.appendChild(option);
+  });
+  select.value = normalizedSelectedMode;
+}
+
+function renderAllPromptModeSelects(selectedMode = "") {
+  const mode = normalizeRoleCardMode(selectedMode || el.modularPromptModeSelect?.value || el.roleCardMode?.value || getActivePromptMode(appState));
+  renderPromptModeOptions(el.modularPromptModeSelect, mode);
+  renderPromptModeOptions(el.roleCardMode, el.roleCardMode?.value || mode);
+}
+
 function getModularConfig(mode = "") {
   const promptMode = normalizeRoleCardMode(mode || el.modularPromptModeSelect?.value || getActivePromptMode(appState));
   return appState?.modularPromptConfigs?.[promptMode] || {
     mode: promptMode,
+    name: getDefaultPromptModeDisplayName(promptMode),
     contextCompression: normalizeContextCompressionConfig({}, appState?.contextCompressionPrompt || ""),
     contextCompressionPrompt: appState?.contextCompressionPrompt || "",
     reasonerHistory: { mainRules: "", contextRules: "" }
@@ -1448,7 +1520,16 @@ function renderModularPromptEditor(mode = "") {
     config.contextCompressionPrompt || appState?.contextCompressionPrompt || ""
   );
   if (el.modularPromptModeSelect) {
-    el.modularPromptModeSelect.value = promptMode;
+    renderPromptModeOptions(el.modularPromptModeSelect, promptMode);
+  }
+  if (el.modularPromptModeName) {
+    el.modularPromptModeName.value = config.name || getDefaultPromptModeDisplayName(promptMode);
+  }
+  if (el.deleteModularPromptModeBtn) {
+    el.deleteModularPromptModeBtn.disabled = BUILTIN_PROMPT_MODES.includes(promptMode);
+    el.deleteModularPromptModeBtn.title = BUILTIN_PROMPT_MODES.includes(promptMode)
+      ? "內建模式不可刪除"
+      : "";
   }
   if (el.modularCompressionMainRules) {
     el.modularCompressionMainRules.value = compressionConfig.mainRules || "";
@@ -1495,7 +1576,7 @@ function renderCompressionModelEditor(models = []) {
 
   compressionModelsDraft.forEach((model, index) => {
     const item = document.createElement("div");
-    item.className = "role-card custom-section-card";
+    item.className = "role-card custom-section-card compression-model-card";
     item.dataset.compressionModelId = model.id;
 
     const title = document.createElement("div");
@@ -1536,7 +1617,8 @@ function renderCompressionModelEditor(models = []) {
     const addLabel = document.createElement("label");
     addLabel.textContent = "新增模型規則";
     const addInput = document.createElement("textarea");
-    addInput.rows = 4;
+    addInput.rows = 5;
+    addInput.className = "compression-model-rules";
     addInput.value = model.addRules || "";
     addInput.dataset.field = "compressionModelAddRules";
     addLabel.appendChild(addInput);
@@ -1544,7 +1626,8 @@ function renderCompressionModelEditor(models = []) {
     const deleteLabel = document.createElement("label");
     deleteLabel.textContent = "刪除模型規則";
     const deleteInput = document.createElement("textarea");
-    deleteInput.rows = 4;
+    deleteInput.rows = 5;
+    deleteInput.className = "compression-model-rules";
     deleteInput.value = model.deleteRules || "";
     deleteInput.dataset.field = "compressionModelDeleteRules";
     deleteLabel.appendChild(deleteInput);
@@ -1567,6 +1650,7 @@ function collectModularPromptConfig() {
   return {
     version: 2,
     mode,
+    name: el.modularPromptModeName?.value?.trim() || getDefaultPromptModeDisplayName(mode),
     contextCompression,
     contextCompressionPrompt: contextCompression.mainRules,
     reasonerHistory: {
@@ -1798,7 +1882,7 @@ function openRoleCardDialog(card = null) {
     el.roleCardDialogTitle.textContent = "編輯角色卡";
     roleCardCoverImageReadTask = null;
     el.roleCardId.value = card.id;
-    el.roleCardMode.value = normalizeRoleCardMode(card.mode);
+    renderPromptModeOptions(el.roleCardMode, normalizeRoleCardMode(card.mode));
     el.roleCardName.value = card.name;
     el.roleCardCoverImageFile.value = "";
     setRoleCardCoverPreview(card.coverImage || "", card.coverPosition || "center center");
@@ -1809,7 +1893,7 @@ function openRoleCardDialog(card = null) {
     el.roleCardDialogTitle.textContent = "建立角色卡";
     roleCardCoverImageReadTask = null;
     el.roleCardId.value = "";
-    el.roleCardMode.value = "single";
+    renderPromptModeOptions(el.roleCardMode, "single");
     el.roleCardName.value = "";
     el.roleCardCoverImageFile.value = "";
     setRoleCardCoverPreview("", "center center");
@@ -1899,6 +1983,7 @@ async function refresh() {
 
   fillProfile(state);
   renderConversationModelSettings(state);
+  renderAllPromptModeSelects(getActivePromptMode(state));
   renderRoleCards(state);
   renderSessions(state);
   renderMessages(state);
@@ -2035,8 +2120,58 @@ async function saveModularPromptConfig() {
       })
     });
     appState = payload?.state || appState;
+    renderAllPromptModeSelects(config.mode);
     renderModularPromptEditor(config.mode);
     showToast("Prompt 已保存");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function createCustomPromptMode() {
+  const configs = appState?.modularPromptConfigs || {};
+  let index = Object.keys(configs).length + 1;
+  let mode = normalizeRoleCardMode(`custom_mode_${index}`);
+  while (configs[mode]) {
+    index += 1;
+    mode = normalizeRoleCardMode(`custom_mode_${index}`);
+  }
+  const baseConfig = getModularConfig(el.modularPromptModeSelect?.value || getActivePromptMode(appState));
+  appState = {
+    ...(appState || {}),
+    modularPromptConfigs: {
+      ...configs,
+      [mode]: {
+        ...baseConfig,
+        mode,
+        name: `新模式 ${index}`
+      }
+    }
+  };
+  renderAllPromptModeSelects(mode);
+  renderModularPromptEditor(mode);
+  showToast("已新增模式，編輯後請保存 Prompt");
+}
+
+async function deleteCurrentPromptMode() {
+  const mode = normalizeRoleCardMode(el.modularPromptModeSelect?.value || "");
+  if (BUILTIN_PROMPT_MODES.includes(mode)) {
+    showToast("內建模式不可刪除", "error");
+    return;
+  }
+  if (!mode) {
+    return;
+  }
+  if (!window.confirm(`確定要刪除模式「${getPromptModeDisplayName(mode)}」嗎？`)) {
+    return;
+  }
+
+  try {
+    const payload = await request(`/api/modular-prompts/${mode}`, { method: "DELETE" });
+    appState = payload?.state || appState;
+    renderAllPromptModeSelects("single");
+    renderModularPromptEditor("single");
+    showToast("模式已刪除");
   } catch (error) {
     showToast(error.message, "error");
   }
@@ -2523,6 +2658,22 @@ function bindEvents() {
   if (el.modularPromptModeSelect) {
     el.modularPromptModeSelect.addEventListener("change", () => {
       renderModularPromptEditor(el.modularPromptModeSelect.value);
+    });
+  }
+
+  if (el.modularPromptModeName) {
+    el.modularPromptModeName.addEventListener("input", () => {
+      clearModularPromptPreview();
+    });
+  }
+
+  if (el.addModularPromptModeBtn) {
+    el.addModularPromptModeBtn.addEventListener("click", createCustomPromptMode);
+  }
+
+  if (el.deleteModularPromptModeBtn) {
+    el.deleteModularPromptModeBtn.addEventListener("click", async () => {
+      await deleteCurrentPromptMode();
     });
   }
 
