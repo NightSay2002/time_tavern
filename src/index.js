@@ -4725,7 +4725,7 @@ function getDiscordGuidance() {
     "自動推演多輪：`/run_time number:10 message:你的要求`",
     "存檔指令：`/session_save`、`/session_list`、`/session_load`",
     `文字指令：伺服器頻道使用 \`${COMMAND_PREFIX} 指令\`；DM 若要執行文字指令也請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
-    `網頁目前只負責角色卡與後台欄位編輯。`
+    "網頁也可以直接在對話輸入框送出本地對話。"
   ].filter(Boolean).join("\n");
 }
 
@@ -5230,7 +5230,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/chat/send" && method === "POST") {
-      sendJson(res, 403, { error: getDiscordGuidance() });
+      const body = await readBody(req);
+      const content = safeText(body.content);
+      if (!content) {
+        sendJson(res, 400, { error: "輸入不可空白。" });
+        return;
+      }
+      if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
+        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。" });
+        return;
+      }
+      const result = await runConversationTurn({
+        content,
+        source: "web",
+        extra: {
+          platform: "web"
+        }
+      });
+      sendJson(res, 200, {
+        ...result,
+        state: statePayload(state)
+      });
       return;
     }
 

@@ -29,6 +29,7 @@
   chatForm: document.getElementById("chatForm"),
   chatInput: document.getElementById("chatInput"),
   sendBtn: document.getElementById("sendBtn"),
+  discordBotLinkBtn: document.getElementById("discordBotLinkBtn"),
 
   roleCardDialog: document.getElementById("roleCardDialog"),
   roleCardForm: document.getElementById("roleCardForm"),
@@ -1728,6 +1729,7 @@ function renderAiLogs(state) {
 
 function renderStatus(state) {
   const discordAuthorizeUrl = state.discord?.authorizeUrl || "";
+  const hasConversationTarget = Boolean(state.aiSessionStarted && (state.activeRoleCardId || isCharacterCardCreationAssistantActive(state)));
 
   if (pendingRoleCardStartId) {
     el.startStatus.textContent = "切換中";
@@ -1742,13 +1744,18 @@ function renderStatus(state) {
     el.startStatus.classList.remove("started");
   }
 
-  el.sendBtn.disabled = !discordAuthorizeUrl;
-  el.chatInput.readOnly = true;
-  el.chatInput.placeholder = discordAuthorizeUrl
-    ? "點擊按鈕把 Bot 新增到你的應用程式，然後使用 Slash 指令 /ai content:你的內容"
-    : `尚未取得 Discord bot client_id；請在環境設定加入 DISCORD_CLIENT_ID 或有效 DISCORD_BOT_TOKEN`;
-  el.sendBtn.textContent = discordAuthorizeUrl ? "新增 Bot 到我的應用程式" : "缺少 Discord Bot 連結";
-  el.sendBtn.dataset.discordAuthorizeUrl = discordAuthorizeUrl;
+  el.chatInput.readOnly = Boolean(pendingRoleCardStartId);
+  el.chatInput.placeholder = hasConversationTarget
+    ? "輸入對話內容"
+    : "請先選擇角色卡或啟用角色卡建立助手";
+  el.sendBtn.disabled = Boolean(pendingRoleCardStartId) || !hasConversationTarget;
+  el.sendBtn.textContent = pendingRoleCardStartId ? "切換中..." : "送出";
+
+  if (el.discordBotLinkBtn) {
+    el.discordBotLinkBtn.disabled = !discordAuthorizeUrl;
+    el.discordBotLinkBtn.textContent = discordAuthorizeUrl ? "Discord Bot 連結" : "缺少 Discord Bot 連結";
+    el.discordBotLinkBtn.dataset.discordAuthorizeUrl = discordAuthorizeUrl;
+  }
 
   const canEditAiOutput = state.conversation.some((msg) => msg.role === "assistant");
   el.editAiOutputBtn.disabled = !canEditAiOutput;
@@ -2886,14 +2893,41 @@ function bindEvents() {
 
   el.chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const discordAuthorizeUrl = appState?.discord?.authorizeUrl || el.sendBtn.dataset.discordAuthorizeUrl || "";
-    if (discordAuthorizeUrl) {
-      window.open(discordAuthorizeUrl, "_blank", "noopener,noreferrer");
-      showToast("新增 Bot 後，請在 Discord 使用 Slash 指令 /ai content:你的內容");
+    const content = el.chatInput.value.trim();
+    if (!content) {
+      showToast("請先輸入內容", "error");
       return;
     }
-    showToast("尚未取得 Discord bot 授權連結，請在環境設定加入 DISCORD_CLIENT_ID 或有效 DISCORD_BOT_TOKEN。", "error");
+
+    try {
+      el.sendBtn.disabled = true;
+      el.sendBtn.textContent = "生成中...";
+      await request("/api/chat/send", {
+        method: "POST",
+        body: JSON.stringify({ content })
+      });
+      el.chatInput.value = "";
+      await refresh();
+      showToast("已送出");
+    } catch (error) {
+      showToast(error.message, "error");
+      if (appState) {
+        renderStatus(appState);
+      }
+    }
   });
+
+  if (el.discordBotLinkBtn) {
+    el.discordBotLinkBtn.addEventListener("click", () => {
+      const discordAuthorizeUrl = appState?.discord?.authorizeUrl || el.discordBotLinkBtn.dataset.discordAuthorizeUrl || "";
+      if (!discordAuthorizeUrl) {
+        showToast("尚未取得 Discord bot 授權連結，請在環境設定加入 DISCORD_CLIENT_ID 或有效 DISCORD_BOT_TOKEN。", "error");
+        return;
+      }
+      window.open(discordAuthorizeUrl, "_blank", "noopener,noreferrer");
+      showToast("新增 Bot 後，可以在 Discord 使用 Slash 指令 /ai");
+    });
+  }
 
   el.editAiOutputBtn.addEventListener("click", () => {
     refreshAssistantSelector();

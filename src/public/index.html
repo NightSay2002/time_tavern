@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260513-env-form" />
+    <link rel="stylesheet" href="/styles.css?v=20260513-chat-height" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -94,8 +94,11 @@
           <div id="messages" class="messages"></div>
 
           <form id="chatForm" class="chat-input">
-            <textarea id="chatInput" rows="5" readonly placeholder="請把 Bot 新增到你的應用程式，然後使用 Slash 指令 /ai"></textarea>
-            <button id="sendBtn" type="submit" disabled>回 Discord 輸入</button>
+            <textarea id="chatInput" rows="2" placeholder="輸入對話內容"></textarea>
+            <div class="chat-actions">
+              <button id="sendBtn" type="submit">送出</button>
+              <button id="discordBotLinkBtn" type="button" class="secondary">Discord Bot 連結</button>
+            </div>
           </form>
         </section>
 
@@ -342,7 +345,7 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script src="/effects.js?v=20260513-env-form" defer></script>
-    <script type="module" src="/app.js?v=20260513-env-form"></script>
+    <script src="/effects.js?v=20260513-chat-input" defer></script>
+    <script type="module" src="/app.js?v=20260513-chat-input"></script>
   </body>
 </html>
