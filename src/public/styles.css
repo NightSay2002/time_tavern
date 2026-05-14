@@ -442,6 +442,61 @@ button {
   min-width: 112px;
 }
 
+.compression-profile-panel {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.compression-profile-actions {
+  grid-template-columns: minmax(0, 1fr) max-content max-content max-content;
+}
+
+.compression-profile-grid,
+.compression-trigger-grid,
+.compression-trigger-action-grid,
+.compression-append-term-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 0;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  min-width: 18px;
+}
+
+.compression-trigger-grid textarea,
+.compression-trigger-action-grid textarea,
+.compression-append-term-grid textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+
+.compression-trigger-action-list,
+.compression-append-term-list {
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.compression-trigger-action-card summary,
+.compression-append-term-card summary {
+  align-items: center;
+}
+
 .compression-model-card {
   align-content: start;
 }
@@ -1162,7 +1217,7 @@ button {
 }
 
 .prompt-viewer-dialog {
-  width: min(1120px, 96vw);
+  width: min(1040px, 90vw);
 }
 
 .env-settings-fields {
@@ -1489,6 +1544,14 @@ button {
   }
 
   .prompt-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .compression-profile-grid,
+  .compression-trigger-grid,
+  .compression-trigger-action-grid,
+  .compression-append-term-grid,
+  .compression-profile-actions {
     grid-template-columns: 1fr;
   }
 

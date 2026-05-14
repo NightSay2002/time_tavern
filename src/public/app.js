@@ -81,6 +81,7 @@
   contextCompressionDialog: document.getElementById("contextCompressionDialog"),
   contextCompressionForm: document.getElementById("contextCompressionForm"),
   contextCompressionMeta: document.getElementById("contextCompressionMeta"),
+  contextCompressionProfileSelect: document.getElementById("contextCompressionProfileSelect"),
   contextCompressionContentView: document.getElementById("contextCompressionContentView"),
   saveContextCompressionDialog: document.getElementById("saveContextCompressionDialog"),
   closeContextCompressionDialog: document.getElementById("closeContextCompressionDialog"),
@@ -105,6 +106,16 @@
   modularPromptModeName: document.getElementById("modularPromptModeName"),
   addModularPromptModeBtn: document.getElementById("addModularPromptModeBtn"),
   deleteModularPromptModeBtn: document.getElementById("deleteModularPromptModeBtn"),
+  compressionProfileSelect: document.getElementById("compressionProfileSelect"),
+  editCompressionProfileBtn: document.getElementById("editCompressionProfileBtn"),
+  addCompressionProfileBtn: document.getElementById("addCompressionProfileBtn"),
+  deleteCompressionProfileBtn: document.getElementById("deleteCompressionProfileBtn"),
+  compressionProfileName: document.getElementById("compressionProfileName"),
+  compressionProfileEnabled: document.getElementById("compressionProfileEnabled"),
+  compressionTriggerActionList: document.getElementById("compressionTriggerActionList"),
+  addCompressionTriggerActionBtn: document.getElementById("addCompressionTriggerActionBtn"),
+  compressionAppendTermList: document.getElementById("compressionAppendTermList"),
+  addCompressionAppendTermBtn: document.getElementById("addCompressionAppendTermBtn"),
   modularCompressionMainRules: document.getElementById("modularCompressionMainRules"),
   modularCompressionModelList: document.getElementById("modularCompressionModelList"),
   addCompressionModelBtn: document.getElementById("addCompressionModelBtn"),
@@ -125,6 +136,10 @@ let mobileInfoOpen = false;
 let roleCardLorebooksDraft = [];
 let roleCardCustomSectionsDraft = [];
 let compressionModelsDraft = [];
+let compressionProfilesDraft = [];
+let selectedCompressionProfileId = "standard";
+let contextCompressionDialogPayload = null;
+let selectedContextCompressionProfileId = "standard";
 let roleCardPickerPage = 1;
 let sessionPickerPage = 1;
 let roleCardCoverImageReadTask = null;
@@ -135,6 +150,10 @@ const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
 const SESSION_PICKER_PAGE_SIZE = 9;
 const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
+const STANDARD_COMPRESSION_PROFILE_ID = "standard";
+const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
+const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
+const MODEL_APPEND_PLAYER_OTHER = "userx";
 const ENV_FIELD_GROUPS = [
   {
     title: "伺服器",
@@ -203,11 +222,11 @@ const ENV_FIELD_GROUPS = [
         key: "DEEPSEEK_MAX_TOKENS",
         label: "輸出 token 上限",
         type: "number",
-        help: "選填。主聊天／壓縮呼叫預設 32000，仍會受模型上限限制。"
+        help: "選填。主聊天／大模型處理呼叫預設 32000，仍會受模型上限限制。"
       },
       {
         key: "DEEPSEEK_API_KEY2",
-        label: "壓縮用 DeepSeek API Key",
+        label: "大模型處理用 DeepSeek API Key",
         type: "password",
         autocomplete: "off",
         help: "選填。舊版 deepseek_key2 / DEEPSEEK_KEY2 會自動帶入這裡。"
@@ -334,8 +353,9 @@ function normalizeCompressionModelConfig(model = {}, index = 0) {
   };
 }
 
-function normalizeContextCompressionConfig(config = {}, fallbackPrompt = "") {
+function normalizeContextCompressionConfig(config = {}, fallbackPrompt = "", options = {}) {
   const source = config && typeof config === "object" ? config : {};
+  const allowEmptyModels = Boolean(options.allowEmptyModels);
   const models = Array.isArray(source.models)
     ? source.models.map((item, index) => normalizeCompressionModelConfig(item, index)).filter((item) => item.id)
     : [];
@@ -343,7 +363,9 @@ function normalizeContextCompressionConfig(config = {}, fallbackPrompt = "") {
     mainRules: String(source.mainRules || source.prompt || source.contextCompressionPrompt || fallbackPrompt || "").trim(),
     models: models.length > 0
       ? models
-      : [
+      : allowEmptyModels
+        ? []
+        : [
           normalizeCompressionModelConfig({
             id: "PlotProgression",
             name: "劇情狀態",
@@ -352,6 +374,237 @@ function normalizeContextCompressionConfig(config = {}, fallbackPrompt = "") {
           })
         ]
   };
+}
+
+function normalizeCompressionProfileId(value = "") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || STANDARD_COMPRESSION_PROFILE_ID;
+}
+
+function getDefaultCompressionProfileName(id = STANDARD_COMPRESSION_PROFILE_ID) {
+  return normalizeCompressionProfileId(id) === STANDARD_COMPRESSION_PROFILE_ID
+    ? "標準壓縮模型"
+    : String(id || "自訂壓縮模型").trim();
+}
+
+function parseIntegerList(value = "") {
+  if (Array.isArray(value)) {
+    return [...new Set(value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .map((item) => Math.floor(Number(item)))
+      .filter((item) => Number.isFinite(item) && item >= 0))]
+      .sort((a, b) => a - b);
+  }
+  return [...new Set(String(value || "")
+    .split(/[\s,，、;；]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => Math.floor(Number(item)))
+    .filter((item) => Number.isFinite(item) && item >= 0))]
+    .sort((a, b) => a - b);
+}
+
+function parseKeywordList(value = "") {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[\n,，、;；]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeKeywordTriggerSource(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["user", "assistant", "both"].includes(normalized) ? normalized : "both";
+}
+
+function normalizeCompressionTriggerConfig(input = {}, options = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    roundLimit: Boolean(source.roundLimit ?? source.onRoundLimit ?? options.defaultRoundLimit),
+    keywords: parseKeywordList(source.keywords ?? source.keyword ?? source.triggerKeywords),
+    keywordSource: normalizeKeywordTriggerSource(source.keywordSource || source.source),
+    turns: parseIntegerList(source.turns ?? source.scheduledTurns ?? source.rounds)
+  };
+}
+
+function normalizeModelTriggerAction(value = "") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[-\s]+/g, "_");
+  if (
+    normalized === MODEL_TRIGGER_ACTION_COPY_USER_INPUT ||
+    normalized === "copy" ||
+    normalized === "copy_user" ||
+    normalized === "paste_user_input" ||
+    normalized === "direct_copy"
+  ) {
+    return MODEL_TRIGGER_ACTION_COPY_USER_INPUT;
+  }
+  return MODEL_TRIGGER_ACTION_CALL_API;
+}
+
+function getModelTriggerActionLabel(value = "") {
+  return normalizeModelTriggerAction(value) === MODEL_TRIGGER_ACTION_COPY_USER_INPUT
+    ? "直接複製玩家輸入"
+    : "call api";
+}
+
+function normalizeModelAppendPlayer(value = "") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+  const numberMatch = normalized.match(/^(?:user|玩家)?(\d+)$/u);
+  if (numberMatch) {
+    return `user${Math.max(1, Math.floor(Number(numberMatch[1])))}`;
+  }
+  if (normalized === "x" || normalized === "userx" || normalized === "other" || normalized === "others") {
+    return MODEL_APPEND_PLAYER_OTHER;
+  }
+  return "user1";
+}
+
+function normalizeModelAppendTermConfig(term = {}, index = 0) {
+  const source = term && typeof term === "object" ? term : {};
+  return {
+    id: String(source.id || source.key || `append_term_${index + 1}`).trim(),
+    enabled: source.enabled !== false,
+    player: normalizeModelAppendPlayer(source.player || source.target || source.user || source.slot),
+    content: String(source.content || source.text || source.appendText || source.prompt || "").trim(),
+    expanded: Boolean(source.expanded)
+  };
+}
+
+function normalizeModelAppendTermsConfig(input = {}) {
+  const rawTerms = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.appendTerms)
+      ? input.appendTerms
+      : Array.isArray(input?.playerAppendTerms)
+        ? input.playerAppendTerms
+        : [];
+  return rawTerms.map((item, index) => normalizeModelAppendTermConfig(item, index));
+}
+
+function normalizeCompressionTriggerActionConfig(action = {}, index = 0, options = {}) {
+  const source = action && typeof action === "object" ? action : {};
+  return {
+    id: String(source.id || source.key || `trigger_action_${index + 1}`).trim(),
+    name: String(source.name || source.title || source.label || `觸發組合 ${index + 1}`).trim(),
+    enabled: source.enabled !== false,
+    action: normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction),
+    skipReasoner: Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
+    triggers: normalizeCompressionTriggerConfig(
+      source.triggers || source.trigger || source.conditions || source.condition || source,
+      { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
+    ),
+    expanded: Boolean(source.expanded)
+  };
+}
+
+function normalizeCompressionTriggerActionsConfig(input = {}, options = {}) {
+  const rawActions = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.triggerActions)
+      ? input.triggerActions
+      : Array.isArray(input?.actions)
+        ? input.actions
+        : Array.isArray(input?.rules)
+          ? input.rules
+          : [];
+  const legacyTriggers = options.legacyTriggers && typeof options.legacyTriggers === "object"
+    ? options.legacyTriggers
+    : {};
+  const fallbackAction = {
+    id: "default",
+    name: options.defaultName || "標準觸發",
+    enabled: true,
+    action: MODEL_TRIGGER_ACTION_CALL_API,
+    skipReasoner: false,
+    triggers: Object.keys(legacyTriggers).length > 0
+      ? legacyTriggers
+      : { roundLimit: Boolean(options.defaultRoundLimit) }
+  };
+  const sourceActions = rawActions.length > 0 ? rawActions : [fallbackAction];
+  return sourceActions.map((item, index) => normalizeCompressionTriggerActionConfig(item, index, {
+    defaultRoundLimit: Boolean(options.defaultRoundLimit) && rawActions.length === 0
+  }));
+}
+
+function createStandardCompressionProfile(contextCompression = {}) {
+  return {
+    id: STANDARD_COMPRESSION_PROFILE_ID,
+    name: "標準壓縮模型",
+    enabled: true,
+    locked: true,
+    triggers: normalizeCompressionTriggerConfig({ roundLimit: true }, { defaultRoundLimit: true }),
+    triggerActions: normalizeCompressionTriggerActionsConfig([], {
+      defaultRoundLimit: true,
+      defaultName: "標準壓縮"
+    }),
+    appendTerms: [],
+    contextCompression: normalizeContextCompressionConfig(contextCompression, appState?.contextCompressionPrompt || "")
+  };
+}
+
+function normalizeCompressionProfileConfig(profile = {}, index = 0, fallbackContextCompression = {}) {
+  const source = profile && typeof profile === "object" ? profile : {};
+  const id = normalizeCompressionProfileId(source.id || source.key || source.name || `compression_profile_${index + 1}`);
+  const isStandard = id === STANDARD_COMPRESSION_PROFILE_ID;
+  const triggerActions = normalizeCompressionTriggerActionsConfig(source.triggerActions || source.actions || source.triggerRules || [], {
+    defaultRoundLimit: isStandard,
+    defaultName: isStandard ? "標準壓縮" : "觸發組合 1",
+    legacyTriggers: source.triggers || source.trigger || {}
+  });
+  return {
+    id,
+    name: String(source.name || source.title || source.displayName || getDefaultCompressionProfileName(id)).trim(),
+    enabled: isStandard ? true : source.enabled !== false,
+    locked: isStandard || Boolean(source.locked),
+    triggers: triggerActions[0]?.triggers ||
+      normalizeCompressionTriggerConfig(source.triggers || source.trigger || {}, { defaultRoundLimit: isStandard }),
+    triggerActions,
+    appendTerms: normalizeModelAppendTermsConfig(source.appendTerms || source.playerAppendTerms || []),
+    contextCompression: normalizeContextCompressionConfig(
+      source.contextCompression || source.compression || fallbackContextCompression,
+      fallbackContextCompression?.mainRules || appState?.contextCompressionPrompt || "",
+      { allowEmptyModels: !isStandard }
+    )
+  };
+}
+
+function normalizeCompressionProfilesConfig(config = {}) {
+  const standardContextCompression = normalizeContextCompressionConfig(
+    config.contextCompression || { mainRules: config.contextCompressionPrompt },
+    config.contextCompressionPrompt || appState?.contextCompressionPrompt || ""
+  );
+  const profiles = Array.isArray(config.compressionProfiles) ? config.compressionProfiles : [];
+  const byId = new Map([[STANDARD_COMPRESSION_PROFILE_ID, createStandardCompressionProfile(standardContextCompression)]]);
+  profiles.forEach((profile, index) => {
+    const normalized = normalizeCompressionProfileConfig(profile, index, standardContextCompression);
+    byId.set(normalized.id, normalized);
+  });
+  const standard = byId.get(STANDARD_COMPRESSION_PROFILE_ID) || createStandardCompressionProfile(standardContextCompression);
+  byId.set(STANDARD_COMPRESSION_PROFILE_ID, {
+    ...standard,
+    id: STANDARD_COMPRESSION_PROFILE_ID,
+    name: standard.name || "標準壓縮模型",
+    enabled: true,
+    locked: true,
+    triggers: standard.triggerActions?.[0]?.triggers ||
+      normalizeCompressionTriggerConfig(standard.triggers, { defaultRoundLimit: true }),
+    triggerActions: normalizeCompressionTriggerActionsConfig(standard.triggerActions || [], {
+      defaultRoundLimit: true,
+      defaultName: "標準壓縮",
+      legacyTriggers: standard.triggers
+    })
+  });
+  return [
+    byId.get(STANDARD_COMPRESSION_PROFILE_ID),
+    ...Array.from(byId.values()).filter((profile) => profile.id !== STANDARD_COMPRESSION_PROFILE_ID)
+  ];
 }
 
 function normalizeRoleCardCustomSectionsForEditor(value, card = {}) {
@@ -1577,7 +1830,7 @@ function renderMessages(state) {
     content.className = "message-content";
     const fullContent = message.content || (
       message.phase === "compression"
-        ? "正在壓縮上下文..."
+        ? "正在處理模型內容..."
         : "正在生成回覆..."
     );
     const fullContentBody = document.createElement("div");
@@ -1586,7 +1839,7 @@ function renderMessages(state) {
     if (message.role === "assistant" && message.extra?.compressionNotice) {
       const compressionNotice = document.createElement("div");
       compressionNotice.className = "compression-notice";
-      compressionNotice.textContent = "【( •̀ ω •́ )✧你已經歷了一次壓縮】";
+      compressionNotice.textContent = "【( •̀ ω •́ )✧模型內容已更新】";
       content.appendChild(compressionNotice);
     }
     content.appendChild(fullContentBody);
@@ -1619,7 +1872,7 @@ function renderMessages(state) {
 
 function formatAiLogPurpose(purpose) {
   if (purpose === "context_compression") {
-    return "壓縮輸出";
+    return "模型內容處理";
   }
   if (purpose === "chat_expand") {
     return "補寫";
@@ -1772,7 +2025,7 @@ function renderConversationModelSettings(state) {
   }
   if (el.contextCompressionModeHint) {
     const compressedTurn = Number(compression.compressedThroughTurnNumber || 0);
-    el.contextCompressionModeHint.textContent = `壓縮模式固定啟用。已壓縮到第 ${compressedTurn || 0} 輪。`;
+    el.contextCompressionModeHint.textContent = `模型內容固定啟用。標準模型已處理到第 ${compressedTurn || 0} 輪。`;
   }
 }
 
@@ -1852,6 +2105,9 @@ function getModularConfig(mode = "") {
     name: getDefaultPromptModeDisplayName(promptMode),
     contextCompression: normalizeContextCompressionConfig({}, appState?.contextCompressionPrompt || ""),
     contextCompressionPrompt: appState?.contextCompressionPrompt || "",
+    compressionProfiles: [
+      createStandardCompressionProfile(normalizeContextCompressionConfig({}, appState?.contextCompressionPrompt || ""))
+    ],
     reasonerHistory: { mainRules: "", contextRules: "" }
   };
 }
@@ -1865,13 +2121,516 @@ function clearModularPromptPreview() {
   }
 }
 
+function getSelectedCompressionProfile() {
+  return compressionProfilesDraft.find((profile) => profile.id === selectedCompressionProfileId) ||
+    compressionProfilesDraft[0] ||
+    null;
+}
+
+function renderCompressionProfileOptions(selectedId = selectedCompressionProfileId) {
+  if (!el.compressionProfileSelect) {
+    return;
+  }
+  el.compressionProfileSelect.innerHTML = "";
+  compressionProfilesDraft.forEach((profile, index) => {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = `${profile.name || profile.id || `大模型 ${index + 1}`}${profile.enabled === false ? "（未啟用）" : ""}`;
+    el.compressionProfileSelect.appendChild(option);
+  });
+  selectedCompressionProfileId = compressionProfilesDraft.some((profile) => profile.id === selectedId)
+    ? selectedId
+    : STANDARD_COMPRESSION_PROFILE_ID;
+  el.compressionProfileSelect.value = selectedCompressionProfileId;
+}
+
+function collectCompressionTriggerActionsFromEditor(options = {}) {
+  if (!el.compressionTriggerActionList) {
+    return [];
+  }
+  const keepExpanded = Boolean(options.keepExpanded);
+  return Array.from(el.compressionTriggerActionList.querySelectorAll("[data-trigger-action-id]"))
+    .map((item, index) => normalizeCompressionTriggerActionConfig({
+      id: item.dataset.triggerActionId || "",
+      name: item.querySelector("[data-field='triggerActionName']")?.value || "",
+      enabled: item.querySelector("[data-field='triggerActionEnabled']")?.checked !== false,
+      action: item.querySelector("[data-field='triggerActionProcessing']")?.value || MODEL_TRIGGER_ACTION_CALL_API,
+      skipReasoner: Boolean(item.querySelector("[data-field='triggerActionSkipReasoner']")?.checked),
+      triggers: {
+        roundLimit: Boolean(item.querySelector("[data-field='triggerRoundLimit']")?.checked),
+        turns: parseIntegerList(item.querySelector("[data-field='triggerTurns']")?.value || ""),
+        keywords: parseKeywordList(item.querySelector("[data-field='triggerKeywords']")?.value || ""),
+        keywordSource: item.querySelector("[data-field='triggerKeywordSource']")?.value || "both"
+      },
+      expanded: keepExpanded ? item.open : false
+    }, index));
+}
+
+function formatTriggerActionSummary(action = {}, index = 0) {
+  const triggers = normalizeCompressionTriggerConfig(action.triggers || {});
+  const triggerParts = [];
+  if (triggers.roundLimit) {
+    triggerParts.push("正文上限");
+  }
+  if (triggers.turns.length > 0) {
+    triggerParts.push(`回合 ${triggers.turns.join(", ")}`);
+  }
+  if (triggers.keywords.length > 0) {
+    triggerParts.push(triggers.keywords.join(" + "));
+  }
+  return [
+    action.name || `觸發組合 ${index + 1}`,
+    triggerParts.length > 0 ? `(${triggerParts.join(" + ")})` : "(未設定觸發)",
+    getModelTriggerActionLabel(action.action),
+    action.skipReasoner ? "不call正文" : ""
+  ].filter(Boolean).join(" -> ");
+}
+
+function renderCompressionTriggerActionEditor(actions = []) {
+  if (!el.compressionTriggerActionList) {
+    return;
+  }
+  const normalizedActions = normalizeCompressionTriggerActionsConfig(actions, {
+    defaultRoundLimit: selectedCompressionProfileId === STANDARD_COMPRESSION_PROFILE_ID,
+    defaultName: selectedCompressionProfileId === STANDARD_COMPRESSION_PROFILE_ID ? "標準壓縮" : "觸發組合 1"
+  });
+  el.compressionTriggerActionList.innerHTML = "";
+
+  if (normalizedActions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = "尚未建立觸發組合。";
+    el.compressionTriggerActionList.appendChild(empty);
+    return;
+  }
+
+  normalizedActions.forEach((action, index) => {
+    const triggers = normalizeCompressionTriggerConfig(action.triggers || {});
+    const item = document.createElement("details");
+    item.className = "role-card compression-trigger-action-card";
+    item.dataset.triggerActionId = action.id;
+    item.open = Boolean(action.expanded);
+
+    const header = document.createElement("summary");
+    header.className = "inline-actions";
+    const title = document.createElement("strong");
+    title.textContent = formatTriggerActionSummary(action, index);
+    title.style.flex = "1";
+
+    const enabledBtn = document.createElement("button");
+    enabledBtn.type = "button";
+    enabledBtn.className = action.enabled !== false ? "secondary" : "muted";
+    enabledBtn.textContent = action.enabled !== false ? "啟用" : "停用";
+    enabledBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const current = collectCompressionTriggerActionsFromEditor({ keepExpanded: true });
+      renderCompressionTriggerActionEditor(current.map((item) =>
+        item.id === action.id ? { ...item, enabled: item.enabled === false, expanded: true } : item
+      ));
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "secondary";
+    editBtn.textContent = action.expanded ? "收合" : "編輯";
+    editBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const current = collectCompressionTriggerActionsFromEditor({ keepExpanded: true });
+      renderCompressionTriggerActionEditor(current.map((item) =>
+        item.id === action.id ? { ...item, expanded: !item.expanded } : item
+      ));
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "muted";
+    deleteBtn.textContent = "刪除";
+    deleteBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      renderCompressionTriggerActionEditor(
+        collectCompressionTriggerActionsFromEditor({ keepExpanded: true }).filter((item) => item.id !== action.id)
+      );
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+
+    header.append(title, enabledBtn, editBtn, deleteBtn);
+
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = action.enabled !== false;
+    enabledInput.dataset.field = "triggerActionEnabled";
+    enabledInput.hidden = true;
+
+    const nameLabel = document.createElement("label");
+    nameLabel.textContent = "組合名字";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.value = action.name || "";
+    nameInput.placeholder = "例如：玩家1設定";
+    nameInput.dataset.field = "triggerActionName";
+    nameLabel.appendChild(nameInput);
+
+    const actionLabel = document.createElement("label");
+    actionLabel.textContent = "觸發後處理動作";
+    const actionSelect = document.createElement("select");
+    actionSelect.dataset.field = "triggerActionProcessing";
+    [
+      [MODEL_TRIGGER_ACTION_CALL_API, "call api"],
+      [MODEL_TRIGGER_ACTION_COPY_USER_INPUT, "直接複製玩家輸入"]
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      actionSelect.appendChild(option);
+    });
+    actionSelect.value = normalizeModelTriggerAction(action.action);
+    actionLabel.appendChild(actionSelect);
+
+    const skipLabel = document.createElement("label");
+    skipLabel.className = "checkbox-label";
+    const skipInput = document.createElement("input");
+    skipInput.type = "checkbox";
+    skipInput.checked = Boolean(action.skipReasoner);
+    skipInput.dataset.field = "triggerActionSkipReasoner";
+    skipLabel.append(skipInput, document.createTextNode("處理後不call正文"));
+
+    const roundLabel = document.createElement("label");
+    roundLabel.className = "checkbox-label";
+    const roundInput = document.createElement("input");
+    roundInput.type = "checkbox";
+    roundInput.checked = Boolean(triggers.roundLimit);
+    roundInput.dataset.field = "triggerRoundLimit";
+    roundLabel.append(roundInput, document.createTextNode("達到正文上限輪數"));
+
+    const turnsLabel = document.createElement("label");
+    turnsLabel.textContent = "指定回合觸發";
+    const turnsInput = document.createElement("input");
+    turnsInput.type = "text";
+    turnsInput.value = triggers.turns.join(", ");
+    turnsInput.placeholder = "例如：0, 5, 12";
+    turnsInput.dataset.field = "triggerTurns";
+    turnsLabel.appendChild(turnsInput);
+
+    const keywordLabel = document.createElement("label");
+    keywordLabel.textContent = "觸發關鍵字";
+    const keywordInput = document.createElement("textarea");
+    keywordInput.rows = 4;
+    keywordInput.value = triggers.keywords.join("\n");
+    keywordInput.placeholder = "換行=全部都要有\n玩家1+受了重傷/死亡 = 10字內靠近\n{{user1}}+受了重傷 = user1輸入時觸發";
+    keywordInput.dataset.field = "triggerKeywords";
+    keywordLabel.appendChild(keywordInput);
+
+    const sourceLabel = document.createElement("label");
+    sourceLabel.textContent = "關鍵字來源";
+    const sourceSelect = document.createElement("select");
+    sourceSelect.dataset.field = "triggerKeywordSource";
+    [
+      ["both", "{{user}} 或 AI 生成內容"],
+      ["user", "只看 {{user}} 輸入"],
+      ["assistant", "只看 AI 生成內容"]
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      sourceSelect.appendChild(option);
+    });
+    sourceSelect.value = triggers.keywordSource || "both";
+    sourceLabel.appendChild(sourceSelect);
+
+    const editor = document.createElement("div");
+    editor.className = "compression-trigger-action-grid";
+    editor.append(
+      enabledInput,
+      nameLabel,
+      actionLabel,
+      skipLabel,
+      roundLabel,
+      turnsLabel,
+      keywordLabel,
+      sourceLabel
+    );
+
+    editor.querySelectorAll("input, textarea, select").forEach((field) => {
+      field.addEventListener("input", () => {
+        syncSelectedCompressionProfileFromEditor();
+        clearModularPromptPreview();
+      });
+      field.addEventListener("change", () => {
+        syncSelectedCompressionProfileFromEditor();
+        clearModularPromptPreview();
+      });
+    });
+
+    item.append(header, editor);
+    el.compressionTriggerActionList.appendChild(item);
+  });
+}
+
+function collectCompressionAppendTermsFromEditor(options = {}) {
+  if (!el.compressionAppendTermList) {
+    return [];
+  }
+  const keepExpanded = Boolean(options.keepExpanded);
+  return Array.from(el.compressionAppendTermList.querySelectorAll("[data-append-term-id]"))
+    .map((item, index) => normalizeModelAppendTermConfig({
+      id: item.dataset.appendTermId || "",
+      enabled: item.querySelector("[data-field='appendTermEnabled']")?.checked !== false,
+      player: item.querySelector("[data-field='appendTermPlayer']")?.value || "user1",
+      content: item.querySelector("[data-field='appendTermContent']")?.value || "",
+      expanded: keepExpanded ? item.open : false
+    }, index));
+}
+
+function getModelAppendPlayerLabel(value = "") {
+  const player = normalizeModelAppendPlayer(value);
+  if (player === MODEL_APPEND_PLAYER_OTHER) {
+    return "userx";
+  }
+  return player;
+}
+
+function formatAppendTermSummary(term = {}, index = 0) {
+  const normalized = normalizeModelAppendTermConfig(term, index);
+  const preview = normalized.content
+    ? normalized.content.replace(/\s+/g, " ").slice(0, 36)
+    : "未填內容";
+  return [
+    `追加詞 ${index + 1}`,
+    getModelAppendPlayerLabel(normalized.player),
+    normalized.enabled === false ? "停用" : "",
+    preview
+  ].filter(Boolean).join(" -> ");
+}
+
+function renderCompressionAppendTermEditor(terms = []) {
+  if (!el.compressionAppendTermList) {
+    return;
+  }
+  const normalizedTerms = normalizeModelAppendTermsConfig(terms);
+  el.compressionAppendTermList.innerHTML = "";
+
+  if (normalizedTerms.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = "尚未建立追加詞。";
+    el.compressionAppendTermList.appendChild(empty);
+    return;
+  }
+
+  normalizedTerms.forEach((term, index) => {
+    const item = document.createElement("details");
+    item.className = "role-card compression-append-term-card";
+    item.dataset.appendTermId = term.id;
+    item.open = Boolean(term.expanded);
+
+    const header = document.createElement("summary");
+    header.className = "inline-actions";
+    const title = document.createElement("strong");
+    title.textContent = formatAppendTermSummary(term, index);
+    title.style.flex = "1";
+
+    const enabledBtn = document.createElement("button");
+    enabledBtn.type = "button";
+    enabledBtn.className = term.enabled !== false ? "secondary" : "muted";
+    enabledBtn.textContent = term.enabled !== false ? "啟用" : "停用";
+    enabledBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const current = collectCompressionAppendTermsFromEditor({ keepExpanded: true });
+      renderCompressionAppendTermEditor(current.map((item) =>
+        item.id === term.id ? { ...item, enabled: item.enabled === false, expanded: true } : item
+      ));
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "secondary";
+    editBtn.textContent = term.expanded ? "收合" : "編輯";
+    editBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const current = collectCompressionAppendTermsFromEditor({ keepExpanded: true });
+      renderCompressionAppendTermEditor(current.map((item) =>
+        item.id === term.id ? { ...item, expanded: !item.expanded } : item
+      ));
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "muted";
+    deleteBtn.textContent = "刪除";
+    deleteBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      renderCompressionAppendTermEditor(
+        collectCompressionAppendTermsFromEditor({ keepExpanded: true }).filter((item) => item.id !== term.id)
+      );
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+
+    header.append(title, enabledBtn, editBtn, deleteBtn);
+
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = term.enabled !== false;
+    enabledInput.dataset.field = "appendTermEnabled";
+    enabledInput.hidden = true;
+
+    const playerLabel = document.createElement("label");
+    playerLabel.textContent = "指定玩家";
+    const playerSelect = document.createElement("select");
+    playerSelect.dataset.field = "appendTermPlayer";
+    [
+      ["user1", "user1"],
+      ["user2", "user2"],
+      [MODEL_APPEND_PLAYER_OTHER, "userx（其他玩家）"]
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      playerSelect.appendChild(option);
+    });
+    playerSelect.value = normalizeModelAppendPlayer(term.player);
+    playerLabel.appendChild(playerSelect);
+
+    const contentLabel = document.createElement("label");
+    contentLabel.textContent = "追加詞內容";
+    contentLabel.style.gridColumn = "1 / -1";
+    const contentInput = document.createElement("textarea");
+    contentInput.rows = 4;
+    contentInput.value = term.content || "";
+    contentInput.placeholder = "例如：你是玩家1，目前角色資料以玩家1模型內容為準。";
+    contentInput.dataset.field = "appendTermContent";
+    contentLabel.appendChild(contentInput);
+
+    const editor = document.createElement("div");
+    editor.className = "compression-append-term-grid";
+    editor.append(enabledInput, playerLabel, contentLabel);
+
+    editor.querySelectorAll("input, textarea, select").forEach((field) => {
+      field.addEventListener("input", () => {
+        syncSelectedCompressionProfileFromEditor();
+        clearModularPromptPreview();
+      });
+      field.addEventListener("change", () => {
+        syncSelectedCompressionProfileFromEditor();
+        clearModularPromptPreview();
+      });
+    });
+
+    item.append(header, editor);
+    el.compressionAppendTermList.appendChild(item);
+  });
+}
+
+function syncSelectedCompressionProfileFromEditor() {
+  const profile = getSelectedCompressionProfile();
+  if (!profile) {
+    return;
+  }
+  const isStandard = profile.id === STANDARD_COMPRESSION_PROFILE_ID;
+  profile.name = el.compressionProfileName?.value?.trim() || getDefaultCompressionProfileName(profile.id);
+  profile.enabled = isStandard ? true : Boolean(el.compressionProfileEnabled?.checked);
+  profile.locked = isStandard || Boolean(profile.locked);
+  profile.triggerActions = collectCompressionTriggerActionsFromEditor();
+  profile.triggers = profile.triggerActions[0]?.triggers ||
+    normalizeCompressionTriggerConfig({}, { defaultRoundLimit: isStandard });
+  profile.appendTerms = collectCompressionAppendTermsFromEditor();
+  profile.contextCompression = normalizeContextCompressionConfig({
+    mainRules: el.modularCompressionMainRules?.value || "",
+    models: collectCompressionModelsFromEditor()
+  }, appState?.contextCompressionPrompt || "", { allowEmptyModels: !isStandard });
+}
+
+function renderCompressionProfileEditor(profileId = selectedCompressionProfileId) {
+  if (compressionProfilesDraft.length === 0) {
+    compressionProfilesDraft = [createStandardCompressionProfile({})];
+  }
+  selectedCompressionProfileId = compressionProfilesDraft.some((profile) => profile.id === profileId)
+    ? profileId
+    : STANDARD_COMPRESSION_PROFILE_ID;
+  renderCompressionProfileOptions(selectedCompressionProfileId);
+  const profile = getSelectedCompressionProfile();
+  if (!profile) {
+    return;
+  }
+  const isStandard = profile.id === STANDARD_COMPRESSION_PROFILE_ID;
+  if (el.compressionProfileName) {
+    el.compressionProfileName.value = profile.name || getDefaultCompressionProfileName(profile.id);
+  }
+  if (el.compressionProfileEnabled) {
+    el.compressionProfileEnabled.checked = isStandard || profile.enabled !== false;
+    el.compressionProfileEnabled.disabled = isStandard;
+    el.compressionProfileEnabled.title = isStandard ? "標準壓縮模型固定啟用" : "";
+  }
+  if (el.deleteCompressionProfileBtn) {
+    el.deleteCompressionProfileBtn.disabled = isStandard;
+    el.deleteCompressionProfileBtn.title = isStandard ? "標準壓縮模型不可刪除" : "";
+  }
+  renderCompressionTriggerActionEditor(profile.triggerActions || []);
+  renderCompressionAppendTermEditor(profile.appendTerms || []);
+  if (el.modularCompressionMainRules) {
+    el.modularCompressionMainRules.value = profile.contextCompression?.mainRules || "";
+  }
+  renderCompressionModelEditor(profile.contextCompression?.models || []);
+  clearModularPromptPreview();
+}
+
+function createCompressionProfile() {
+  syncSelectedCompressionProfileFromEditor();
+  let index = compressionProfilesDraft.length + 1;
+  let id = normalizeCompressionProfileId(`compression_profile_${index}`);
+  while (compressionProfilesDraft.some((profile) => profile.id === id)) {
+    index += 1;
+    id = normalizeCompressionProfileId(`compression_profile_${index}`);
+  }
+  const baseProfile = getSelectedCompressionProfile() || createStandardCompressionProfile({});
+  const profile = normalizeCompressionProfileConfig({
+    id,
+    name: `大模型 ${index}`,
+    enabled: true,
+    triggerActions: [
+      {
+        id: `trigger_action_${Date.now()}`,
+        name: "觸發組合 1",
+        enabled: true,
+        action: MODEL_TRIGGER_ACTION_CALL_API,
+        skipReasoner: false,
+        triggers: { roundLimit: false, keywords: [], keywordSource: "both", turns: [] },
+        expanded: true
+      }
+    ],
+    appendTerms: [],
+    contextCompression: {
+      mainRules: baseProfile.contextCompression?.mainRules || "",
+      models: []
+    }
+  }, compressionProfilesDraft.length, baseProfile.contextCompression);
+  compressionProfilesDraft.push(profile);
+  renderCompressionProfileEditor(profile.id);
+}
+
+function deleteSelectedCompressionProfile() {
+  const profile = getSelectedCompressionProfile();
+  if (!profile || profile.id === STANDARD_COMPRESSION_PROFILE_ID) {
+    showToast("標準壓縮模型不可刪除", "error");
+    return;
+  }
+  if (!window.confirm(`確定要刪除大模型「${profile.name || profile.id}」嗎？`)) {
+    return;
+  }
+  compressionProfilesDraft = compressionProfilesDraft.filter((item) => item.id !== profile.id);
+  renderCompressionProfileEditor(STANDARD_COMPRESSION_PROFILE_ID);
+}
+
 function renderModularPromptEditor(mode = "") {
   const promptMode = normalizeRoleCardMode(mode || getActivePromptMode(appState));
   const config = getModularConfig(promptMode);
-  const compressionConfig = normalizeContextCompressionConfig(
-    config.contextCompression || { mainRules: config.contextCompressionPrompt },
-    config.contextCompressionPrompt || appState?.contextCompressionPrompt || ""
-  );
+  compressionProfilesDraft = normalizeCompressionProfilesConfig(config);
+  selectedCompressionProfileId = STANDARD_COMPRESSION_PROFILE_ID;
   if (el.modularPromptModeSelect) {
     renderPromptModeOptions(el.modularPromptModeSelect, promptMode);
   }
@@ -1884,10 +2643,7 @@ function renderModularPromptEditor(mode = "") {
       ? "內建模式不可刪除"
       : "";
   }
-  if (el.modularCompressionMainRules) {
-    el.modularCompressionMainRules.value = compressionConfig.mainRules || "";
-  }
-  renderCompressionModelEditor(compressionConfig.models);
+  renderCompressionProfileEditor(selectedCompressionProfileId);
   if (el.modularReasonerMainRules) {
     el.modularReasonerMainRules.value = config.reasonerHistory?.mainRules || "";
   }
@@ -1922,7 +2678,7 @@ function renderCompressionModelEditor(models = []) {
   if (compressionModelsDraft.length === 0) {
     const empty = document.createElement("p");
     empty.className = "form-hint";
-    empty.textContent = "尚未建立壓縮模型。";
+    empty.textContent = "尚未建立模塊，這個大模型會以純文本方式保存模型內容。";
     el.modularCompressionModelList.appendChild(empty);
     return;
   }
@@ -1935,12 +2691,12 @@ function renderCompressionModelEditor(models = []) {
     const title = document.createElement("div");
     title.className = "inline-actions";
     const label = document.createElement("strong");
-    label.textContent = `${model.name || model.id || `模型 ${index + 1}`} (${model.id || "未設定ID"})`;
+    label.textContent = `${model.name || model.id || `模塊 ${index + 1}`} (${model.id || "未設定ID"})`;
     label.style.flex = "1";
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "muted";
-    deleteBtn.textContent = "刪除模型";
+    deleteBtn.textContent = "刪除模塊";
     deleteBtn.addEventListener("click", () => {
       compressionModelsDraft = collectCompressionModelsFromEditor({ keepEmpty: true })
         .filter((entry, entryIndex) => entryIndex !== index);
@@ -1968,7 +2724,7 @@ function renderCompressionModelEditor(models = []) {
     nameLabel.appendChild(nameInput);
 
     const addLabel = document.createElement("label");
-    addLabel.textContent = "新增模型規則";
+    addLabel.textContent = "新增模塊規則";
     const addInput = document.createElement("textarea");
     addInput.rows = 5;
     addInput.className = "compression-model-rules";
@@ -1977,7 +2733,7 @@ function renderCompressionModelEditor(models = []) {
     addLabel.appendChild(addInput);
 
     const deleteLabel = document.createElement("label");
-    deleteLabel.textContent = "刪除模型規則";
+    deleteLabel.textContent = "刪除模塊規則";
     const deleteInput = document.createElement("textarea");
     deleteInput.rows = 5;
     deleteInput.className = "compression-model-rules";
@@ -1996,16 +2752,22 @@ function renderCompressionModelEditor(models = []) {
 
 function collectModularPromptConfig() {
   const mode = normalizeRoleCardMode(el.modularPromptModeSelect?.value || "single");
-  const contextCompression = normalizeContextCompressionConfig({
-    mainRules: el.modularCompressionMainRules?.value || "",
-    models: collectCompressionModelsFromEditor()
-  }, appState?.contextCompressionPrompt || "");
+  syncSelectedCompressionProfileFromEditor();
+  const fallbackProfile = compressionProfilesDraft.find((profile) => profile.id === STANDARD_COMPRESSION_PROFILE_ID) ||
+    createStandardCompressionProfile({});
+  const compressionProfiles = compressionProfilesDraft.map((profile, index) =>
+    normalizeCompressionProfileConfig(profile, index, fallbackProfile.contextCompression)
+  );
+  const standardProfile = compressionProfiles.find((profile) => profile.id === STANDARD_COMPRESSION_PROFILE_ID) ||
+    createStandardCompressionProfile(fallbackProfile.contextCompression);
+  const contextCompression = standardProfile.contextCompression;
   return {
     version: 2,
     mode,
     name: el.modularPromptModeName?.value?.trim() || getDefaultPromptModeDisplayName(mode),
     contextCompression,
     contextCompressionPrompt: contextCompression.mainRules,
+    compressionProfiles,
     reasonerHistory: {
       mainRules: el.modularReasonerMainRules?.value || "",
       contextRules: el.modularReasonerContextRules?.value || ""
@@ -2363,24 +3125,68 @@ async function updateConversationSettings() {
   }
 }
 
+function getCompressionProfileStateFromRuntime(compression = {}, profileId = STANDARD_COMPRESSION_PROFILE_ID) {
+  const id = normalizeCompressionProfileId(profileId);
+  if (id === STANDARD_COMPRESSION_PROFILE_ID) {
+    return {
+      summary: compression.summary || "",
+      compressedThroughTurnNumber: Number(compression.compressedThroughTurnNumber || 0) || 0,
+      updatedAt: compression.updatedAt || ""
+    };
+  }
+  const profileState = compression.profiles?.[id] || {};
+  return {
+    summary: profileState.summary || "",
+    compressedThroughTurnNumber: Number(profileState.compressedThroughTurnNumber || 0) || 0,
+    updatedAt: profileState.updatedAt || ""
+  };
+}
+
+function getContextCompressionProfilesForActiveMode() {
+  const activeMode = getActivePromptMode(appState);
+  return normalizeCompressionProfilesConfig(getModularConfig(activeMode));
+}
+
+function renderContextCompressionProfileView(profileId = selectedContextCompressionProfileId) {
+  const compression = contextCompressionDialogPayload?.contextCompression || appState?.contextCompression || {};
+  const profiles = getContextCompressionProfilesForActiveMode();
+  selectedContextCompressionProfileId = profiles.some((profile) => profile.id === profileId)
+    ? profileId
+    : STANDARD_COMPRESSION_PROFILE_ID;
+  if (el.contextCompressionProfileSelect) {
+    el.contextCompressionProfileSelect.innerHTML = "";
+    profiles.forEach((profile, index) => {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = `${profile.name || profile.id || `大模型 ${index + 1}`}${profile.enabled === false ? "（未啟用）" : ""}`;
+      el.contextCompressionProfileSelect.appendChild(option);
+    });
+    el.contextCompressionProfileSelect.value = selectedContextCompressionProfileId;
+  }
+  const profile = profiles.find((item) => item.id === selectedContextCompressionProfileId) || profiles[0];
+  const profileState = getCompressionProfileStateFromRuntime(compression, selectedContextCompressionProfileId);
+  if (el.contextCompressionMeta) {
+    el.contextCompressionMeta.textContent = [
+      `大模型: ${profile?.name || selectedContextCompressionProfileId}`,
+      profile?.enabled === false ? "狀態: 未啟用" : "狀態: 啟用",
+      `已壓縮到第 ${profileState.compressedThroughTurnNumber || 0} 輪`,
+      profileState.updatedAt ? `更新時間: ${new Date(profileState.updatedAt).toLocaleString("zh-Hant")}` : ""
+    ].filter(Boolean).join("｜");
+  }
+  if (el.contextCompressionContentView) {
+    el.contextCompressionContentView.value = profileState.summary || "";
+  }
+}
+
 async function openContextCompressionDialog() {
   try {
     const payload = await request("/api/context-compression", { method: "GET" });
     if (payload?.state) {
       appState = payload.state;
     }
-    const compression = payload?.contextCompression || appState?.contextCompression || {};
-    const compressedTurn = Number(compression.compressedThroughTurnNumber || 0);
-    if (el.contextCompressionMeta) {
-      el.contextCompressionMeta.textContent = [
-        `狀態: ${compression.enabled ? "啟用" : "停用"}`,
-        `已壓縮到第 ${compressedTurn || 0} 輪`,
-        compression.updatedAt ? `更新時間: ${new Date(compression.updatedAt).toLocaleString("zh-Hant")}` : ""
-      ].filter(Boolean).join("｜");
-    }
-    if (el.contextCompressionContentView) {
-      el.contextCompressionContentView.value = compression.summary || "";
-    }
+    contextCompressionDialogPayload = payload || {};
+    selectedContextCompressionProfileId = STANDARD_COMPRESSION_PROFILE_ID;
+    renderContextCompressionProfileView(selectedContextCompressionProfileId);
     renderConversationModelSettings(appState || {});
     el.contextCompressionDialog?.showModal();
   } catch (error) {
@@ -2393,23 +3199,17 @@ async function saveContextCompressionContent() {
     const payload = await request("/api/context-compression", {
       method: "PUT",
       body: JSON.stringify({
+        profileId: selectedContextCompressionProfileId,
         summary: el.contextCompressionContentView?.value || ""
       })
     });
     if (payload?.state) {
       appState = payload.state;
     }
-    const compression = payload?.contextCompression || appState?.contextCompression || {};
-    if (el.contextCompressionMeta) {
-      const compressedTurn = Number(compression.compressedThroughTurnNumber || 0);
-      el.contextCompressionMeta.textContent = [
-        "狀態: 啟用",
-        `已壓縮到第 ${compressedTurn || 0} 輪`,
-        compression.updatedAt ? `更新時間: ${new Date(compression.updatedAt).toLocaleString("zh-Hant")}` : ""
-      ].filter(Boolean).join("｜");
-    }
+    contextCompressionDialogPayload = payload || {};
+    renderContextCompressionProfileView(selectedContextCompressionProfileId);
     renderConversationModelSettings(appState || {});
-    showToast("壓縮內容已保存");
+    showToast("模型內容已保存");
   } catch (error) {
     showToast(error.message, "error");
   }
@@ -2489,7 +3289,7 @@ function createCustomPromptMode() {
     index += 1;
     mode = normalizeRoleCardMode(`custom_mode_${index}`);
   }
-  const baseConfig = getModularConfig(el.modularPromptModeSelect?.value || getActivePromptMode(appState));
+  const baseConfig = collectModularPromptConfig();
   appState = {
     ...(appState || {}),
     modularPromptConfigs: {
@@ -2967,6 +3767,12 @@ function bindEvents() {
     });
   }
 
+  if (el.contextCompressionProfileSelect) {
+    el.contextCompressionProfileSelect.addEventListener("change", () => {
+      renderContextCompressionProfileView(el.contextCompressionProfileSelect.value);
+    });
+  }
+
   if (el.envSettingsBtn) {
     el.envSettingsBtn.addEventListener("click", async () => {
       await openEnvSettingsDialog();
@@ -3063,6 +3869,79 @@ function bindEvents() {
     });
   }
 
+  if (el.compressionProfileSelect) {
+    el.compressionProfileSelect.addEventListener("change", () => {
+      syncSelectedCompressionProfileFromEditor();
+      renderCompressionProfileEditor(el.compressionProfileSelect.value);
+    });
+  }
+
+  if (el.editCompressionProfileBtn) {
+    el.editCompressionProfileBtn.addEventListener("click", () => {
+      renderCompressionProfileEditor(el.compressionProfileSelect?.value || selectedCompressionProfileId);
+    });
+  }
+
+  if (el.addCompressionProfileBtn) {
+    el.addCompressionProfileBtn.addEventListener("click", createCompressionProfile);
+  }
+
+  if (el.deleteCompressionProfileBtn) {
+    el.deleteCompressionProfileBtn.addEventListener("click", deleteSelectedCompressionProfile);
+  }
+
+  if (el.addCompressionTriggerActionBtn) {
+    el.addCompressionTriggerActionBtn.addEventListener("click", () => {
+      const current = collectCompressionTriggerActionsFromEditor({ keepExpanded: true });
+      current.push(normalizeCompressionTriggerActionConfig({
+        id: `trigger_action_${Date.now()}`,
+        name: `觸發組合 ${current.length + 1}`,
+        enabled: true,
+        action: MODEL_TRIGGER_ACTION_CALL_API,
+        skipReasoner: false,
+        triggers: { roundLimit: false, keywords: [], keywordSource: "both", turns: [] },
+        expanded: true
+      }, current.length));
+      renderCompressionTriggerActionEditor(current);
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+  }
+
+  if (el.addCompressionAppendTermBtn) {
+    el.addCompressionAppendTermBtn.addEventListener("click", () => {
+      const current = collectCompressionAppendTermsFromEditor({ keepExpanded: true });
+      current.push(normalizeModelAppendTermConfig({
+        id: `append_term_${Date.now()}`,
+        enabled: true,
+        player: "user1",
+        content: "",
+        expanded: true
+      }, current.length));
+      renderCompressionAppendTermEditor(current);
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+  }
+
+  [
+    el.compressionProfileName,
+    el.compressionProfileEnabled
+  ].forEach((field) => {
+    if (field) {
+      field.addEventListener("input", () => {
+        syncSelectedCompressionProfileFromEditor();
+        renderCompressionProfileOptions(selectedCompressionProfileId);
+        clearModularPromptPreview();
+      });
+      field.addEventListener("change", () => {
+        syncSelectedCompressionProfileFromEditor();
+        renderCompressionProfileOptions(selectedCompressionProfileId);
+        clearModularPromptPreview();
+      });
+    }
+  });
+
   [
     el.modularCompressionMainRules,
     el.modularReasonerMainRules,
@@ -3078,7 +3957,7 @@ function bindEvents() {
       compressionModelsDraft = collectCompressionModelsFromEditor({ keepEmpty: true });
       compressionModelsDraft.push(normalizeCompressionModelConfig({
         id: `CustomModel${Date.now()}`,
-        name: "新模型",
+        name: "新模塊",
         addRules: "",
         deleteRules: ""
       }, compressionModelsDraft.length));

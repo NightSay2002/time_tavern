@@ -46,7 +46,7 @@
 
         <div class="actions-block">
           <h2>對話模型設定</h2>
-          <p class="form-hint">正式使用上下文壓縮模式；正文輸出會使用最近對話與目前壓縮內容。</p>
+          <p class="form-hint">正式使用大模型內容；正文輸出會使用最近對話與目前模型內容。</p>
           <label>
             正文輸出模型
             <select id="chatOutputModelSelect">
@@ -62,7 +62,7 @@
           </label>
           <button id="editModularPromptsBtn" type="button" class="secondary">編輯 Prompt</button>
           <p class="form-hint">可編輯正文輸出 Prompt 與壓縮 Prompt。</p>
-          <p id="contextCompressionModeHint" class="form-hint">壓縮模式固定啟用。</p>
+          <p id="contextCompressionModeHint" class="form-hint">模型內容固定啟用。</p>
           <button id="applyConversationSettingsBtn" type="button" class="secondary">確認套用模型與輪數</button>
           <p class="form-hint">調整模型或上下文輪數後，請按此按鈕一次套用。</p>
         </div>
@@ -84,7 +84,7 @@
         <div class="actions-block">
           <h2>功能按鈕</h2>
           <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
-          <button id="contextCompressionInspectBtn" type="button">查看/編輯壓縮內容</button>
+          <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
           <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
         </div>
       </section>
@@ -236,14 +236,18 @@
 
     <dialog id="contextCompressionDialog" class="dialog prompt-viewer-dialog">
       <form id="contextCompressionForm" method="dialog" class="stack">
-        <h3>查看/編輯壓縮內容</h3>
-        <p id="contextCompressionMeta" class="form-hint">尚未啟用或尚未產生壓縮內容。</p>
+        <h3>查看/編輯模型內容</h3>
+        <p id="contextCompressionMeta" class="form-hint">尚未啟用或尚未產生模型內容。</p>
         <label>
-          壓縮內容
-          <textarea id="contextCompressionContentView" rows="16" placeholder="尚未產生壓縮內容。"></textarea>
+          顯示大模型
+          <select id="contextCompressionProfileSelect"></select>
+        </label>
+        <label>
+          模型內容
+          <textarea id="contextCompressionContentView" rows="16" placeholder="尚未產生模型內容。"></textarea>
         </label>
         <div class="dialog-actions">
-          <button type="submit" id="saveContextCompressionDialog">保存壓縮內容</button>
+          <button type="submit" id="saveContextCompressionDialog">保存模型內容</button>
           <button type="button" id="closeContextCompressionDialog">關閉</button>
         </div>
       </form>
@@ -298,17 +302,49 @@
           模式名字
           <input id="modularPromptModeName" type="text" placeholder="例如：單角色" />
         </label>
+        <section class="compression-profile-panel stack">
+          <div class="mode-editor-row compression-profile-actions">
+            <label>
+              選擇大模型
+              <select id="compressionProfileSelect"></select>
+            </label>
+            <button id="editCompressionProfileBtn" type="button" class="secondary">編輯</button>
+            <button id="addCompressionProfileBtn" type="button" class="secondary">＋ 建立大模型</button>
+            <button id="deleteCompressionProfileBtn" type="button" class="muted">刪除大模型</button>
+          </div>
+          <div class="compression-profile-grid">
+            <label>
+              大模型名字
+              <input id="compressionProfileName" type="text" placeholder="例如：跑團事件記憶" />
+            </label>
+            <label class="checkbox-label compression-profile-enabled">
+              <input id="compressionProfileEnabled" type="checkbox" />
+              啟用這個大模型
+            </label>
+          </div>
+          <div class="inline-actions">
+            <strong>觸發條件與處理動作</strong>
+            <button id="addCompressionTriggerActionBtn" type="button" class="secondary">＋ 新增組合</button>
+          </div>
+          <div id="compressionTriggerActionList" class="custom-section-list compression-trigger-action-list"></div>
+          <div class="inline-actions">
+            <strong>首次觸發後追加詞</strong>
+            <button id="addCompressionAppendTermBtn" type="button" class="secondary">＋ 新增追加詞</button>
+          </div>
+          <p class="form-hint">這個大模型第一次觸發後，符合指定玩家座位的追加詞會附在該玩家之後的 user 對話中。</p>
+          <div id="compressionAppendTermList" class="custom-section-list compression-append-term-list"></div>
+        </section>
         <div class="prompt-grid prompt-stack">
           <section class="stack">
             <label>
-              壓縮主要規則
+              模型主要規則
               <textarea id="modularCompressionMainRules" rows="8" required></textarea>
             </label>
             <div class="inline-actions">
-              <strong>壓縮模型</strong>
-              <button id="addCompressionModelBtn" type="button" class="secondary">＋ 新增模型</button>
+              <strong>模塊</strong>
+              <button id="addCompressionModelBtn" type="button" class="secondary">＋ 新增模塊</button>
             </div>
-            <p class="form-hint">每個模型會輸出 `model.ID` 與 `delete.ID`。AI 新輸出會追加合併，不會覆蓋既有壓縮內容。</p>
+            <p class="form-hint">每個模塊會輸出 `model.ID` 與 `delete.ID`。AI 新輸出會追加合併，不會覆蓋既有模型內容。</p>
             <div id="modularCompressionModelList" class="custom-section-list compression-model-list"></div>
           </section>
           <label>

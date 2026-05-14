@@ -35,6 +35,11 @@ const DEEPSEEK_REQUEST_TIMEOUT_MS = envNumber("DEEPSEEK_REQUEST_TIMEOUT_MS", 600
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
+const STANDARD_COMPRESSION_PROFILE_ID = "standard";
+const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
+const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
+const MODEL_APPEND_PLAYER_OTHER = "userx";
+const KEYWORD_PROXIMITY_CHARS = 10;
 
 function envText(key, fallback) {
   const raw = process.env[key];
@@ -219,7 +224,7 @@ let characterCardCreationAssistantPrompt = envTextOrFile(
 );
 
 const CONTEXT_COMPRESSION_PROMPT_FILE = path.join(PROMPTS_DIR, "Context_compression.txt");
-const COMPRESSION_USER_NOTICE_TEXT = "【( •̀ ω •́ )✧你已經歷了一次壓縮】";
+const COMPRESSION_USER_NOTICE_TEXT = "【( •̀ ω •́ )✧模型內容已更新】";
 let contextCompressionPrompt = envTextOrFile(
   "CONTEXT_COMPRESSION_PROMPT",
   "你是長篇角色互動的上下文壓縮器。請輸出可供後續正文模型承接的精簡上下文。",
@@ -254,6 +259,18 @@ const DISCORD_SLASH_COMMANDS = [
   {
     name: "ai_status",
     description: "查看目前 AI 對話狀態"
+  },
+  {
+    name: "player_set",
+    description: "把自己設定為指定玩家座位",
+    options: [
+      {
+        name: "number",
+        description: "玩家編號，例如 1 或 2",
+        type: ApplicationCommandOptionType.Integer,
+        required: true
+      }
+    ]
   },
   {
     name: "reload",
@@ -357,6 +374,15 @@ function createDefaultContextCompressionState() {
     enabled: true,
     summary: "",
     compressedThroughTurnNumber: 0,
+    profiles: {},
+    updatedAt: ""
+  };
+}
+
+function createDefaultDiscordPlayerState(channelId = "") {
+  return {
+    channelId: safeText(channelId),
+    assignments: {},
     updatedAt: ""
   };
 }
@@ -379,6 +405,7 @@ function createDefaultState() {
     aiSessionStarted: false,
     pendingOpeningBroadcast: false,
     lastDiscordChannelId: "",
+    discordPlayers: createDefaultDiscordPlayerState(),
     turnState: createDefaultTurnState(),
     conversation: [],
     aiLogs: [],
@@ -420,6 +447,16 @@ function normalizeConversationSettings(input) {
 function normalizeContextCompressionState(input) {
   const source = input && typeof input === "object" ? input : {};
   const compressedThroughTurnNumber = Number(source.compressedThroughTurnNumber);
+  const rawProfiles = source.profiles && typeof source.profiles === "object"
+    ? source.profiles
+    : source.profileStates && typeof source.profileStates === "object"
+      ? source.profileStates
+      : {};
+  const profiles = Object.fromEntries(
+    Object.entries(rawProfiles)
+      .map(([id, value]) => [normalizeCompressionProfileId(id), normalizeCompressionProfileState(value)])
+      .filter(([id]) => id && id !== STANDARD_COMPRESSION_PROFILE_ID)
+  );
   return {
     enabled: true,
     summary: safeText(source.summary),
@@ -427,6 +464,39 @@ function normalizeContextCompressionState(input) {
       Number.isFinite(compressedThroughTurnNumber) && compressedThroughTurnNumber > 0
         ? Math.floor(compressedThroughTurnNumber)
         : 0,
+    profiles,
+    updatedAt: safeText(source.updatedAt)
+  };
+}
+
+function normalizeDiscordPlayerSlot(value = "") {
+  const normalized = safeText(value).toLowerCase().replace(/\s+/g, "");
+  const numberMatch = normalized.match(/^(?:user|玩家)?(\d+)$/u);
+  if (numberMatch) {
+    const number = Math.max(1, Math.floor(Number(numberMatch[1])));
+    return `user${number}`;
+  }
+  if (normalized === "x" || normalized === "userx" || normalized === "other" || normalized === "others") {
+    return MODEL_APPEND_PLAYER_OTHER;
+  }
+  return "";
+}
+
+function normalizeDiscordPlayerState(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const rawAssignments = source.assignments && typeof source.assignments === "object"
+    ? source.assignments
+    : source.players && typeof source.players === "object"
+      ? source.players
+      : {};
+  const assignments = Object.fromEntries(
+    Object.entries(rawAssignments)
+      .map(([userId, slot]) => [safeText(userId), normalizeDiscordPlayerSlot(slot)])
+      .filter(([userId, slot]) => userId && slot)
+  );
+  return {
+    channelId: safeText(source.channelId || source.activeChannelId),
+    assignments,
     updatedAt: safeText(source.updatedAt)
   };
 }
@@ -489,6 +559,16 @@ function resetConversationProgress(currentState) {
   }
   currentState.conversation = [];
   currentState.turnState = createDefaultTurnState();
+}
+
+function resetDiscordPlayerAssignments(currentState, channelId = "") {
+  if (!currentState || typeof currentState !== "object") {
+    return;
+  }
+  currentState.discordPlayers = {
+    ...createDefaultDiscordPlayerState(channelId),
+    updatedAt: nowIso()
+  };
 }
 
 function normalizeAiUsage(input) {
@@ -662,6 +742,7 @@ function loadState() {
       aiSessionStarted: Boolean(parsed.aiSessionStarted),
       pendingOpeningBroadcast: Boolean(parsed.pendingOpeningBroadcast),
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
+      discordPlayers: normalizeDiscordPlayerState(parsed.discordPlayers),
       conversation: Array.isArray(parsed.conversation) ? cloneData(parsed.conversation, []) : [],
       aiLogs: Array.isArray(parsed.aiLogs) ? parsed.aiLogs.map((entry) => normalizeAiLog(entry)) : [],
       activeSavedSessionId: null
@@ -700,6 +781,7 @@ function loadState() {
 
 function saveState(state) {
   state.turnState = normalizeTurnState(state.turnState, state);
+  state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
   state.activeSavedSessionId = null;
   state.updatedAt = nowIso();
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
@@ -769,6 +851,7 @@ function captureRuntimeSnapshot(currentState) {
     aiSessionStarted: Boolean(currentState.aiSessionStarted),
     pendingOpeningBroadcast: Boolean(currentState.pendingOpeningBroadcast),
     lastDiscordChannelId: safeText(currentState.lastDiscordChannelId),
+    discordPlayers: normalizeDiscordPlayerState(currentState.discordPlayers),
     turnState: normalizeTurnState(currentState.turnState, currentState),
     conversation: cloneData(currentState.conversation, []),
     aiLogs: cloneData(currentState.aiLogs, [])
@@ -864,6 +947,7 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.aiSessionStarted = Boolean(source.aiSessionStarted);
   currentState.pendingOpeningBroadcast = Boolean(source.pendingOpeningBroadcast);
   currentState.lastDiscordChannelId = safeText(source.lastDiscordChannelId);
+  currentState.discordPlayers = normalizeDiscordPlayerState(source.discordPlayers);
   currentState.conversation = Array.isArray(source.conversation)
     ? cloneData(source.conversation, [])
     : [];
@@ -1524,6 +1608,163 @@ function normalizeRoleCardMode(value) {
   return normalized || "single";
 }
 
+function normalizeCompressionProfileId(value = "") {
+  const normalized = safeText(value)
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || STANDARD_COMPRESSION_PROFILE_ID;
+}
+
+function parseIntegerList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => safeText(item))
+      .filter(Boolean)
+      .map((item) => Math.floor(Number(item)))
+      .filter((item) => Number.isFinite(item) && item >= 0);
+  }
+  return safeText(value)
+    .split(/[\s,，、;；]+/u)
+    .map((item) => safeText(item))
+    .filter(Boolean)
+    .map((item) => Math.floor(Number(item)))
+    .filter((item) => Number.isFinite(item) && item >= 0);
+}
+
+function parseKeywordList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => safeText(item)).filter(Boolean);
+  }
+  return safeText(value)
+    .split(/[\n,，、;；]+/u)
+    .map((item) => safeText(item))
+    .filter(Boolean);
+}
+
+function normalizeKeywordTriggerSource(value = "") {
+  const normalized = safeText(value).toLowerCase();
+  if (normalized === "user" || normalized === "assistant" || normalized === "both") {
+    return normalized;
+  }
+  return "both";
+}
+
+function normalizeCompressionTriggerConfig(input = {}, options = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const legacyKeywords = source.keywords ?? source.keyword ?? source.triggerKeywords;
+  const legacyTurns = source.turns ?? source.scheduledTurns ?? source.rounds;
+  return {
+    roundLimit: Boolean(source.roundLimit ?? source.onRoundLimit ?? options.defaultRoundLimit),
+    keywords: parseKeywordList(legacyKeywords),
+    keywordSource: normalizeKeywordTriggerSource(source.keywordSource || source.source),
+    turns: [...new Set(parseIntegerList(legacyTurns))].sort((a, b) => a - b)
+  };
+}
+
+function normalizeModelTriggerAction(value = "") {
+  const normalized = safeText(value).toLowerCase().replace(/[-\s]+/g, "_");
+  if (
+    normalized === MODEL_TRIGGER_ACTION_COPY_USER_INPUT ||
+    normalized === "copy" ||
+    normalized === "copy_user" ||
+    normalized === "paste_user_input" ||
+    normalized === "direct_copy"
+  ) {
+    return MODEL_TRIGGER_ACTION_COPY_USER_INPUT;
+  }
+  return MODEL_TRIGGER_ACTION_CALL_API;
+}
+
+function normalizeModelAppendTermConfig(input = {}, index = 0) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    id: safeText(source.id || source.key) || `append_term_${index + 1}`,
+    enabled: source.enabled !== false,
+    player: normalizeDiscordPlayerSlot(source.player || source.target || source.user || source.slot) || "user1",
+    content: safeText(source.content || source.text || source.appendText || source.prompt)
+  };
+}
+
+function normalizeModelAppendTermsConfig(input = {}) {
+  const rawTerms = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.appendTerms)
+      ? input.appendTerms
+      : Array.isArray(input?.playerAppendTerms)
+        ? input.playerAppendTerms
+        : [];
+  return rawTerms
+    .map((item, index) => normalizeModelAppendTermConfig(item, index))
+    .filter((item) => item.id);
+}
+
+function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const triggers = normalizeCompressionTriggerConfig(
+    source.triggers || source.trigger || source.conditions || source.condition || source,
+    { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
+  );
+  return {
+    id: safeText(source.id || source.key) || `trigger_action_${index + 1}`,
+    name: safeText(source.name || source.title || source.label) || `觸發組合 ${index + 1}`,
+    enabled: source.enabled !== false,
+    action: normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction),
+    skipReasoner: Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
+    triggers
+  };
+}
+
+function normalizeCompressionTriggerActionsConfig(input = {}, options = {}) {
+  const rawActions = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.triggerActions)
+      ? input.triggerActions
+      : Array.isArray(input?.actions)
+        ? input.actions
+        : Array.isArray(input?.rules)
+          ? input.rules
+          : [];
+  const legacyTriggers = options.legacyTriggers && typeof options.legacyTriggers === "object"
+    ? options.legacyTriggers
+    : {};
+  const fallbackAction = {
+    id: "default",
+    name: options.defaultName || "標準觸發",
+    enabled: true,
+    action: MODEL_TRIGGER_ACTION_CALL_API,
+    skipReasoner: false,
+    triggers: Object.keys(legacyTriggers).length > 0
+      ? legacyTriggers
+      : { roundLimit: Boolean(options.defaultRoundLimit) }
+  };
+  const sourceActions = rawActions.length > 0 ? rawActions : [fallbackAction];
+  return sourceActions
+    .map((item, index) => normalizeCompressionTriggerActionConfig(item, index, {
+      defaultRoundLimit: Boolean(options.defaultRoundLimit) && rawActions.length === 0
+    }))
+    .filter((item) => item.id);
+}
+
+function normalizeCompressionProfileState(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const compressedThroughTurnNumber = Number(source.compressedThroughTurnNumber);
+  return {
+    summary: safeText(source.summary),
+    compressedThroughTurnNumber:
+      Number.isFinite(compressedThroughTurnNumber) && compressedThroughTurnNumber > 0
+        ? Math.floor(compressedThroughTurnNumber)
+        : 0,
+    updatedAt: safeText(source.updatedAt)
+  };
+}
+
+function getDefaultCompressionProfileName(id = STANDARD_COMPRESSION_PROFILE_ID) {
+  return normalizeCompressionProfileId(id) === STANDARD_COMPRESSION_PROFILE_ID
+    ? "標準壓縮模型"
+    : safeText(id) || "自訂壓縮模型";
+}
+
 function getDefaultModularPromptModeName(mode = "single") {
   const normalizedMode = normalizeRoleCardMode(mode);
   if (normalizedMode === "multi") {
@@ -1557,7 +1798,7 @@ function createDefaultModularPromptConfig(mode = "single") {
     },
     reasonerHistory: {
       mainRules: "你是正式正文生成器，只能輸出角色/場景正文，不要輸出分析、JSON 或額外標題。",
-      contextRules: "承接角色卡、壓縮內容、最近對話與世界書；結尾停在可供 {{user}} 回應或行動的節點。"
+      contextRules: "承接角色卡、模型內容、最近對話與世界書；結尾停在可供 {{user}} 回應或行動的節點。"
     }
   };
 }
@@ -1576,8 +1817,9 @@ function normalizeCompressionModelConfig(input = {}, index = 0) {
   };
 }
 
-function normalizeContextCompressionPromptConfig(input = {}, fallbackPrompt = "") {
+function normalizeContextCompressionPromptConfig(input = {}, fallbackPrompt = "", options = {}) {
   const source = input && typeof input === "object" ? input : {};
+  const allowEmptyModels = Boolean(options.allowEmptyModels);
   const legacyPrompt = safeText(
     typeof input === "string"
       ? input
@@ -1595,8 +1837,108 @@ function normalizeContextCompressionPromptConfig(input = {}, fallbackPrompt = ""
     mainRules: legacyPrompt || getContextCompressionPrompt(),
     models: models.length > 0
       ? models
-      : createDefaultModularPromptConfig().contextCompression.models
+      : allowEmptyModels
+        ? []
+        : createDefaultModularPromptConfig().contextCompression.models
   };
+}
+
+function createStandardCompressionProfile(contextCompression) {
+  const normalizedContextCompression = normalizeContextCompressionPromptConfig(
+    contextCompression,
+    getContextCompressionPrompt()
+  );
+  return {
+    id: STANDARD_COMPRESSION_PROFILE_ID,
+    name: getDefaultCompressionProfileName(STANDARD_COMPRESSION_PROFILE_ID),
+    enabled: true,
+    locked: true,
+    triggers: normalizeCompressionTriggerConfig({ roundLimit: true }, { defaultRoundLimit: true }),
+    triggerActions: normalizeCompressionTriggerActionsConfig([], {
+      defaultRoundLimit: true,
+      defaultName: "標準壓縮"
+    }),
+    appendTerms: [],
+    contextCompression: normalizedContextCompression
+  };
+}
+
+function normalizeCompressionProfileConfig(input = {}, index = 0, fallbackContextCompression = null) {
+  const source = input && typeof input === "object" ? input : {};
+  const id = normalizeCompressionProfileId(source.id || source.key || source.name || `compression_profile_${index + 1}`);
+  const isStandard = id === STANDARD_COMPRESSION_PROFILE_ID;
+  const contextCompression = normalizeContextCompressionPromptConfig(
+    source.contextCompression || source.compression || fallbackContextCompression,
+    fallbackContextCompression?.mainRules || getContextCompressionPrompt(),
+    { allowEmptyModels: !isStandard }
+  );
+  const triggerActions = normalizeCompressionTriggerActionsConfig(
+    source.triggerActions || source.actions || source.triggerRules || [],
+    {
+      defaultRoundLimit: isStandard,
+      defaultName: isStandard ? "標準壓縮" : "觸發組合 1",
+      legacyTriggers: source.triggers || source.trigger || {}
+    }
+  );
+  return {
+    id,
+    name: safeText(source.name || source.title || source.displayName) || getDefaultCompressionProfileName(id),
+    enabled: isStandard ? true : source.enabled !== false,
+    locked: isStandard || Boolean(source.locked),
+    triggers: triggerActions[0]?.triggers || normalizeCompressionTriggerConfig(
+      source.triggers || source.trigger || {},
+      { defaultRoundLimit: isStandard }
+    ),
+    triggerActions,
+    appendTerms: normalizeModelAppendTermsConfig(source.appendTerms || source.playerAppendTerms || []),
+    contextCompression
+  };
+}
+
+function normalizeCompressionProfilesConfig(input = {}, standardContextCompression = null) {
+  const rawProfiles = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.profiles)
+      ? input.profiles
+      : Array.isArray(input?.compressionProfiles)
+        ? input.compressionProfiles
+        : [];
+  const standard = createStandardCompressionProfile(standardContextCompression);
+  const profilesById = new Map([[STANDARD_COMPRESSION_PROFILE_ID, standard]]);
+
+  rawProfiles.forEach((profile, index) => {
+    const normalized = normalizeCompressionProfileConfig(profile, index, standard.contextCompression);
+    profilesById.set(normalized.id, {
+      ...normalized,
+      ...(normalized.id === STANDARD_COMPRESSION_PROFILE_ID
+        ? { enabled: true, locked: true, triggers: normalizeCompressionTriggerConfig(normalized.triggers, { defaultRoundLimit: true }) }
+        : {})
+    });
+  });
+
+  const normalizedStandard = profilesById.get(STANDARD_COMPRESSION_PROFILE_ID) || standard;
+  profilesById.set(STANDARD_COMPRESSION_PROFILE_ID, {
+    ...normalizedStandard,
+    id: STANDARD_COMPRESSION_PROFILE_ID,
+    name: normalizedStandard.name || standard.name,
+    enabled: true,
+    locked: true,
+    triggers: normalizedStandard.triggerActions?.[0]?.triggers ||
+      normalizeCompressionTriggerConfig(normalizedStandard.triggers, { defaultRoundLimit: true }),
+    triggerActions: normalizeCompressionTriggerActionsConfig(
+      normalizedStandard.triggerActions || [],
+      {
+        defaultRoundLimit: true,
+        defaultName: "標準壓縮",
+        legacyTriggers: normalizedStandard.triggers
+      }
+    )
+  });
+
+  return [
+    profilesById.get(STANDARD_COMPRESSION_PROFILE_ID),
+    ...[...profilesById.values()].filter((profile) => profile.id !== STANDARD_COMPRESSION_PROFILE_ID)
+  ];
 }
 
 function normalizeModularPromptConfig(input, mode = "single") {
@@ -1608,12 +1950,19 @@ function normalizeModularPromptConfig(input, mode = "single") {
     safeText(source.contextCompressionPrompt || source.contextCompression?.prompt) ||
       defaults.contextCompression.mainRules
   );
+  const compressionProfiles = normalizeCompressionProfilesConfig(
+    source.compressionProfiles || source.compressionProfileConfigs || [],
+    contextCompression
+  );
+  const standardProfile = compressionProfiles.find((profile) => profile.id === STANDARD_COMPRESSION_PROFILE_ID) ||
+    createStandardCompressionProfile(contextCompression);
   return {
     version: 2,
     mode: normalizedMode,
     name: safeText(source.name || source.title || source.displayName) || defaults.name,
-    contextCompression,
-    contextCompressionPrompt: contextCompression.mainRules,
+    contextCompression: standardProfile.contextCompression,
+    contextCompressionPrompt: standardProfile.contextCompression.mainRules,
+    compressionProfiles,
     reasonerHistory: {
       mainRules: safeText(source.reasonerHistory?.mainRules) || defaults.reasonerHistory.mainRules,
       contextRules: safeText(source.reasonerHistory?.contextRules) || defaults.reasonerHistory.contextRules
@@ -1984,6 +2333,54 @@ function appendTriggeredLorebooksToUserContent(content = "", currentState = stat
   return [base, lorebooksBlock].filter(Boolean).join("\n\n");
 }
 
+function getUserMessageDiscordPlayerSlot(message = {}) {
+  return normalizeDiscordPlayerSlot(message.discordPlayerSlot || message.extra?.discordPlayerSlot);
+}
+
+function isCompressionProfileStateActivated(profileState = {}) {
+  const normalized = normalizeCompressionProfileState(profileState);
+  return Boolean(safeText(normalized.summary) || Number(normalized.compressedThroughTurnNumber || 0) > 0);
+}
+
+function doesModelAppendTermMatchPlayer(term = {}, playerSlot = "") {
+  const normalizedTerm = normalizeModelAppendTermConfig(term);
+  const normalizedPlayerSlot = normalizeDiscordPlayerSlot(playerSlot);
+  if (!normalizedTerm.enabled || !normalizedTerm.content || !normalizedPlayerSlot) {
+    return false;
+  }
+  if (normalizedTerm.player === MODEL_APPEND_PLAYER_OTHER) {
+    return normalizedPlayerSlot !== "user1" && normalizedPlayerSlot !== "user2";
+  }
+  return normalizedTerm.player === normalizedPlayerSlot;
+}
+
+function formatActiveModelAppendTermsForUser(currentState = state, playerSlot = "") {
+  const normalizedPlayerSlot = normalizeDiscordPlayerSlot(playerSlot);
+  if (!normalizedPlayerSlot) {
+    return "";
+  }
+
+  const compressionState = normalizeContextCompressionState(currentState.contextCompression);
+  return getEnabledCompressionProfiles(currentState)
+    .filter((profile) => isCompressionProfileStateActivated(getCompressionProfileState(compressionState, profile.id)))
+    .flatMap((profile) => normalizeModelAppendTermsConfig(profile.appendTerms || []))
+    .filter((term) => doesModelAppendTermMatchPlayer(term, normalizedPlayerSlot))
+    .map((term) => term.content)
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function prependDiscordPlayerSlotToUserContent(content = "", playerSlot = "") {
+  const normalizedPlayerSlot = normalizeDiscordPlayerSlot(playerSlot);
+  if (!normalizedPlayerSlot) {
+    return safeText(content);
+  }
+  return [
+    `【目前輸入者】${normalizedPlayerSlot}`,
+    safeText(content)
+  ].filter(Boolean).join("\n");
+}
+
 function stripUserIdentityTextFromContent(content = "") {
   return safeText(content).replace(/\n{2,}【使用者自訂補充】[\s\S]*$/u, "").trim();
 }
@@ -2025,12 +2422,18 @@ function attachTriggeredLorebooksToUserMessage(message, currentState = state, ru
   const activeRoleCard = getActiveRoleCard(currentState);
   const resolvedUserName = resolveUserDisplayName(currentState?.userProfile, runtimeUserName);
   const triggeredLorebooks = getTriggeredRoleCardLorebooks(currentState, activeRoleCard, resolvedUserName, "reasoner");
+  const playerSlot = getUserMessageDiscordPlayerSlot(message);
+  const modelAppendTerms = formatActiveModelAppendTermsForUser(currentState, playerSlot);
   message.baseModelContent = baseModelContent;
   message.lorebookTriggeredEntryIds = triggeredLorebooks
     .map((entry) => getLorebookEntryIdentity(entry))
     .filter(Boolean);
   message.modelContent = appendUserIdentityTextToContent(
-    [baseModelContent, formatLorebookEntriesForPrompt(triggeredLorebooks)].filter(Boolean).join("\n\n"),
+    [
+      prependDiscordPlayerSlotToUserContent(baseModelContent, playerSlot),
+      modelAppendTerms,
+      formatLorebookEntriesForPrompt(triggeredLorebooks)
+    ].filter(Boolean).join("\n\n"),
     currentState
   );
   message.preparedModelContent = true;
@@ -2564,23 +2967,52 @@ function getLastCompletedDialogueRound(rounds = []) {
 
 function buildCurrentCompressionContentMessage(currentSummary = "") {
   return [
-    "【目前壓縮內容】",
+    "【目前模型內容】",
     safeText(currentSummary) || "無"
   ].join("\n");
 }
 
-function buildContextCompressionInstructionPrompt(currentState = state, config = null) {
+function resolveContextCompressionPromptConfig(currentState = state, config = null) {
   const activeConfig = config || getActiveModularPromptConfig(currentState);
-  const compressionConfig = normalizeContextCompressionPromptConfig(
-    activeConfig.contextCompression || activeConfig.contextCompressionPrompt,
-    activeConfig.contextCompressionPrompt || getContextCompressionPrompt()
+  const isProfileConfig = activeConfig &&
+    typeof activeConfig === "object" &&
+    (activeConfig.id || activeConfig.triggers || activeConfig.locked !== undefined) &&
+    activeConfig.contextCompression;
+  if (isProfileConfig) {
+    return normalizeContextCompressionPromptConfig(
+      activeConfig.contextCompression,
+      getContextCompressionPrompt(),
+      { allowEmptyModels: normalizeCompressionProfileId(activeConfig.id) !== STANDARD_COMPRESSION_PROFILE_ID }
+    );
+  }
+
+  const standardProfile = Array.isArray(activeConfig?.compressionProfiles)
+    ? activeConfig.compressionProfiles.find((profile) => normalizeCompressionProfileId(profile?.id) === STANDARD_COMPRESSION_PROFILE_ID)
+    : null;
+  return normalizeContextCompressionPromptConfig(
+    standardProfile?.contextCompression || activeConfig.contextCompression || activeConfig.contextCompressionPrompt,
+    standardProfile?.contextCompression?.mainRules || activeConfig.contextCompressionPrompt || getContextCompressionPrompt()
   );
+}
+
+function buildContextCompressionInstructionPrompt(currentState = state, config = null) {
+  const compressionConfig = resolveContextCompressionPromptConfig(currentState, config);
+  if (compressionConfig.models.length === 0) {
+    return [
+      "【模型主要規則】",
+      compressionConfig.mainRules || getContextCompressionPrompt(),
+      "【輸出規則】",
+      "直接輸出更新後的完整壓縮文本，禁止輸出 JSON。",
+      "請把目前模型內容與本次上下文合併成可供正文長期承接的純文本。",
+      "如果舊內容已被新資訊取代、完成或失效，請在輸出的完整文本中自然移除或改寫。"
+    ].filter(Boolean).join("\n");
+  }
   const modelRules = compressionConfig.models.map((model, index) => [
-    `【模型 ${index + 1}: ${model.name || model.id}】`,
+    `【模塊 ${index + 1}: ${model.name || model.id}】`,
     `id:${model.id}`,
-    "新增模型規則:",
+    "新增模塊規則:",
     model.addRules || "無",
-    "刪除模型規則:",
+    "刪除模塊規則:",
     model.deleteRules || "無",
     `輸出欄位:model.${model.id}`,
     `刪除欄位:delete.${model.id}`
@@ -2590,16 +3022,16 @@ function buildContextCompressionInstructionPrompt(currentState = state, config =
     delete: Object.fromEntries(compressionConfig.models.map((model) => [model.id, []]))
   };
   return [
-    "【主要規則】",
+    "【模型主要規則】",
     compressionConfig.mainRules || getContextCompressionPrompt(),
-    "【模型規則】",
+    "【模塊規則】",
     modelRules,
     "【輸出規則】",
     "只能輸出一個合法 JSON 物件，禁止輸出 JSON 以外的任何文字。",
     "所有模型欄位都必須存在；沒有新增或刪除內容時輸出空陣列。",
     "model.<id> 只放本次需要新增保存的內容；delete.<id> 只放已失效、已完成、被新版取代或重複的舊內容。",
     "不可把本次剛新增到 model.<id> 的內容又放進 delete.<id>。",
-    "後端會把 model.<id> 追加到既有壓縮內容，不會整體覆蓋；請避免重複輸出既有內容。",
+    "後端會把 model.<id> 追加到既有模型內容，不會整體覆蓋；請避免重複輸出既有內容。",
     "JSON 格式範例:",
     JSON.stringify(outputShape, null, 2)
   ].filter(Boolean).join("\n");
@@ -2645,7 +3077,11 @@ function tryParseJsonObject(text = "") {
 }
 
 function createEmptyCompressionStateFromConfig(config = {}) {
-  const compressionConfig = normalizeContextCompressionPromptConfig(config);
+  const compressionConfig = normalizeContextCompressionPromptConfig(
+    config,
+    getContextCompressionPrompt(),
+    { allowEmptyModels: Array.isArray(config?.models) && config.models.length === 0 }
+  );
   return {
     model: Object.fromEntries(compressionConfig.models.map((model) => [model.id, []])),
     delete: Object.fromEntries(compressionConfig.models.map((model) => [model.id, []]))
@@ -2680,8 +3116,16 @@ function normalizeCompressionJsonState(value = "", config = {}) {
 }
 
 function mergeCompressionSummary(currentSummary = "", completionText = "", config = {}) {
-  const current = normalizeCompressionJsonState(currentSummary, config);
-  const incoming = normalizeCompressionJsonState(completionText, config);
+  const compressionConfig = normalizeContextCompressionPromptConfig(
+    config,
+    getContextCompressionPrompt(),
+    { allowEmptyModels: Array.isArray(config?.models) && config.models.length === 0 }
+  );
+  if (compressionConfig.models.length === 0) {
+    return safeText(completionText) || safeText(currentSummary);
+  }
+  const current = normalizeCompressionJsonState(currentSummary, compressionConfig);
+  const incoming = normalizeCompressionJsonState(completionText, compressionConfig);
   Object.keys(current.model).forEach((id) => {
     const deleteKeys = new Set((incoming.delete[id] || []).map((item) => normalizeCompressionItemKey(item)).filter(Boolean));
     if (deleteKeys.size > 0) {
@@ -2711,10 +3155,125 @@ function formatCompressionSummaryForReasoner(currentSummary = "", currentState =
   return JSON.stringify({ model: normalized.model }, null, 2);
 }
 
+function formatCompressionProfileSummaryForReasoner(profile, profileState, currentState = state) {
+  const compressionConfig = normalizeContextCompressionPromptConfig(
+    profile.contextCompression,
+    getContextCompressionPrompt(),
+    { allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID }
+  );
+  if (compressionConfig.models.length === 0) {
+    return [
+      `【${profile.name || profile.id}】`,
+      safeText(profileState.summary)
+    ].filter(Boolean).join("\n");
+  }
+  const normalized = normalizeCompressionJsonState(profileState.summary, compressionConfig);
+  return [
+    `【${profile.name || profile.id}】`,
+    JSON.stringify({ model: normalized.model }, null, 2)
+  ].join("\n");
+}
+
+function formatAllCompressionSummariesForReasoner(currentState = state) {
+  const compressionState = normalizeContextCompressionState(currentState.contextCompression);
+  return getEnabledCompressionProfiles(currentState)
+    .map((profile) => {
+      const profileState = getCompressionProfileState(compressionState, profile.id);
+      if (!safeText(profileState.summary)) {
+        return "";
+      }
+      return formatCompressionProfileSummaryForReasoner(profile, profileState, currentState);
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function didContextCompressionAdvance(before, after) {
   const previous = normalizeContextCompressionState(before);
   const current = normalizeContextCompressionState(after);
-  return current.compressedThroughTurnNumber > previous.compressedThroughTurnNumber;
+  return JSON.stringify(current) !== JSON.stringify(previous);
+}
+
+function getCompressionProfileState(compressionState, profileId = STANDARD_COMPRESSION_PROFILE_ID) {
+  const normalizedState = normalizeContextCompressionState(compressionState);
+  const normalizedProfileId = normalizeCompressionProfileId(profileId);
+  if (normalizedProfileId === STANDARD_COMPRESSION_PROFILE_ID) {
+    return normalizeCompressionProfileState(normalizedState);
+  }
+  return normalizeCompressionProfileState(normalizedState.profiles?.[normalizedProfileId]);
+}
+
+function setCompressionProfileState(currentState, profileId = STANDARD_COMPRESSION_PROFILE_ID, profileState = {}) {
+  const normalizedProfileId = normalizeCompressionProfileId(profileId);
+  const normalizedState = normalizeContextCompressionState(currentState.contextCompression);
+  const normalizedProfileState = normalizeCompressionProfileState(profileState);
+  if (normalizedProfileId === STANDARD_COMPRESSION_PROFILE_ID) {
+    currentState.contextCompression = {
+      ...normalizedState,
+      summary: normalizedProfileState.summary,
+      compressedThroughTurnNumber: normalizedProfileState.compressedThroughTurnNumber,
+      updatedAt: normalizedProfileState.updatedAt
+    };
+    return;
+  }
+  currentState.contextCompression = {
+    ...normalizedState,
+    profiles: {
+      ...(normalizedState.profiles || {}),
+      [normalizedProfileId]: normalizedProfileState
+    },
+    updatedAt: normalizedProfileState.updatedAt || normalizedState.updatedAt
+  };
+}
+
+function getEnabledCompressionProfiles(currentState = state) {
+  const activeConfig = getActiveModularPromptConfig(currentState);
+  return normalizeCompressionProfilesConfig(
+    activeConfig.compressionProfiles || [],
+    activeConfig.contextCompression || activeConfig.contextCompressionPrompt
+  ).filter((profile) => profile.id === STANDARD_COMPRESSION_PROFILE_ID || profile.enabled !== false);
+}
+
+function getEnabledCompressionTriggerActions(profile = {}) {
+  return normalizeCompressionTriggerActionsConfig(profile.triggerActions || [], {
+    defaultRoundLimit: profile.id === STANDARD_COMPRESSION_PROFILE_ID,
+    defaultName: profile.id === STANDARD_COMPRESSION_PROFILE_ID ? "標準壓縮" : "觸發組合 1",
+    legacyTriggers: profile.triggers || {}
+  }).filter((item) => item.enabled !== false);
+}
+
+function getModelTriggerCompletionName(profile = {}, triggerAction = {}) {
+  return safeText(triggerAction.name) || safeText(profile.name) || safeText(profile.id) || "模型";
+}
+
+function formatModelProcessingCompletionMessage(processedActions = []) {
+  const names = [...new Set(
+    (Array.isArray(processedActions) ? processedActions : [])
+      .filter((item) => item?.skipReasoner)
+      .map((item) => safeText(item.profileName) || safeText(item.actionName))
+      .filter(Boolean)
+  )];
+  return `${(names.length > 0 ? names : ["模型"]).join("、")}完成處理`;
+}
+
+function setLastModelProcessingResult(currentState, result = {}) {
+  Object.defineProperty(currentState, "__lastModelProcessingResult", {
+    value: {
+      didProcess: Boolean(result.didProcess),
+      skipReasoner: Boolean(result.skipReasoner),
+      processedActions: Array.isArray(result.processedActions) ? result.processedActions : []
+    },
+    enumerable: false,
+    configurable: true
+  });
+}
+
+function getLastModelProcessingResult(currentState = state) {
+  return currentState?.__lastModelProcessingResult || {
+    didProcess: false,
+    skipReasoner: false,
+    processedActions: []
+  };
 }
 
 function formatCompressionContextBlock(messages = []) {
@@ -2727,66 +3286,477 @@ function formatCompressionContextBlock(messages = []) {
   return ["【上下文】", content || "無"].join("\n");
 }
 
-async function ensureContextCompressionSummary(currentState, runtimeUserName = "", options = {}) {
-  if (!isContextCompressionEnabled(currentState)) {
-    return normalizeContextCompressionState(currentState.contextCompression);
-  }
-  const latestUser = getLatestUserMessage(currentState);
-  if (!latestUser) {
-    currentState.contextCompression = normalizeContextCompressionState(currentState.contextCompression);
-    return currentState.contextCompression;
+function normalizeKeywordSearchText(text = "") {
+  return safeText(text).normalize("NFKC").toLowerCase();
+}
+
+function normalizeKeywordExpressionText(text = "") {
+  return normalizeKeywordSearchText(text)
+    .replace(/[{}]/g, "")
+    .trim();
+}
+
+function findKeywordOccurrences(text = "", keyword = "") {
+  const normalizedText = normalizeKeywordSearchText(text);
+  const normalizedKeyword = normalizeKeywordSearchText(keyword);
+  const occurrences = [];
+  if (!normalizedText || !normalizedKeyword) {
+    return occurrences;
   }
 
-  const contextLimit = Math.max(1, getDialogueContextRounds(currentState));
-  const compressionState = normalizeContextCompressionState(currentState.contextCompression);
-  const rounds = getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUser.id);
-  const uncompressedRounds = rounds.filter((round) => getRoundTurnNumber(round) > compressionState.compressedThroughTurnNumber);
-  if (uncompressedRounds.length < contextLimit) {
-    currentState.contextCompression = compressionState;
-    return compressionState;
+  let index = normalizedText.indexOf(normalizedKeyword);
+  while (index >= 0) {
+    occurrences.push({
+      start: index,
+      end: index + normalizedKeyword.length
+    });
+    index = normalizedText.indexOf(normalizedKeyword, index + Math.max(1, normalizedKeyword.length));
+  }
+  return occurrences;
+}
+
+function parseKeywordExpressionGroup(group = "") {
+  return safeText(group)
+    .split("/")
+    .map((item) => safeText(item))
+    .filter(Boolean)
+    .map((item) => {
+      const playerMatch = item.match(/^\{\{\s*(user\d+|userx)\s*\}\}$/iu);
+      if (playerMatch) {
+        return {
+          type: "player",
+          value: normalizeDiscordPlayerSlot(playerMatch[1])
+        };
+      }
+      return {
+        type: "text",
+        value: normalizeKeywordExpressionText(item)
+      };
+    })
+    .filter((item) => item.value);
+}
+
+function getKeywordExpressionTextValues(expression = "") {
+  return safeText(expression)
+    .split("+")
+    .flatMap((group) => parseKeywordExpressionGroup(group))
+    .filter((item) => item.type === "text")
+    .map((item) => item.value)
+    .filter(Boolean);
+}
+
+function doesKeywordPlayerAlternativeMatch(alternative, latestUser = null) {
+  const requiredSlot = normalizeDiscordPlayerSlot(alternative?.value);
+  const currentSlot = getUserMessageDiscordPlayerSlot(latestUser);
+  return Boolean(requiredSlot && currentSlot && requiredSlot === currentSlot);
+}
+
+function getOccurrenceGap(left, right) {
+  if (!left || !right) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (left.end <= right.start) {
+    return right.start - left.end;
+  }
+  if (right.end <= left.start) {
+    return left.start - right.end;
+  }
+  return 0;
+}
+
+function areKeywordOccurrencesNear(occurrences = [], maxGap = KEYWORD_PROXIMITY_CHARS) {
+  for (let leftIndex = 0; leftIndex < occurrences.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < occurrences.length; rightIndex += 1) {
+      if (getOccurrenceGap(occurrences[leftIndex], occurrences[rightIndex]) > maxGap) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function hasNearKeywordOccurrenceCombination(groupOccurrences = [], selected = [], index = 0) {
+  if (index >= groupOccurrences.length) {
+    return areKeywordOccurrencesNear(selected);
+  }
+  return groupOccurrences[index].some((occurrence) =>
+    hasNearKeywordOccurrenceCombination(groupOccurrences, [...selected, occurrence], index + 1)
+  );
+}
+
+function matchKeywordExpression(text = "", expression = "", latestUser = null) {
+  const groups = safeText(expression)
+    .split("+")
+    .map((group) => parseKeywordExpressionGroup(group))
+    .filter((group) => group.length > 0);
+  if (groups.length === 0) {
+    return false;
   }
 
+  const matchedTextGroups = [];
+  const everyGroupMatches = groups.every((group) => {
+    const playerMatched = group
+      .filter((alternative) => alternative.type === "player")
+      .some((alternative) => doesKeywordPlayerAlternativeMatch(alternative, latestUser));
+    if (playerMatched) {
+      return true;
+    }
+
+    const occurrences = group
+      .filter((alternative) => alternative.type === "text")
+      .flatMap((alternative) => findKeywordOccurrences(text, alternative.value));
+    if (occurrences.length > 0) {
+      matchedTextGroups.push(occurrences);
+      return true;
+    }
+    return false;
+  });
+
+  if (!everyGroupMatches) {
+    return false;
+  }
+  if (!safeText(expression).includes("+") || matchedTextGroups.length <= 1) {
+    return true;
+  }
+  return hasNearKeywordOccurrenceCombination(matchedTextGroups);
+}
+
+function matchKeywordExpressions(text = "", keywords = [], latestUser = null) {
+  const expressions = (Array.isArray(keywords) ? keywords : [])
+    .map((keyword) => safeText(keyword))
+    .filter(Boolean);
+  if (expressions.length === 0) {
+    return false;
+  }
+  return expressions.every((expression) => matchKeywordExpression(text, expression, latestUser));
+}
+
+function textIncludesAnyKeyword(text = "", keywords = []) {
+  const textValues = (Array.isArray(keywords) ? keywords : [])
+    .flatMap((expression) => getKeywordExpressionTextValues(expression));
+  return textValues.some((keyword) => findKeywordOccurrences(text, keyword).length > 0);
+}
+
+function getLatestUserKeywordSourceText(latestUser) {
+  return latestUser
+    ? getUserBaseModelContent(latestUser) || safeText(latestUser.content)
+    : "";
+}
+
+function getCompressionKeywordSourceParts(currentState, latestUser) {
+  const latestUserContent = getLatestUserKeywordSourceText(latestUser);
+  const latestAssistantAfterUser = getLatestAssistantMessageAfterUser(currentState, latestUser);
+  const latestAssistantContent = latestAssistantAfterUser
+    ? getMessageModelContent(latestAssistantAfterUser)
+    : "";
+  return {
+    user: latestUserContent,
+    assistant: latestAssistantContent,
+    both: [latestUserContent, latestAssistantContent].filter(Boolean).join("\n")
+  };
+}
+
+function getCompressionKeywordSourceText(currentState, latestUser, source = "both") {
+  const parts = getCompressionKeywordSourceParts(currentState, latestUser);
+  if (source === "user") {
+    return parts.user;
+  }
+  if (source === "assistant") {
+    return parts.assistant;
+  }
+  return parts.both;
+}
+
+function getCompressionKeywordTriggerMatch(currentState, latestUser, triggers = {}) {
+  const keywords = parseKeywordList(triggers.keywords || []);
+  if (keywords.length === 0) {
+    return {
+      matched: false,
+      matchedUser: false,
+      matchedAssistant: false
+    };
+  }
+
+  const source = normalizeKeywordTriggerSource(triggers.keywordSource);
+  const parts = getCompressionKeywordSourceParts(currentState, latestUser);
+  const matchedUser = source !== "assistant" && matchKeywordExpressions(parts.user, keywords, latestUser);
+  const matchedAssistant = source !== "user" && matchKeywordExpressions(parts.assistant, keywords, latestUser);
+  const matchedCombined = source === "both" && matchKeywordExpressions(parts.both, keywords, latestUser);
+  const assistantHasKeyword = source !== "user" && textIncludesAnyKeyword(parts.assistant, keywords);
+
+  return {
+    matched: source === "both"
+      ? matchedUser || matchedAssistant || matchedCombined
+      : source === "assistant"
+        ? matchedAssistant
+        : matchedUser,
+    matchedUser,
+    matchedAssistant: matchedAssistant || (matchedCombined && assistantHasKeyword)
+  };
+}
+
+function shouldTriggerCompressionProfile({
+  profile,
+  triggerAction = null,
+  profileState,
+  currentState,
+  latestUser,
+  uncompressedRounds,
+  contextLimit
+}) {
+  const triggers = normalizeCompressionTriggerConfig(triggerAction?.triggers || profile.triggers, {
+    defaultRoundLimit: profile.id === STANDARD_COMPRESSION_PROFILE_ID
+  });
+  const currentTurnNumber = Math.max(0, countConversationTurns(currentState, latestUser?.id || ""));
+  const triggeredBy = [];
+
+  if (triggers.roundLimit && uncompressedRounds.length >= contextLimit) {
+    triggeredBy.push("達到正文上限輪數");
+  }
+
+  if (triggers.turns.includes(0)) {
+    const alreadyStarted = safeText(profileState.summary) ||
+      Number(profileState.compressedThroughTurnNumber || 0) > 0;
+    if (!alreadyStarted && currentTurnNumber <= 1) {
+      triggeredBy.push("開始觸發");
+    }
+  }
+
+  triggers.turns
+    .filter((turn) => turn > 0)
+    .forEach((turn) => {
+      if (currentTurnNumber >= turn && Number(profileState.compressedThroughTurnNumber || 0) < turn) {
+        triggeredBy.push(`第 ${turn} 回合`);
+      }
+    });
+
+  if (getCompressionKeywordTriggerMatch(currentState, latestUser, triggers).matched) {
+    triggeredBy.push("觸發關鍵字");
+  }
+
+  return triggeredBy;
+}
+
+function buildMessagesToCompressForProfile({
+  currentState,
+  runtimeUserName,
+  latestUser,
+  profileState,
+  uncompressedRounds,
+  includeLatestUser,
+  includeLatestAssistant
+}) {
   const messagesToCompress = uncompressedRounds.flat();
-  const openingDialogueMessage = compressionState.compressedThroughTurnNumber <= 0
+  const openingDialogueMessage = Number(profileState.compressedThroughTurnNumber || 0) <= 0
     ? getOpeningDialogueContextMessage(currentState, runtimeUserName)
     : null;
   if (openingDialogueMessage && !messageListHasSameContent(messagesToCompress, openingDialogueMessage.content)) {
     messagesToCompress.unshift(openingDialogueMessage);
   }
-  const compressedThroughTurnNumber = getRoundTurnNumber(uncompressedRounds[uncompressedRounds.length - 1]) ||
-    compressionState.compressedThroughTurnNumber;
-  const activeCompressionConfig = normalizeContextCompressionPromptConfig(
-    getActiveModularPromptConfig(currentState).contextCompression ||
-      getActiveModularPromptConfig(currentState).contextCompressionPrompt,
-    getContextCompressionPrompt()
-  );
-  options.onStatus?.("compression");
-  const completion = await callDeepSeekCompletionRaw({
-    messages: [
-      {
+  if (includeLatestUser && latestUser) {
+    const latestUserContent = getCurrentUserModelContent(latestUser, currentState, runtimeUserName);
+    if (latestUserContent && !messageListHasSameContent(messagesToCompress, latestUserContent)) {
+      messagesToCompress.push({
+        ...latestUser,
         role: "user",
-        content: ["【壓縮規則】", buildContextCompressionInstructionPrompt(currentState)].join("\n")
-      },
-      {
-        role: "user",
-        content: formatCompressionContextBlock(messagesToCompress)
-      },
-      {
-        role: "user",
-        content: buildCurrentCompressionContentMessage(compressionState.summary)
-      }
-    ],
-    purpose: "context_compression"
-  });
+        content: latestUserContent,
+        requestContentPrepared: true
+      });
+    }
+  }
+  if (includeLatestAssistant) {
+    const latestAssistant = getLatestAssistantMessageAfterUser(currentState, latestUser);
+    const latestAssistantContent = latestAssistant ? getMessageModelContent(latestAssistant) : "";
+    if (latestAssistantContent && !messageListHasSameContent(messagesToCompress, latestAssistantContent)) {
+      messagesToCompress.push({
+        ...latestAssistant,
+        role: "assistant",
+        content: latestAssistantContent
+      });
+    }
+  }
+  return messagesToCompress;
+}
 
-  currentState.contextCompression = {
-    enabled: true,
-    summary: mergeCompressionSummary(compressionState.summary, completion.content, activeCompressionConfig),
-    compressedThroughTurnNumber,
-    updatedAt: nowIso()
+async function ensureContextCompressionSummary(currentState, runtimeUserName = "", options = {}) {
+  const returnDetails = Boolean(options.returnDetails);
+  const phase = options.phase || "before_reasoner";
+  const emptyResult = (contextCompression) => {
+    const result = {
+      contextCompression: normalizeContextCompressionState(contextCompression),
+      didProcess: false,
+      skipReasoner: false,
+      processedActions: []
+    };
+    setLastModelProcessingResult(currentState, result);
+    return returnDetails ? result : result.contextCompression;
   };
-  saveState(currentState);
-  return currentState.contextCompression;
+
+  if (!isContextCompressionEnabled(currentState)) {
+    return emptyResult(currentState.contextCompression);
+  }
+  const latestUser = getLatestUserMessage(currentState);
+  if (!latestUser) {
+    currentState.contextCompression = normalizeContextCompressionState(currentState.contextCompression);
+    return emptyResult(currentState.contextCompression);
+  }
+
+  const contextLimit = Math.max(1, getDialogueContextRounds(currentState));
+  const compressionState = normalizeContextCompressionState(currentState.contextCompression);
+  const rounds = getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUser.id);
+  const profiles = getEnabledCompressionProfiles(currentState);
+  let didCompress = false;
+  const processedActions = [];
+
+  for (const profile of profiles) {
+    for (const triggerAction of getEnabledCompressionTriggerActions(profile)) {
+      const currentCompressionState = normalizeContextCompressionState(currentState.contextCompression);
+      const profileState = getCompressionProfileState(currentCompressionState, profile.id);
+      const uncompressedRounds = rounds.filter((round) => getRoundTurnNumber(round) > profileState.compressedThroughTurnNumber);
+      const triggeredBy = shouldTriggerCompressionProfile({
+        profile,
+        triggerAction,
+        profileState,
+        currentState,
+        latestUser,
+        uncompressedRounds,
+        contextLimit
+      });
+
+      if (triggeredBy.length === 0) {
+        continue;
+      }
+
+      const triggers = normalizeCompressionTriggerConfig(triggerAction.triggers || profile.triggers, {
+        defaultRoundLimit: profile.id === STANDARD_COMPRESSION_PROFILE_ID
+      });
+      const triggeredByKeyword = triggeredBy.includes("觸發關鍵字");
+      const keywordMatch = triggeredByKeyword
+        ? getCompressionKeywordTriggerMatch(currentState, latestUser, triggers)
+        : { matchedAssistant: false };
+      const includeLatestAssistant = Boolean(keywordMatch.matchedAssistant);
+      const includeLatestUser = includeLatestAssistant ||
+        triggeredBy.includes("開始觸發") ||
+        (triggeredByKeyword && triggers.keywordSource !== "assistant");
+      const messagesToCompress = buildMessagesToCompressForProfile({
+        currentState,
+        runtimeUserName,
+        latestUser,
+        profileState,
+        uncompressedRounds,
+        includeLatestUser,
+        includeLatestAssistant
+      });
+      if (messagesToCompress.length === 0) {
+        continue;
+      }
+
+      const latestRoundNumber = getRoundTurnNumber(uncompressedRounds[uncompressedRounds.length - 1]) || 0;
+      const latestUserTurnNumber = getMessageTurnNumber(latestUser) || countConversationTurns(currentState, latestUser.id);
+      const compressedThroughTurnNumber = Math.max(
+        profileState.compressedThroughTurnNumber,
+        latestRoundNumber,
+        includeLatestUser || triggerAction.action === MODEL_TRIGGER_ACTION_COPY_USER_INPUT ? latestUserTurnNumber : 0
+      );
+      const processedAction = {
+        profileId: profile.id,
+        profileName: profile.name || profile.id,
+        actionId: triggerAction.id,
+        actionName: getModelTriggerCompletionName(profile, triggerAction),
+        action: triggerAction.action,
+        skipReasoner: phase === "before_reasoner" && Boolean(triggerAction.skipReasoner),
+        triggeredBy
+      };
+
+      if (triggerAction.action === MODEL_TRIGGER_ACTION_COPY_USER_INPUT) {
+        const copiedContent = safeText(latestUser.content) ||
+          getCurrentUserModelContent(latestUser, currentState, runtimeUserName);
+        if (!copiedContent) {
+          continue;
+        }
+        setCompressionProfileState(currentState, profile.id, {
+          summary: copiedContent,
+          compressedThroughTurnNumber,
+          updatedAt: nowIso()
+        });
+        processedActions.push(processedAction);
+        didCompress = true;
+        continue;
+      }
+
+      const activeCompressionConfig = normalizeContextCompressionPromptConfig(
+        profile.contextCompression,
+        getContextCompressionPrompt(),
+        { allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID }
+      );
+      options.onStatus?.("compression");
+      const completion = await callDeepSeekCompletionRaw({
+        messages: [
+          {
+            role: "user",
+            content: [
+              `【大模型】${profile.name} (${profile.id})`,
+              `【觸發組合】${triggerAction.name} (${triggerAction.id})`,
+              `【觸發原因】${triggeredBy.join("、")}`,
+              "【模型規則】",
+              buildContextCompressionInstructionPrompt(currentState, profile)
+            ].join("\n")
+          },
+          {
+            role: "user",
+            content: formatCompressionContextBlock(messagesToCompress)
+          },
+          {
+            role: "user",
+            content: buildCurrentCompressionContentMessage(profileState.summary)
+          }
+        ],
+        purpose: profile.id === STANDARD_COMPRESSION_PROFILE_ID
+          ? "context_compression"
+          : `context_compression:${profile.id}`
+      });
+
+      setCompressionProfileState(currentState, profile.id, {
+        summary: mergeCompressionSummary(profileState.summary, completion.content, activeCompressionConfig),
+        compressedThroughTurnNumber,
+        updatedAt: nowIso()
+      });
+      processedActions.push(processedAction);
+      didCompress = true;
+    }
+  }
+
+  currentState.contextCompression = normalizeContextCompressionState(currentState.contextCompression);
+  const result = {
+    contextCompression: currentState.contextCompression,
+    didProcess: processedActions.length > 0,
+    skipReasoner: processedActions.some((item) => item.skipReasoner),
+    processedActions
+  };
+  setLastModelProcessingResult(currentState, result);
+  if (didCompress) {
+    saveState(currentState);
+  } else {
+    currentState.contextCompression = compressionState;
+    result.contextCompression = currentState.contextCompression;
+  }
+  return returnDetails ? result : currentState.contextCompression;
+}
+
+async function updateCompressionAfterAssistantMessage(currentState, runtimeUserName = "", assistantMessage = null) {
+  if (isCharacterCardCreationAssistantActive(currentState)) {
+    return false;
+  }
+  const compressionBefore = normalizeContextCompressionState(currentState.contextCompression);
+  const compressionAfter = await ensureContextCompressionSummary(currentState, runtimeUserName, {
+    phase: "after_assistant"
+  });
+  const didAdvance = didContextCompressionAdvance(compressionBefore, compressionAfter);
+  if (didAdvance && assistantMessage?.extra) {
+    assistantMessage.extra.compressionNotice = true;
+    assistantMessage.extra.stateAfterTurnSnapshot = captureNarrativeCheckpoint(currentState);
+  }
+  return didAdvance;
 }
 
 function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUserName = "", config = null) {
@@ -2806,21 +3776,21 @@ function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUs
     "【輸出規則】",
     finalizePromptTemplate(activeConfig.reasonerHistory.contextRules, { user: resolvedUserName }),
     "【處理要求】",
-    "後續獨立 user message 會提供目前壓縮內容；最近對話會以獨立 user/assistant messages 提供。本輪 user message 會按順序包含：這一輪 user 的內容、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前壓縮內容、最近對話與輸出規則輸出正文。"
+    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
   ].filter(Boolean).join("\n");
 }
 
 function buildSimpleCompressedReasonerCompressionMessage(currentState) {
-  const compressionState = normalizeContextCompressionState(currentState.contextCompression);
-  if (!compressionState.summary) {
+  const summaries = formatAllCompressionSummariesForReasoner(currentState);
+  if (!summaries) {
     return "";
   }
   return [
-    "【目前壓縮內容】",
-    formatCompressionSummaryForReasoner(compressionState.summary, currentState),
-    "【壓縮規則】",
-    "這是更早之前的壓縮上下文，只用於補足背景、角色關係、已成立事件與未完成事項。",
-    "正文承接時優先依照最近對話與本輪輸入；若最近對話與目前壓縮內容衝突，以最近對話為準。"
+    "【目前模型內容】",
+    summaries,
+    "【模型內容規則】",
+    "這是更早之前的大模型內容，可能來自多個獨立大模型；可用於補足背景、角色關係、已成立事件、未完成事項、玩家資料與特殊長期記憶。",
+    "模型內容的承接優先級略高於正文主要規則；若最近對話或本輪輸入與目前模型內容衝突，以最近對話與本輪輸入為準。"
   ].filter(Boolean).join("\n");
 }
 
@@ -2923,6 +3893,22 @@ function getLatestAssistantContent(currentState) {
     }
   }
   return "";
+}
+
+function getLatestAssistantMessageAfterUser(currentState, latestUser = null) {
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  const userIndex = latestUser
+    ? conversation.findIndex((item) => item?.id === latestUser.id)
+    : findLatestUserIndex(currentState);
+  if (userIndex < 0) {
+    return null;
+  }
+  for (let i = conversation.length - 1; i > userIndex; i -= 1) {
+    if (conversation[i]?.role === "assistant") {
+      return conversation[i];
+    }
+  }
+  return null;
 }
 
 function isContinueDirectiveToken(input) {
@@ -4018,7 +5004,14 @@ async function callDeepSeekCharacterCardCreationAssistant(state, runtimeUserName
 }
 
 async function runAdvancedConversationTurnParallel(state, runtimeUserName = "", options = {}) {
-  await ensureContextCompressionSummary(state, runtimeUserName);
+  const processingResult = await ensureContextCompressionSummary(state, runtimeUserName, {
+    ...options,
+    phase: "before_reasoner",
+    returnDetails: true
+  });
+  if (processingResult.skipReasoner) {
+    return formatModelProcessingCompletionMessage(processingResult.processedActions);
+  }
   return callDeepSeekReasonerHistory(state, runtimeUserName, options)
     .catch((error) => `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`);
 }
@@ -4088,6 +5081,7 @@ async function runConversationTurnStreaming({
     const parsedInput = parseRoleplayInput(content, state);
     const storedUserContent = parsedInput.rawInput || safeText(content);
     const modelUserContent = parsedInput.modelContent || storedUserContent;
+    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
     const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
     if (!storedUserContent || !modelUserContent) {
       throw new Error("輸入不可空白。");
@@ -4098,7 +5092,7 @@ async function runConversationTurnStreaming({
       content: storedUserContent,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
@@ -4107,7 +5101,7 @@ async function runConversationTurnStreaming({
     });
     appendConversationMessage(userMessage);
 
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, extra.discordUserName || "");
+    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
     attachTriggeredLorebooksToUserMessage(userMessage, state, runtimeUserName);
 
     let streamed;
@@ -4122,23 +5116,39 @@ async function runConversationTurnStreaming({
       });
     } else {
       const compressionBefore = normalizeContextCompressionState(state.contextCompression);
-      const compressionAfter = await ensureContextCompressionSummary(state, runtimeUserName, {
-        onStatus: onPhaseStatus
+      const processingResult = await ensureContextCompressionSummary(state, runtimeUserName, {
+        onStatus: onPhaseStatus,
+        phase: "before_reasoner",
+        returnDetails: true
       });
-      compressionNotice = didContextCompressionAdvance(compressionBefore, compressionAfter);
-      onPhaseStatus?.("chat");
-      streamed = await callDeepSeekCompletionStreamRaw({
-        messages: buildReasonerHistoryMessages(state, runtimeUserName),
-        purpose: "reasoner_history_chat",
-        onReasoningDelta,
-        onContentDelta
-      });
+      compressionNotice = didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
+      if (processingResult.skipReasoner) {
+        const completionText = formatModelProcessingCompletionMessage(processingResult.processedActions);
+        onContentDelta?.(completionText);
+        streamed = {
+          content: completionText,
+          reasoningContent: ""
+        };
+      } else {
+        onPhaseStatus?.("chat");
+        streamed = await callDeepSeekCompletionStreamRaw({
+          messages: buildReasonerHistoryMessages(state, runtimeUserName),
+          purpose: "reasoner_history_chat",
+          onReasoningDelta,
+          onContentDelta
+        });
+      }
     }
 
     let assistantText = streamed.content;
     let fullReasoning = streamed.reasoningContent;
 
-    if (!isCharacterCardCreationAssistantActive(state) && countVisibleCharacters(assistantText) < getMinimumReplyChars()) {
+    const modelProcessingResult = getLastModelProcessingResult(state);
+    if (
+      !isCharacterCardCreationAssistantActive(state) &&
+      !modelProcessingResult.skipReasoner &&
+      countVisibleCharacters(assistantText) < getMinimumReplyChars()
+    ) {
       const expanded = await ensureMinimumAssistantLengthStreaming(state, assistantText, runtimeUserName, {
         onReasoningDelta,
         onContentDelta
@@ -4157,13 +5167,16 @@ async function runConversationTurnStreaming({
       content: assistantText,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         reasoningContent: fullReasoning,
         compressionNotice,
         stateAfterTurnSnapshot
       }
     });
     appendConversationMessage(assistantMessage);
+    if (!modelProcessingResult.skipReasoner) {
+      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
+    }
     saveState(state);
 
     return {
@@ -4292,6 +5305,7 @@ function resetGeneratedBackendContextPreservingManual(currentState) {
     ...normalizeContextCompressionState(currentState.contextCompression),
     summary: "",
     compressedThroughTurnNumber: 0,
+    profiles: {},
     updatedAt: nowIso()
   };
   resetAiNarrativeProgress(currentState);
@@ -4421,10 +5435,11 @@ async function regenerateLatestAssistantReply({
     const options = { reloadFeedback };
     const compressionBefore = normalizeContextCompressionState(state.contextCompression);
     let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName, options);
+    const modelProcessingResult = getLastModelProcessingResult(state);
     const compressionNotice = !isCharacterCardCreationAssistantActive(state)
       && didContextCompressionAdvance(compressionBefore, state.contextCompression);
 
-    if (!isCharacterCardCreationAssistantActive(state)) {
+    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
     const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
@@ -4447,6 +5462,9 @@ async function regenerateLatestAssistantReply({
       }
     });
     appendConversationMessage(assistantMessage);
+    if (!modelProcessingResult.skipReasoner) {
+      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
+    }
     saveState(state);
 
     return {
@@ -4490,6 +5508,7 @@ async function replayConversationFromMessageNumber({
     restoreNarrativeStateForReplay(state, normalizedMessageNumber - 1);
     state.conversation = state.conversation.slice(0, normalizedMessageNumber - 1);
     syncTurnStateFromConversation(state);
+    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
     const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const parsedInput = parseRoleplayInput(storedUserContent, state);
@@ -4499,7 +5518,7 @@ async function replayConversationFromMessageNumber({
       content: storedUserContent,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
@@ -4511,16 +5530,17 @@ async function replayConversationFromMessageNumber({
     attachTriggeredLorebooksToUserMessage(
       userMessage,
       state,
-      resolveUserDisplayName(state.userProfile, extra.discordUserName || "")
+      resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "")
     );
 
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, extra.discordUserName || "");
+    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
     const compressionBefore = normalizeContextCompressionState(state.contextCompression);
     let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName);
+    const modelProcessingResult = getLastModelProcessingResult(state);
     const compressionNotice = !isCharacterCardCreationAssistantActive(state)
       && didContextCompressionAdvance(compressionBefore, state.contextCompression);
 
-    if (!isCharacterCardCreationAssistantActive(state)) {
+    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
     const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
@@ -4534,7 +5554,7 @@ async function replayConversationFromMessageNumber({
       content: assistantText,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         replayFromMessageNumber: normalizedMessageNumber,
         replayGenerated: true,
         compressionNotice,
@@ -4542,6 +5562,9 @@ async function replayConversationFromMessageNumber({
       }
     });
     appendConversationMessage(assistantMessage);
+    if (!modelProcessingResult.skipReasoner) {
+      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
+    }
     saveState(state);
 
     return {
@@ -4587,6 +5610,7 @@ async function replayConversationFromDiscordMessageId({
     restoreNarrativeStateForReplay(state, targetIndex);
     state.conversation = state.conversation.slice(0, targetIndex);
     syncTurnStateFromConversation(state);
+    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
     const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const parsedInput = parseRoleplayInput(storedUserContent, state);
@@ -4597,7 +5621,7 @@ async function replayConversationFromDiscordMessageId({
       content: storedUserContent,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
@@ -4610,15 +5634,16 @@ async function replayConversationFromDiscordMessageId({
     attachTriggeredLorebooksToUserMessage(
       userMessage,
       state,
-      resolveUserDisplayName(state.userProfile, extra.discordUserName || "")
+      resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "")
     );
 
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, extra.discordUserName || "");
+    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
     const compressionBefore = normalizeContextCompressionState(state.contextCompression);
     let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName);
+    const modelProcessingResult = getLastModelProcessingResult(state);
     const compressionNotice = !isCharacterCardCreationAssistantActive(state)
       && didContextCompressionAdvance(compressionBefore, state.contextCompression);
-    if (!isCharacterCardCreationAssistantActive(state)) {
+    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
     const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
@@ -4632,7 +5657,7 @@ async function replayConversationFromDiscordMessageId({
       content: assistantText,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         discordMessageId: normalizedMessageId,
         replayFromDiscordEdit: true,
         compressionNotice,
@@ -4640,6 +5665,9 @@ async function replayConversationFromDiscordMessageId({
       }
     });
     appendConversationMessage(assistantMessage);
+    if (!modelProcessingResult.skipReasoner) {
+      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
+    }
     saveState(state);
 
     return {
@@ -4658,6 +5686,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
     const parsedInput = parseRoleplayInput(content, state);
     const storedUserContent = parsedInput.rawInput || safeText(content);
     const modelUserContent = parsedInput.modelContent || storedUserContent;
+    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
     const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
     if (!storedUserContent || !modelUserContent) {
       throw new Error("輸入不可空白。");
@@ -4668,7 +5697,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
       content: storedUserContent,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
@@ -4677,14 +5706,15 @@ async function runConversationTurn({ content, source, extra = {} }) {
     });
     appendConversationMessage(userMessage);
 
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, extra.discordUserName || "");
+    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
     attachTriggeredLorebooksToUserMessage(userMessage, state, runtimeUserName);
     const compressionBefore = normalizeContextCompressionState(state.contextCompression);
     let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName);
+    const modelProcessingResult = getLastModelProcessingResult(state);
     const compressionNotice = !isCharacterCardCreationAssistantActive(state)
       && didContextCompressionAdvance(compressionBefore, state.contextCompression);
 
-    if (!isCharacterCardCreationAssistantActive(state)) {
+    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
       assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
     }
     const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
@@ -4698,12 +5728,15 @@ async function runConversationTurn({ content, source, extra = {} }) {
       content: assistantText,
       source,
       extra: {
-        ...extra,
+        ...turnExtra,
         compressionNotice,
         stateAfterTurnSnapshot
       }
     });
     appendConversationMessage(assistantMessage);
+    if (!modelProcessingResult.skipReasoner) {
+      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
+    }
     saveState(state);
 
     return {
@@ -4718,7 +5751,8 @@ function getDiscordGuidance() {
     "請先把 Bot 新增到你的應用程式，之後在 Discord 使用 Slash 指令。",
     authorizeUrl ? `新增 Bot：${authorizeUrl}` : "",
     "主對話：`/ai content:你的內容`，或 `/ai file:上傳txt檔`",
-    "開始對話：`/ai_start`",
+    "開始對話：`/ai_start`，之後該頻道可以直接輸入對話，不需要 `!ai`",
+    "玩家座位：`/player_set number:2`，或在已啟用頻道輸入 `/player_set 2`",
     "查看狀態：`/ai_status`",
     "重跑最新回覆：`/reload feedback:不滿意或要改進的地方`",
     "從指定訊息分支：`/replay message_number:訊息編號 content:新的使用者內容`",
@@ -4790,6 +5824,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/context-compression" && method === "GET") {
       sendJson(res, 200, {
         contextCompression: normalizeContextCompressionState(state.contextCompression),
+        compressionProfiles: getEnabledCompressionProfiles(state),
         state: statePayload(state)
       });
       return;
@@ -4798,14 +5833,19 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/context-compression" && method === "PUT") {
       const body = await readBody(req);
       const current = normalizeContextCompressionState(state.contextCompression);
-      state.contextCompression = {
-        ...current,
+      const profileId = normalizeCompressionProfileId(body?.profileId || STANDARD_COMPRESSION_PROFILE_ID);
+      const profileState = getCompressionProfileState(current, profileId);
+      const updatedProfileState = {
+        ...profileState,
         summary: safeText(body?.summary),
         updatedAt: nowIso()
       };
+      state.contextCompression = current;
+      setCompressionProfileState(state, profileId, updatedProfileState);
       saveState(state);
       sendJson(res, 200, {
         contextCompression: normalizeContextCompressionState(state.contextCompression),
+        compressionProfiles: getEnabledCompressionProfiles(state),
         state: statePayload(state)
       });
       return;
@@ -5001,6 +6041,7 @@ const server = http.createServer(async (req, res) => {
         state.aiSessionStarted = true;
         state.pendingOpeningBroadcast = false;
         state.lastDiscordChannelId = "";
+        resetDiscordPlayerAssignments(state, "");
         resetConversationProgress(state);
         state.roleCardRuntimeState = {};
         resetGeneratedBackendContextPreservingManual(state);
@@ -5181,6 +6222,7 @@ const server = http.createServer(async (req, res) => {
         state.aiSessionStarted = true;
         state.pendingOpeningBroadcast = true;
         state.lastDiscordChannelId = "";
+        resetDiscordPlayerAssignments(state, "");
         resetConversationProgress(state);
         state.roleCardRuntimeState = {};
         resetGeneratedBackendContextPreservingManual(state);
@@ -5285,17 +6327,17 @@ const server = http.createServer(async (req, res) => {
 
 function shouldTreatAsStartCommand(input) {
   const normalized = safeText(input).toLowerCase();
-  return normalized === "start" || normalized === "開始";
+  return normalized === "start" || normalized === "ai_start" || normalized === "開始";
 }
 
 function shouldTreatAsHelpCommand(input) {
   const normalized = safeText(input).toLowerCase();
-  return normalized === "help" || normalized === "幫助";
+  return normalized === "help" || normalized === "ai_help" || normalized === "幫助";
 }
 
 function shouldTreatAsStatusCommand(input) {
   const normalized = safeText(input).toLowerCase();
-  return normalized === "status" || normalized === "狀態";
+  return normalized === "status" || normalized === "ai_status" || normalized === "狀態";
 }
 
 function parseDiscordTextInput(input, options = {}) {
@@ -5340,6 +6382,9 @@ function parseDiscordTextInput(input, options = {}) {
   if (keyword === "run_time") {
     return { type: "meta", command: "run_time", args };
   }
+  if (keyword === "player_set") {
+    return { type: "meta", command: "player_set", args };
+  }
 
   return { type: "chat", content: trimmed };
 }
@@ -5360,14 +6405,18 @@ function extractDiscordInput(message) {
   }
 
   if (!raw && hasTextAttachment) {
-    return "";
+    return isActiveDiscordAutoChatChannel(message) ? "" : null;
   }
 
-  if (!raw.startsWith(COMMAND_PREFIX)) {
-    return null;
+  if (raw.startsWith(COMMAND_PREFIX)) {
+    return safeText(raw.slice(COMMAND_PREFIX.length));
   }
 
-  return safeText(raw.slice(COMMAND_PREFIX.length));
+  if (isActiveDiscordAutoChatChannel(message)) {
+    return raw;
+  }
+
+  return null;
 }
 
 function isSupportedDiscordTextAttachment(attachment) {
@@ -5550,6 +6599,9 @@ async function consumePendingOpening(channelId, fallbackUserName = "") {
     const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName);
     state.pendingOpeningBroadcast = false;
     state.lastDiscordChannelId = channelId;
+    if (!safeText(state.discordPlayers?.channelId)) {
+      resetDiscordPlayerAssignments(state, channelId);
+    }
     appendConversationMessage(
       createMessageRecord({
         role: "assistant",
@@ -5581,6 +6633,7 @@ async function startSessionFromDiscord(channelId, userInfo) {
     state.aiSessionStarted = true;
     state.pendingOpeningBroadcast = false;
     state.lastDiscordChannelId = channelId;
+    resetDiscordPlayerAssignments(state, channelId);
     state.activeSavedSessionId = null;
     resetConversationProgress(state);
     state.roleCardRuntimeState = {};
@@ -5628,26 +6681,146 @@ async function replyDiscordStatus(message) {
 
 function buildDiscordStatusText() {
   const testModels = normalizeConversationSettings(state.conversationSettings);
+  const playerState = normalizeDiscordPlayerState(state.discordPlayers);
+  const playerLines = Object.entries(playerState.assignments)
+    .map(([userId, slot]) => `${slot}: <@${userId}>`);
   const lines = [
     `Discord連線: ${discordConnected ? "已連線" : "未連線"}`,
-    "主對話指令: /ai content:你的內容",
+    "主對話指令: /ai_start 後，該頻道可直接輸入對話；也可用 /ai content:你的內容",
+    "玩家座位: /player_set number:2 或在啟用頻道輸入 /player_set 2",
     `AI狀態: ${state.aiSessionStarted ? "已開始" : "未開始"}`,
-    `對話設定: 正式模式（正文輸出=${testModels.chatOutputModel}｜正文上下文=${testModels.dialogueContextRounds}｜壓縮模式=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
+    `自動對話頻道: ${state.lastDiscordChannelId ? `<#${state.lastDiscordChannelId}>` : "未指定"}`,
+    `對話設定: 正式模式（正文輸出=${testModels.chatOutputModel}｜正文上下文=${testModels.dialogueContextRounds}｜模型內容=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
     `目前模式: ${getCurrentConversationTargetLabel(state)}`,
     `待播開場: ${state.pendingOpeningBroadcast ? "是" : "否"}`,
+    `玩家分配: ${playerLines.length > 0 ? playerLines.join("｜") : "尚未分配"}`,
     `存檔數: ${state.savedSessions.length}`
   ];
   return lines.join("\n");
 }
 
+function isActiveDiscordAutoChatChannel(messageOrChannelId) {
+  const channelId = typeof messageOrChannelId === "string"
+    ? messageOrChannelId
+    : messageOrChannelId?.channelId;
+  return Boolean(
+    state.aiSessionStarted &&
+    hasActiveConversationTarget(state) &&
+    safeText(state.lastDiscordChannelId) &&
+    safeText(channelId) === safeText(state.lastDiscordChannelId)
+  );
+}
+
+function canProcessDiscordChatInChannel(channelId = "", guildId = "") {
+  if (!safeText(guildId)) {
+    return true;
+  }
+  const activeChannelId = safeText(state.lastDiscordChannelId);
+  return !activeChannelId || activeChannelId === safeText(channelId);
+}
+
+function getNextAvailableDiscordPlayerSlot(assignments = {}) {
+  const usedNumbers = new Set(
+    Object.values(assignments)
+      .map((slot) => safeText(slot).match(/^user(\d+)$/u)?.[1])
+      .filter(Boolean)
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  let index = 1;
+  while (usedNumbers.has(index)) {
+    index += 1;
+  }
+  return `user${index}`;
+}
+
+function setDiscordPlayerAssignment(currentState, {
+  channelId = "",
+  userId = "",
+  slot = "",
+  uniqueSlot = true
+} = {}) {
+  const normalizedUserId = safeText(userId);
+  if (!normalizedUserId) {
+    return "";
+  }
+  const currentPlayerState = normalizeDiscordPlayerState(currentState.discordPlayers);
+  const assignments = { ...currentPlayerState.assignments };
+  const normalizedSlot = normalizeDiscordPlayerSlot(slot) || getNextAvailableDiscordPlayerSlot(assignments);
+
+  if (uniqueSlot) {
+    Object.entries(assignments).forEach(([assignedUserId, assignedSlot]) => {
+      if (assignedUserId !== normalizedUserId && assignedSlot === normalizedSlot) {
+        delete assignments[assignedUserId];
+      }
+    });
+  }
+
+  assignments[normalizedUserId] = normalizedSlot;
+  currentState.discordPlayers = {
+    channelId: safeText(channelId) || currentPlayerState.channelId || safeText(currentState.lastDiscordChannelId),
+    assignments,
+    updatedAt: nowIso()
+  };
+  return normalizedSlot;
+}
+
+function ensureDiscordPlayerAssignmentForTurn(currentState, extra = {}) {
+  const guildId = safeText(extra.discordGuildId || extra.guildId);
+  const channelId = safeText(extra.discordChannelId || extra.channelId);
+  const userId = safeText(extra.discordUserId || extra.userId);
+  if (!guildId || !channelId || !userId || !isActiveDiscordAutoChatChannel(channelId)) {
+    return { ...extra };
+  }
+
+  const playerState = normalizeDiscordPlayerState(currentState.discordPlayers);
+  const existingSlot = normalizeDiscordPlayerSlot(playerState.assignments[userId]);
+  const discordPlayerSlot = existingSlot ||
+    setDiscordPlayerAssignment(currentState, { channelId, userId });
+  return {
+    ...extra,
+    discordPlayerSlot
+  };
+}
+
+async function setDiscordPlayerSlotFromCommand({ channelId = "", guildId = "", userId = "", slot = "" } = {}) {
+  return withStateLock(async () => {
+    if (!safeText(guildId)) {
+      return { ok: false, error: "/player_set 只在伺服器頻道中使用。" };
+    }
+    if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
+      return { ok: false, error: "尚未開始。請先使用 /ai_start。" };
+    }
+    if (!isActiveDiscordAutoChatChannel(channelId)) {
+      return { ok: false, error: "這個頻道尚未啟用對話。請先在此頻道使用 /ai_start。" };
+    }
+    const normalizedSlot = normalizeDiscordPlayerSlot(slot);
+    if (!normalizedSlot || normalizedSlot === MODEL_APPEND_PLAYER_OTHER) {
+      return { ok: false, error: "請提供有效玩家編號，例如 /player_set 2。" };
+    }
+    const playerSlot = setDiscordPlayerAssignment(state, {
+      channelId,
+      userId,
+      slot: normalizedSlot,
+      uniqueSlot: false
+    });
+    saveState(state);
+    return { ok: true, playerSlot };
+  });
+}
+
 async function processDiscordChatTurn({
   channel,
   channelId,
+  guildId = "",
   userId,
   userName,
   discordMessageId,
   userContent
 }) {
+  if (!canProcessDiscordChatInChannel(channelId, guildId)) {
+    throw new Error("這個伺服器對話已固定在另一個頻道。要切換頻道，請在想使用的頻道輸入 /ai_start。");
+  }
   const stopTyping = startTypingIndicator(channel);
   try {
     const pendingOpening = await consumePendingOpening(channelId, userName);
@@ -5657,6 +6830,7 @@ async function processDiscordChatTurn({
       extra: {
         platform: "discord",
         discordChannelId: channelId,
+        discordGuildId: guildId,
         discordUserId: userId,
         discordUserName: userName,
         discordMessageId
@@ -5686,6 +6860,7 @@ async function handleDiscordChat(message, userContent) {
   const turn = await processDiscordChatTurn({
     channel: message.channel,
     channelId: message.channelId,
+    guildId: message.guildId,
     userId: message.author.id,
     userName: message.author.username,
     discordMessageId: message.id,
@@ -5745,6 +6920,19 @@ async function runSessionTextCommand(message, command, args) {
   return false;
 }
 
+async function runPlayerSetTextCommand(message, args) {
+  const result = await setDiscordPlayerSlotFromCommand({
+    channelId: message.channelId,
+    guildId: message.guildId,
+    userId: message.author.id,
+    slot: args[0]
+  });
+  await sendDiscordLongMessage(
+    message,
+    result.ok ? `已把你設定為 ${result.playerSlot}` : result.error
+  );
+}
+
 async function runReloadTextCommand(message, args) {
   const feedback = safeText(args.join(" "));
   const stopTyping = startTypingIndicator(message.channel);
@@ -5754,6 +6942,7 @@ async function runReloadTextCommand(message, args) {
       extra: {
         platform: "discord",
         discordChannelId: message.channelId,
+        discordGuildId: message.guildId,
         discordUserId: message.author.id,
         discordUserName: message.author.username
       },
@@ -5777,6 +6966,7 @@ async function runReplayTextCommand(message, args) {
       extra: {
         platform: "discord",
         discordChannelId: message.channelId,
+        discordGuildId: message.guildId,
         discordUserId: message.author.id,
         discordUserName: message.author.username
       }
@@ -5815,6 +7005,7 @@ async function runRuntimeTurns({
   turns,
   message,
   channelId = "",
+  guildId = "",
   userId = "",
   userName = "",
   source = "discord_runtime"
@@ -5851,6 +7042,7 @@ async function runRuntimeTurns({
       extra: {
         platform: "discord",
         discordChannelId: channelId,
+        discordGuildId: guildId,
         discordUserId: userId,
         discordUserName: userName,
         autoRuntime: true,
@@ -5876,6 +7068,7 @@ async function runRuntimeTextCommand(message, args) {
       turns,
       message: requestMessage,
       channelId: message.channelId,
+      guildId: message.guildId,
       userId: message.author.id,
       userName: message.author.username
     });
@@ -5936,6 +7129,22 @@ async function handleSlashCommand(interaction) {
     return;
   }
 
+  if (name === "player_set") {
+    const number = interaction.options.getInteger("number");
+    const result = await setDiscordPlayerSlotFromCommand({
+      channelId: interaction.channelId,
+      guildId: interaction.guildId,
+      userId: interaction.user.id,
+      slot: String(number || "")
+    });
+    await safeSendInteractionText(
+      interaction,
+      result.ok ? `已把你設定為 ${result.playerSlot}` : result.error,
+      { ephemeral: true }
+    );
+    return;
+  }
+
   if (name === "reload") {
     const feedback = safeText(interaction.options.getString("feedback") || "");
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
@@ -5955,6 +7164,7 @@ async function handleSlashCommand(interaction) {
       extra: {
         platform: "discord",
         discordChannelId: interaction.channelId,
+        discordGuildId: interaction.guildId,
         discordUserId: interaction.user.id,
         discordUserName: interaction.user.username
       },
@@ -5986,6 +7196,7 @@ async function handleSlashCommand(interaction) {
       extra: {
         platform: "discord",
         discordChannelId: interaction.channelId,
+        discordGuildId: interaction.guildId,
         discordUserId: interaction.user.id,
         discordUserName: interaction.user.username
       }
@@ -6029,6 +7240,7 @@ async function handleSlashCommand(interaction) {
       turns,
       message: requestMessage,
       channelId: interaction.channelId,
+      guildId: interaction.guildId,
       userId: interaction.user.id,
       userName: interaction.user.username
     });
@@ -6122,6 +7334,7 @@ async function handleSlashCommand(interaction) {
     const turn = await processDiscordChatTurn({
       channel: interaction.channel,
       channelId: interaction.channelId,
+      guildId: interaction.guildId,
       userId: interaction.user.id,
       userName: interaction.user.username,
       userContent: finalContent
@@ -6173,9 +7386,13 @@ function setupDiscordBot() {
     }
 
     try {
+      const isPrefixedTextCommand = safeText(message.content).startsWith(COMMAND_PREFIX);
+      const isActiveBareGuildInput = Boolean(message.guildId) &&
+        !isPrefixedTextCommand &&
+        isActiveDiscordAutoChatChannel(message);
       const parsedInput = extractedInput
         ? parseDiscordTextInput(extractedInput, {
-            allowBareMetaCommands: Boolean(message.guildId) || safeText(message.content).startsWith(COMMAND_PREFIX)
+            allowBareMetaCommands: isPrefixedTextCommand || safeText(extractedInput).startsWith("/")
           })
         : { type: "chat", content: "" };
 
@@ -6228,6 +7445,16 @@ function setupDiscordBot() {
           return;
         }
 
+        if (parsedInput.command === "player_set") {
+          await runPlayerSetTextCommand(message, parsedInput.args || []);
+          return;
+        }
+
+        await message.reply(getDiscordGuidance());
+        return;
+      }
+
+      if (!isActiveBareGuildInput && Boolean(message.guildId) && !isPrefixedTextCommand) {
         await message.reply(getDiscordGuidance());
         return;
       }
@@ -6250,10 +7477,17 @@ function setupDiscordBot() {
     }
 
     try {
+      const isPrefixedTextCommand = safeText(message.content).startsWith(COMMAND_PREFIX);
+      const isActiveBareGuildInput = Boolean(message.guildId) &&
+        !isPrefixedTextCommand &&
+        isActiveDiscordAutoChatChannel(message);
       const parsedInput = parseDiscordTextInput(extractedInput, {
-        allowBareMetaCommands: Boolean(message.guildId) || safeText(message.content).startsWith(COMMAND_PREFIX)
+        allowBareMetaCommands: isPrefixedTextCommand || safeText(extractedInput).startsWith("/")
       });
       if (parsedInput.type !== "chat") {
+        return;
+      }
+      if (!isActiveBareGuildInput && Boolean(message.guildId) && !isPrefixedTextCommand) {
         return;
       }
 
@@ -6266,6 +7500,7 @@ function setupDiscordBot() {
           extra: {
             platform: "discord",
             discordChannelId: message.channelId,
+            discordGuildId: message.guildId,
             discordUserId: message.author.id,
             discordUserName: message.author.username
           }
