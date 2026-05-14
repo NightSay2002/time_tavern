@@ -1276,6 +1276,40 @@ button {
   line-height: 1.45;
 }
 
+.env-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chat-api-processing-keys {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-api-processing-key-list {
+  margin: 0;
+}
+
+.env-test-status {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.env-test-status.testing {
+  color: #f8d777;
+}
+
+.env-test-status.success {
+  color: #86efac;
+}
+
+.env-test-status.error {
+  color: #ff9faf;
+}
+
 .env-extra-box {
   margin-top: 0;
 }

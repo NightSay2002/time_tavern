@@ -45,26 +45,11 @@
         </form>
 
         <div class="actions-block">
-          <h2>對話模型設定</h2>
+          <h2>Prompt 設定</h2>
           <p class="form-hint">正式使用大模型內容；正文輸出會使用最近對話與目前模型內容。</p>
-          <label>
-            正文輸出模型
-            <select id="chatOutputModelSelect">
-              <option value="deepseek-reasoner">deepseek-reasoner</option>
-              <option value="deepseek-chat">deepseek-chat</option>
-              <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-              <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-            </select>
-          </label>
-          <label>
-            正文對話上下文輪數
-            <input id="dialogueContextRoundsInput" type="number" min="1" max="100" value="20" />
-          </label>
           <button id="editModularPromptsBtn" type="button" class="secondary">編輯 Prompt</button>
-          <p class="form-hint">可編輯正文輸出 Prompt 與壓縮 Prompt。</p>
+          <p class="form-hint">可編輯正文輸出 Prompt、每個模式的上下文輪數與壓縮 Prompt。</p>
           <p id="contextCompressionModeHint" class="form-hint">模型內容固定啟用。</p>
-          <button id="applyConversationSettingsBtn" type="button" class="secondary">確認套用模型與輪數</button>
-          <p class="form-hint">調整模型或上下文輪數後，請按此按鈕一次套用。</p>
         </div>
 
         <div class="actions-block">
@@ -256,7 +241,7 @@
     <dialog id="envSettingsDialog" class="dialog prompt-viewer-dialog">
       <form id="envSettingsForm" method="dialog" class="stack">
         <h3>環境設定 .env</h3>
-        <p id="envSettingsHint" class="form-hint">保存後會寫入專案根目錄 .env。DeepSeek API key 等多數設定會立即同步；Discord Bot Token、Port 等啟動期設定建議重啟 npm start。</p>
+        <p id="envSettingsHint" class="form-hint">保存後會寫入專案根目錄 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port 等啟動期設定建議重啟 npm start。</p>
         <div id="envSettingsFields" class="env-settings-fields"></div>
         <details class="meta-box env-extra-box">
           <summary>其他環境變數</summary>
@@ -302,6 +287,10 @@
           模式名字
           <input id="modularPromptModeName" type="text" placeholder="例如：單角色" />
         </label>
+        <label>
+          正文對話上下文輪數
+          <input id="modularPromptDialogueContextRounds" type="number" min="1" max="100" value="20" />
+        </label>
         <section class="compression-profile-panel stack">
           <div class="mode-editor-row compression-profile-actions">
             <label>
@@ -327,11 +316,12 @@
             <button id="addCompressionTriggerActionBtn" type="button" class="secondary">＋ 新增組合</button>
           </div>
           <div id="compressionTriggerActionList" class="custom-section-list compression-trigger-action-list"></div>
+          <p class="form-hint">call api 會使用這個大模型自己的模型主要規則＋模塊輸出模型內容；可勾選「不call正文」讓觸發後只處理大模型並回覆完成訊息。複製用戶輸入（不call api）只會把用戶輸入存成模型內容。</p>
           <div class="inline-actions">
             <strong>首次觸發後追加詞</strong>
             <button id="addCompressionAppendTermBtn" type="button" class="secondary">＋ 新增追加詞</button>
           </div>
-          <p class="form-hint">這個大模型第一次觸發後，符合指定玩家座位的追加詞會附在該玩家之後的 user 對話中。</p>
+          <p class="form-hint">這個大模型第一次觸發後，符合輸入玩家座位（例如 user1、user2、user3）的追加詞會附在該玩家之後的 user 對話中。</p>
           <div id="compressionAppendTermList" class="custom-section-list compression-append-term-list"></div>
         </section>
         <div class="prompt-grid prompt-stack">

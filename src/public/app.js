@@ -5,9 +5,6 @@
   profileForm: document.getElementById("profileForm"),
   displayName: document.getElementById("displayName"),
   identityText: document.getElementById("identityText"),
-  chatOutputModelSelect: document.getElementById("chatOutputModelSelect"),
-  dialogueContextRoundsInput: document.getElementById("dialogueContextRoundsInput"),
-  applyConversationSettingsBtn: document.getElementById("applyConversationSettingsBtn"),
   editModularPromptsBtn: document.getElementById("editModularPromptsBtn"),
   contextCompressionModeHint: document.getElementById("contextCompressionModeHint"),
 
@@ -104,6 +101,7 @@
   modularPromptForm: document.getElementById("modularPromptForm"),
   modularPromptModeSelect: document.getElementById("modularPromptModeSelect"),
   modularPromptModeName: document.getElementById("modularPromptModeName"),
+  modularPromptDialogueContextRounds: document.getElementById("modularPromptDialogueContextRounds"),
   addModularPromptModeBtn: document.getElementById("addModularPromptModeBtn"),
   deleteModularPromptModeBtn: document.getElementById("deleteModularPromptModeBtn"),
   compressionProfileSelect: document.getElementById("compressionProfileSelect"),
@@ -202,34 +200,71 @@ const ENV_FIELD_GROUPS = [
     ]
   },
   {
-    title: "DeepSeek API",
-    description: "API key 多數情況保存後會立即同步。",
+    title: "對話API",
+    description: "支援 OpenAI-compatible Chat Completions API。DeepSeek、OpenAI、Gemini 可直接用對應 provider 或自訂 Base URL。",
     fields: [
       {
-        key: "DEEPSEEK_API_KEY",
-        label: "DeepSeek API Key",
-        type: "password",
-        autocomplete: "off"
+        key: "CHAT_API_PROVIDER",
+        label: "對話API供應商",
+        type: "select",
+        options: [
+          ["deepseek", "DeepSeek"],
+          ["openai", "OpenAI / ChatGPT"],
+          ["gemini", "Gemini"],
+          ["custom", "自訂 OpenAI-compatible"]
+        ],
+        help: "決定預設 Base URL；custom 供應商必須另外填 CHAT_API_BASE_URL。"
       },
       {
-        key: "DEEPSEEK_REQUEST_TIMEOUT_MS",
+        key: "CHAT_API_KEY",
+        label: "對話 API Key",
+        type: "password",
+        autocomplete: "off",
+        help: "可填 DeepSeek、OpenAI 或 Gemini API key；舊版 DEEPSEEK_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 會自動帶入。"
+      },
+      {
+        key: "CHAT_API_BASE_URL",
+        label: "對話 API Base URL",
+        type: "text",
+        placeholder: "留空使用供應商預設",
+        help: "OpenAI-compatible base，例如 https://api.openai.com/v1 或 https://generativelanguage.googleapis.com/v1beta/openai。"
+      },
+      {
+        key: "CHAT_API_MODEL",
+        label: "API輸出模型",
+        type: "text",
+        placeholder: "deepseek-reasoner / gpt-4.1 / gemini-2.5-flash",
+        help: "主聊天、大模型處理、補寫與角色卡助手都會使用此模型。"
+      },
+      {
+        key: "CHAT_API_REQUEST_TIMEOUT_MS",
         label: "API 請求逾時",
         type: "number",
         placeholder: "600000",
-        help: "單位毫秒。600000 = 10 分鐘。"
+        help: "單位毫秒。600000 = 10 分鐘。舊版 DEEPSEEK_REQUEST_TIMEOUT_MS 會自動帶入。"
       },
       {
-        key: "DEEPSEEK_MAX_TOKENS",
+        key: "CHAT_API_MAX_TOKENS",
         label: "輸出 token 上限",
         type: "number",
         help: "選填。主聊天／大模型處理呼叫預設 32000，仍會受模型上限限制。"
       },
       {
-        key: "DEEPSEEK_API_KEY2",
-        label: "大模型處理用 DeepSeek API Key",
-        type: "password",
-        autocomplete: "off",
-        help: "選填。舊版 deepseek_key2 / DEEPSEEK_KEY2 會自動帶入這裡。"
+        key: "CHAT_API_MAX_TOKENS_PARAM",
+        label: "輸出 token 參數",
+        type: "select",
+        options: [
+          ["max_tokens", "max_tokens"],
+          ["max_completion_tokens", "max_completion_tokens"]
+        ],
+        help: "大多數 OpenAI-compatible API 使用 max_tokens；部分 OpenAI 新模型可改用 max_completion_tokens。"
+      },
+      {
+        key: "CHAT_API_TEMPERATURE",
+        label: "溫度",
+        type: "number",
+        placeholder: "0.5",
+        help: "選填。留空時一般對話使用 0.5，角色卡建立助手使用 0.9。"
       }
     ]
   },
@@ -247,7 +282,14 @@ const ENV_FIELD_GROUPS = [
   }
 ];
 const ENV_ALIAS_KEYS = {
-  DEEPSEEK_API_KEY2: ["DEEPSEEK_KEY2", "deepseek_key2"]
+  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"],
+  CHAT_API_KEY2: ["CONVERSATION_API_KEY2", "DEEPSEEK_API_KEY2", "DEEPSEEK_KEY2", "deepseek_key2"],
+  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL"],
+  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL"],
+  CHAT_API_REQUEST_TIMEOUT_MS: ["CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
+  CHAT_API_MAX_TOKENS: ["CONVERSATION_API_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS"],
+  CHAT_API_MAX_TOKENS_PARAM: ["CONVERSATION_API_MAX_TOKENS_PARAM"],
+  CHAT_API_TEMPERATURE: ["CONVERSATION_API_TEMPERATURE"]
 };
 const ENV_KNOWN_KEYS = new Set(ENV_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key)));
 Object.values(ENV_ALIAS_KEYS).flat().forEach((key) => ENV_KNOWN_KEYS.add(key));
@@ -265,6 +307,15 @@ const ENV_DROPPED_KEYS = new Set([
   "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT",
   "CONTEXT_COMPRESSION_PROMPT"
 ]);
+
+function isChatApiProcessingKeyName(key = "") {
+  const match = String(key || "").trim().match(/^CHAT_API_KEY([2-9]\d*)$/u);
+  return Boolean(match && Number(match[1]) >= 2);
+}
+
+function isManagedEnvKey(key = "") {
+  return ENV_KNOWN_KEYS.has(key) || isChatApiProcessingKeyName(key);
+}
 
 function normalizeRoleCardMode(mode = "") {
   const normalized = String(mode)
@@ -356,11 +407,17 @@ function normalizeCompressionModelConfig(model = {}, index = 0) {
 function normalizeContextCompressionConfig(config = {}, fallbackPrompt = "", options = {}) {
   const source = config && typeof config === "object" ? config : {};
   const allowEmptyModels = Boolean(options.allowEmptyModels);
+  const allowEmptyMainRules = Boolean(options.allowEmptyMainRules);
+  const hasExplicitMainRules = ["mainRules", "prompt", "contextCompressionPrompt"]
+    .some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  const mainRules = String(source.mainRules ?? source.prompt ?? source.contextCompressionPrompt ?? "").trim();
   const models = Array.isArray(source.models)
     ? source.models.map((item, index) => normalizeCompressionModelConfig(item, index)).filter((item) => item.id)
     : [];
   return {
-    mainRules: String(source.mainRules || source.prompt || source.contextCompressionPrompt || fallbackPrompt || "").trim(),
+    mainRules: allowEmptyMainRules && hasExplicitMainRules
+      ? mainRules
+      : String(mainRules || fallbackPrompt || "").trim(),
     models: models.length > 0
       ? models
       : allowEmptyModels
@@ -389,6 +446,16 @@ function getDefaultCompressionProfileName(id = STANDARD_COMPRESSION_PROFILE_ID) 
   return normalizeCompressionProfileId(id) === STANDARD_COMPRESSION_PROFILE_ID
     ? "標準壓縮模型"
     : String(id || "自訂壓縮模型").trim();
+}
+
+function normalizeDialogueContextRounds(value, fallback = 20) {
+  const normalized = Number(value);
+  const fallbackNumber = Number(fallback);
+  return Number.isFinite(normalized) && normalized > 0
+    ? Math.floor(normalized)
+    : Number.isFinite(fallbackNumber) && fallbackNumber > 0
+      ? Math.floor(fallbackNumber)
+      : 20;
 }
 
 function parseIntegerList(value = "") {
@@ -450,12 +517,15 @@ function normalizeModelTriggerAction(value = "") {
 
 function getModelTriggerActionLabel(value = "") {
   return normalizeModelTriggerAction(value) === MODEL_TRIGGER_ACTION_COPY_USER_INPUT
-    ? "直接複製玩家輸入"
-    : "call api";
+    ? "複製用戶輸入（不call api）"
+    : "call api（使用本大模型規則＋模塊）";
 }
 
 function normalizeModelAppendPlayer(value = "") {
   const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+  if (!normalized) {
+    return "";
+  }
   const numberMatch = normalized.match(/^(?:user|玩家)?(\d+)$/u);
   if (numberMatch) {
     return `user${Math.max(1, Math.floor(Number(numberMatch[1])))}`;
@@ -463,15 +533,16 @@ function normalizeModelAppendPlayer(value = "") {
   if (normalized === "x" || normalized === "userx" || normalized === "other" || normalized === "others") {
     return MODEL_APPEND_PLAYER_OTHER;
   }
-  return "user1";
+  return "";
 }
 
 function normalizeModelAppendTermConfig(term = {}, index = 0) {
   const source = term && typeof term === "object" ? term : {};
+  const player = source.player ?? source.target ?? source.user ?? source.slot ?? "";
   return {
     id: String(source.id || source.key || `append_term_${index + 1}`).trim(),
     enabled: source.enabled !== false,
-    player: normalizeModelAppendPlayer(source.player || source.target || source.user || source.slot),
+    player: normalizeModelAppendPlayer(player),
     content: String(source.content || source.text || source.appendText || source.prompt || "").trim(),
     expanded: Boolean(source.expanded)
   };
@@ -490,12 +561,14 @@ function normalizeModelAppendTermsConfig(input = {}) {
 
 function normalizeCompressionTriggerActionConfig(action = {}, index = 0, options = {}) {
   const source = action && typeof action === "object" ? action : {};
+  const processingAction = normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction);
   return {
     id: String(source.id || source.key || `trigger_action_${index + 1}`).trim(),
     name: String(source.name || source.title || source.label || `觸發組合 ${index + 1}`).trim(),
     enabled: source.enabled !== false,
-    action: normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction),
-    skipReasoner: Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
+    action: processingAction,
+    skipReasoner: processingAction === MODEL_TRIGGER_ACTION_CALL_API &&
+      Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
     triggers: normalizeCompressionTriggerConfig(
       source.triggers || source.trigger || source.conditions || source.condition || source,
       { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
@@ -570,7 +643,7 @@ function normalizeCompressionProfileConfig(profile = {}, index = 0, fallbackCont
     contextCompression: normalizeContextCompressionConfig(
       source.contextCompression || source.compression || fallbackContextCompression,
       fallbackContextCompression?.mainRules || appState?.contextCompressionPrompt || "",
-      { allowEmptyModels: !isStandard }
+      { allowEmptyModels: !isStandard, allowEmptyMainRules: !isStandard }
     )
   };
 }
@@ -888,18 +961,30 @@ function createEnvField(field, parsedEnv) {
 
   const input = field.type === "textarea"
     ? document.createElement("textarea")
-    : document.createElement("input");
+    : field.type === "select"
+      ? document.createElement("select")
+      : document.createElement("input");
   input.dataset.envKey = field.key;
   input.id = `envField_${field.key}`;
   input.name = field.key;
-  input.value = getEnvFieldValue(parsedEnv, field.key);
   input.placeholder = field.placeholder || "";
   input.spellcheck = false;
 
   if (field.type === "textarea") {
     input.rows = field.rows || 4;
+    input.value = getEnvFieldValue(parsedEnv, field.key);
+  } else if (field.type === "select") {
+    const currentValue = getEnvFieldValue(parsedEnv, field.key);
+    (field.options || []).forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      input.appendChild(option);
+    });
+    input.value = currentValue || field.options?.[0]?.[0] || "";
   } else {
     input.type = field.type || "text";
+    input.value = getEnvFieldValue(parsedEnv, field.key);
     if (field.autocomplete) {
       input.autocomplete = field.autocomplete;
     }
@@ -953,6 +1038,132 @@ function renderEnvExtraRows(entries = []) {
   entries.forEach((entry) => el.envSettingsExtraList.appendChild(createEnvExtraRow(entry)));
 }
 
+function getChatApiProcessingKeyValues(parsedEnv = {}) {
+  const values = Object.entries(parsedEnv)
+    .map(([key, value]) => {
+      const match = key.match(/^CHAT_API_KEY([2-9]\d*)$/u);
+      if (!match) {
+        return null;
+      }
+      const index = Number(match[1]);
+      return Number.isFinite(index) && index >= 2 ? { index, value: String(value ?? "") } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.value);
+
+  if (values.length > 0) {
+    return values;
+  }
+
+  const legacyKey2 = getEnvFieldValue(parsedEnv, "CHAT_API_KEY2");
+  return [legacyKey2 || ""];
+}
+
+function renumberChatApiProcessingKeyRows() {
+  const rows = Array.from(document.querySelectorAll("[data-chat-api-processing-key-row]"));
+  rows.forEach((row, index) => {
+    const key = `CHAT_API_KEY${index + 2}`;
+    const label = row.querySelector("[data-chat-api-processing-key-label]");
+    const input = row.querySelector("[data-chat-api-processing-key]");
+    if (label) {
+      label.textContent = key;
+    }
+    if (input) {
+      input.dataset.envKey = key;
+      input.name = key;
+      input.id = `envField_${key}`;
+      input.placeholder = key;
+    }
+  });
+}
+
+function createChatApiProcessingKeyRow(value = "", keyIndex = 2) {
+  const row = document.createElement("div");
+  row.className = "env-extra-row chat-api-processing-key-row";
+  row.dataset.chatApiProcessingKeyRow = "true";
+  const key = `CHAT_API_KEY${Math.max(2, Number(keyIndex) || 2)}`;
+
+  const keyLabel = document.createElement("code");
+  keyLabel.className = "env-field-key";
+  keyLabel.dataset.chatApiProcessingKeyLabel = "true";
+  keyLabel.textContent = key;
+
+  const input = document.createElement("input");
+  input.type = "password";
+  input.autocomplete = "off";
+  input.value = value;
+  input.dataset.chatApiProcessingKey = "true";
+  input.dataset.envKey = key;
+  input.name = key;
+  input.id = `envField_${key}`;
+  input.placeholder = key;
+  input.spellcheck = false;
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "muted";
+  removeBtn.textContent = "刪除";
+  removeBtn.addEventListener("click", () => {
+    row.remove();
+    renumberChatApiProcessingKeyRows();
+    setChatApiTestStatus("", "設定已變更，尚未重新測試");
+  });
+
+  row.append(keyLabel, input, removeBtn);
+  return row;
+}
+
+function createChatApiProcessingKeyControls(parsedEnv = {}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "chat-api-processing-keys";
+
+  const hint = document.createElement("p");
+  hint.className = "form-hint";
+  hint.textContent = "大模型處理用對話 API Key 會依目前啟用的大模型順序使用；Key 不足時沿用最後一把。";
+
+  const list = document.createElement("div");
+  list.id = "chatApiProcessingKeyList";
+  list.className = "env-extra-list chat-api-processing-key-list";
+  getChatApiProcessingKeyValues(parsedEnv).forEach((value, index) => {
+    list.appendChild(createChatApiProcessingKeyRow(value, index + 2));
+  });
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.id = "addChatApiProcessingKeyBtn";
+  addBtn.className = "secondary";
+  addBtn.textContent = "＋ 新增大模型處理 Key";
+  addBtn.addEventListener("click", () => {
+    const nextIndex = list.querySelectorAll("[data-chat-api-processing-key-row]").length + 2;
+    list.appendChild(createChatApiProcessingKeyRow("", nextIndex));
+    renumberChatApiProcessingKeyRows();
+    setChatApiTestStatus("", "設定已變更，尚未重新測試");
+  });
+
+  wrapper.append(hint, list, addBtn);
+  return wrapper;
+}
+
+function createChatApiTestControls() {
+  const row = document.createElement("div");
+  row.className = "env-test-row";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "testChatApiConnectionBtn";
+  button.className = "secondary";
+  button.textContent = "測試連接";
+
+  const status = document.createElement("span");
+  status.id = "chatApiTestStatus";
+  status.className = "env-test-status";
+  status.textContent = "尚未測試";
+
+  row.append(button, status);
+  return row;
+}
+
 function renderEnvSettingsForm(content = "") {
   if (!el.envSettingsFields) {
     return;
@@ -980,10 +1191,14 @@ function renderEnvSettingsForm(content = "") {
     grid.className = "env-grid";
     group.fields.forEach((field) => grid.appendChild(createEnvField(field, parsed)));
     section.appendChild(grid);
+    if (group.title === "對話API") {
+      section.appendChild(createChatApiProcessingKeyControls(parsed));
+      section.appendChild(createChatApiTestControls());
+    }
     el.envSettingsFields.appendChild(section);
   });
 
-  envExtraEntries = orderedEntries.filter((entry) => !ENV_KNOWN_KEYS.has(entry.key) && !ENV_DROPPED_KEYS.has(entry.key));
+  envExtraEntries = orderedEntries.filter((entry) => !isManagedEnvKey(entry.key) && !ENV_DROPPED_KEYS.has(entry.key));
   renderEnvExtraRows(envExtraEntries);
 }
 
@@ -993,6 +1208,11 @@ function collectEnvFieldValues() {
     values[input.dataset.envKey] = input.value || "";
   });
   return values;
+}
+
+function collectChatApiProcessingKeyValues() {
+  return Array.from(document.querySelectorAll("[data-chat-api-processing-key]"))
+    .map((input) => input.value || "");
 }
 
 function collectEnvExtraEntries() {
@@ -1024,6 +1244,15 @@ function buildEnvContentFromForm() {
       }
       lines.push(`${field.key}=${formatEnvValue(values[field.key] || "")}`);
     });
+    if (group.title === "對話API") {
+      const processingKeys = collectChatApiProcessingKeyValues();
+      if (processingKeys.length > 0) {
+        lines.push("# 大模型處理用對話 API Key。依啟用的大模型順序使用；Key 不足時沿用最後一把。");
+        processingKeys.forEach((value, index) => {
+          lines.push(`CHAT_API_KEY${index + 2}=${formatEnvValue(value)}`);
+        });
+      }
+    }
   });
 
   const extraEntries = collectEnvExtraEntries();
@@ -1035,6 +1264,41 @@ function buildEnvContentFromForm() {
   }
 
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
+}
+
+function setChatApiTestStatus(type = "", message = "") {
+  const status = document.getElementById("chatApiTestStatus");
+  if (!status) {
+    return;
+  }
+  status.className = `env-test-status${type ? ` ${type}` : ""}`;
+  status.textContent = message || "尚未測試";
+}
+
+async function testChatApiConnection() {
+  const button = document.getElementById("testChatApiConnectionBtn");
+  try {
+    if (button) {
+      button.disabled = true;
+    }
+    setChatApiTestStatus("testing", "測試中...");
+    const payload = await request("/api/chat-api/test", {
+      method: "POST",
+      body: JSON.stringify({ content: buildEnvContentFromForm() })
+    });
+    const detail = [
+      payload?.model ? `模型：${payload.model}` : "",
+      payload?.durationMs ? `${payload.durationMs}ms` : ""
+    ].filter(Boolean).join("｜");
+    const message = payload?.message || (payload?.ok ? "連接成功。" : "連接失敗。");
+    setChatApiTestStatus(payload?.ok ? "success" : "error", detail ? `${message} ${detail}` : message);
+  } catch (error) {
+    setChatApiTestStatus("error", `連接失敗：${error.message}`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
 }
 
 function formatUsage(usage) {
@@ -1966,7 +2230,7 @@ function renderAiLogs(state) {
 
     if (log.debugReasoningContent) {
       const reasoningLabel = document.createElement("label");
-      reasoningLabel.textContent = "DeepSeek 思考過程";
+      reasoningLabel.textContent = "模型思考過程";
       const reasoningArea = document.createElement("pre");
       reasoningArea.className = "ai-log-block reasoning";
       reasoningArea.textContent = log.debugReasoningContent;
@@ -2015,17 +2279,12 @@ function renderStatus(state) {
 }
 
 function renderConversationModelSettings(state) {
-  const settings = state?.conversationSettings || {};
   const compression = state?.contextCompression || {};
-  if (el.chatOutputModelSelect) {
-    el.chatOutputModelSelect.value = settings.chatOutputModel || "deepseek-reasoner";
-  }
-  if (el.dialogueContextRoundsInput) {
-    el.dialogueContextRoundsInput.value = String(settings.dialogueContextRounds || 20);
-  }
   if (el.contextCompressionModeHint) {
     const compressedTurn = Number(compression.compressedThroughTurnNumber || 0);
-    el.contextCompressionModeHint.textContent = `模型內容固定啟用。標準模型已處理到第 ${compressedTurn || 0} 輪。`;
+    const activeMode = getActivePromptMode(state);
+    const activeConfig = state?.modularPromptConfigs?.[activeMode] || {};
+    el.contextCompressionModeHint.textContent = `模型內容固定啟用。${getPromptModeDisplayName(activeMode)}上下文 ${normalizeDialogueContextRounds(activeConfig.dialogueContextRounds)} 輪；標準模型已處理到第 ${compressedTurn || 0} 輪。`;
   }
 }
 
@@ -2103,6 +2362,7 @@ function getModularConfig(mode = "") {
   return appState?.modularPromptConfigs?.[promptMode] || {
     mode: promptMode,
     name: getDefaultPromptModeDisplayName(promptMode),
+    dialogueContextRounds: 20,
     contextCompression: normalizeContextCompressionConfig({}, appState?.contextCompressionPrompt || ""),
     contextCompressionPrompt: appState?.contextCompressionPrompt || "",
     compressionProfiles: [
@@ -2278,8 +2538,8 @@ function renderCompressionTriggerActionEditor(actions = []) {
     const actionSelect = document.createElement("select");
     actionSelect.dataset.field = "triggerActionProcessing";
     [
-      [MODEL_TRIGGER_ACTION_CALL_API, "call api"],
-      [MODEL_TRIGGER_ACTION_COPY_USER_INPUT, "直接複製玩家輸入"]
+      [MODEL_TRIGGER_ACTION_CALL_API, "call api（使用本大模型規則＋模塊）"],
+      [MODEL_TRIGGER_ACTION_COPY_USER_INPUT, "複製用戶輸入（不call api）"]
     ].forEach(([value, label]) => {
       const option = document.createElement("option");
       option.value = value;
@@ -2295,7 +2555,7 @@ function renderCompressionTriggerActionEditor(actions = []) {
     skipInput.type = "checkbox";
     skipInput.checked = Boolean(action.skipReasoner);
     skipInput.dataset.field = "triggerActionSkipReasoner";
-    skipLabel.append(skipInput, document.createTextNode("處理後不call正文"));
+    skipLabel.append(skipInput, document.createTextNode("大模型 call api 後不call正文，只輸出完成訊息"));
 
     const roundLabel = document.createElement("label");
     roundLabel.className = "checkbox-label";
@@ -2378,7 +2638,7 @@ function collectCompressionAppendTermsFromEditor(options = {}) {
     .map((item, index) => normalizeModelAppendTermConfig({
       id: item.dataset.appendTermId || "",
       enabled: item.querySelector("[data-field='appendTermEnabled']")?.checked !== false,
-      player: item.querySelector("[data-field='appendTermPlayer']")?.value || "user1",
+      player: item.querySelector("[data-field='appendTermPlayer']")?.value || "",
       content: item.querySelector("[data-field='appendTermContent']")?.value || "",
       expanded: keepExpanded ? item.open : false
     }, index));
@@ -2386,6 +2646,9 @@ function collectCompressionAppendTermsFromEditor(options = {}) {
 
 function getModelAppendPlayerLabel(value = "") {
   const player = normalizeModelAppendPlayer(value);
+  if (!player) {
+    return "未指定玩家";
+  }
   if (player === MODEL_APPEND_PLAYER_OTHER) {
     return "userx";
   }
@@ -2481,20 +2744,12 @@ function renderCompressionAppendTermEditor(terms = []) {
 
     const playerLabel = document.createElement("label");
     playerLabel.textContent = "指定玩家";
-    const playerSelect = document.createElement("select");
-    playerSelect.dataset.field = "appendTermPlayer";
-    [
-      ["user1", "user1"],
-      ["user2", "user2"],
-      [MODEL_APPEND_PLAYER_OTHER, "userx（其他玩家）"]
-    ].forEach(([value, label]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      playerSelect.appendChild(option);
-    });
-    playerSelect.value = normalizeModelAppendPlayer(term.player);
-    playerLabel.appendChild(playerSelect);
+    const playerInput = document.createElement("input");
+    playerInput.type = "text";
+    playerInput.value = normalizeModelAppendPlayer(term.player);
+    playerInput.placeholder = "例如：user1、user2、user3";
+    playerInput.dataset.field = "appendTermPlayer";
+    playerLabel.appendChild(playerInput);
 
     const contentLabel = document.createElement("label");
     contentLabel.textContent = "追加詞內容";
@@ -2542,7 +2797,10 @@ function syncSelectedCompressionProfileFromEditor() {
   profile.contextCompression = normalizeContextCompressionConfig({
     mainRules: el.modularCompressionMainRules?.value || "",
     models: collectCompressionModelsFromEditor()
-  }, appState?.contextCompressionPrompt || "", { allowEmptyModels: !isStandard });
+  }, appState?.contextCompressionPrompt || "", {
+    allowEmptyModels: !isStandard,
+    allowEmptyMainRules: !isStandard
+  });
 }
 
 function renderCompressionProfileEditor(profileId = selectedCompressionProfileId) {
@@ -2587,7 +2845,6 @@ function createCompressionProfile() {
     index += 1;
     id = normalizeCompressionProfileId(`compression_profile_${index}`);
   }
-  const baseProfile = getSelectedCompressionProfile() || createStandardCompressionProfile({});
   const profile = normalizeCompressionProfileConfig({
     id,
     name: `大模型 ${index}`,
@@ -2605,10 +2862,10 @@ function createCompressionProfile() {
     ],
     appendTerms: [],
     contextCompression: {
-      mainRules: baseProfile.contextCompression?.mainRules || "",
+      mainRules: "",
       models: []
     }
-  }, compressionProfilesDraft.length, baseProfile.contextCompression);
+  }, compressionProfilesDraft.length, null);
   compressionProfilesDraft.push(profile);
   renderCompressionProfileEditor(profile.id);
 }
@@ -2636,6 +2893,9 @@ function renderModularPromptEditor(mode = "") {
   }
   if (el.modularPromptModeName) {
     el.modularPromptModeName.value = config.name || getDefaultPromptModeDisplayName(promptMode);
+  }
+  if (el.modularPromptDialogueContextRounds) {
+    el.modularPromptDialogueContextRounds.value = String(normalizeDialogueContextRounds(config.dialogueContextRounds));
   }
   if (el.deleteModularPromptModeBtn) {
     el.deleteModularPromptModeBtn.disabled = BUILTIN_PROMPT_MODES.includes(promptMode);
@@ -2765,6 +3025,7 @@ function collectModularPromptConfig() {
     version: 2,
     mode,
     name: el.modularPromptModeName?.value?.trim() || getDefaultPromptModeDisplayName(mode),
+    dialogueContextRounds: normalizeDialogueContextRounds(el.modularPromptDialogueContextRounds?.value || 20),
     contextCompression,
     contextCompressionPrompt: contextCompression.mainRules,
     compressionProfiles,
@@ -3106,23 +3367,6 @@ async function refresh() {
   renderStatus(state);
   refreshAssistantSelector();
   applyMobilePage();
-}
-
-async function updateConversationSettings() {
-  const settings = {
-    chatOutputModel: el.chatOutputModelSelect?.value || "deepseek-reasoner",
-    dialogueContextRounds: Number(el.dialogueContextRoundsInput?.value || 20) || 20
-  };
-  try {
-    await request("/api/conversation-settings", {
-      method: "PUT",
-      body: JSON.stringify(settings)
-    });
-    await refresh();
-    showToast("已套用對話模型與上下文設定");
-  } catch (error) {
-    showToast(error.message, "error");
-  }
 }
 
 function getCompressionProfileStateFromRuntime(compression = {}, profileId = STANDARD_COMPRESSION_PROFILE_ID) {
@@ -3475,12 +3719,6 @@ function bindEvents() {
     });
   }
 
-  if (el.applyConversationSettingsBtn) {
-    el.applyConversationSettingsBtn.addEventListener("click", async () => {
-      await updateConversationSettings();
-    });
-  }
-
   if (el.selectRoleCardBtn) {
     el.selectRoleCardBtn.addEventListener("click", () => {
       roleCardPickerPage = 1;
@@ -3811,6 +4049,23 @@ function bindEvents() {
   }
 
   if (el.envSettingsForm) {
+    el.envSettingsForm.addEventListener("click", async (event) => {
+      if (event.target?.id !== "testChatApiConnectionBtn") {
+        return;
+      }
+      event.preventDefault();
+      await testChatApiConnection();
+    });
+    el.envSettingsForm.addEventListener("input", (event) => {
+      if (event.target?.dataset?.envKey?.startsWith("CHAT_API_")) {
+        setChatApiTestStatus("", "設定已變更，尚未重新測試");
+      }
+    });
+    el.envSettingsForm.addEventListener("change", (event) => {
+      if (event.target?.dataset?.envKey?.startsWith("CHAT_API_")) {
+        setChatApiTestStatus("", "設定已變更，尚未重新測試");
+      }
+    });
     el.envSettingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
@@ -3857,6 +4112,10 @@ function bindEvents() {
     el.modularPromptModeName.addEventListener("input", () => {
       clearModularPromptPreview();
     });
+  }
+
+  if (el.modularPromptDialogueContextRounds) {
+    el.modularPromptDialogueContextRounds.addEventListener("input", clearModularPromptPreview);
   }
 
   if (el.addModularPromptModeBtn) {
@@ -3914,7 +4173,7 @@ function bindEvents() {
       current.push(normalizeModelAppendTermConfig({
         id: `append_term_${Date.now()}`,
         enabled: true,
-        player: "user1",
+        player: "",
         content: "",
         expanded: true
       }, current.length));

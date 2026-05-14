@@ -22,16 +22,12 @@ const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
 const COMMAND_PREFIX = safeText(process.env.COMMAND_PREFIX) || "!ai";
 const DISCORD_BOT_TOKEN = safeText(process.env.DISCORD_BOT_TOKEN);
 const DISCORD_GUILD_ID = safeText(process.env.DISCORD_GUILD_ID);
-const DEFAULT_DEEPSEEK_MODEL = "deepseek-reasoner";
-const DEEPSEEK_REASONER_MODEL = "deepseek-reasoner";
-const DEEPSEEK_CHAT_MODEL = "deepseek-chat";
-const DEEPSEEK_V4_FLASH_MODEL = "deepseek-v4-flash";
-const DEEPSEEK_V4_PRO_MODEL = "deepseek-v4-pro";
+const DEFAULT_CHAT_API_PROVIDER = "deepseek";
+const DEFAULT_CHAT_API_MODEL = "deepseek-reasoner";
 const DEFAULT_MIN_REPLY_CHARS = 600;
-const DEEPSEEK_LENGTH_RETRY_LIMIT = 1;
-const DEEPSEEK_TEMPERATURE = 0.5;
+const CHAT_API_LENGTH_RETRY_LIMIT = 1;
+const CHAT_API_TEMPERATURE = 0.5;
 const CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE = 0.9;
-const DEEPSEEK_REQUEST_TIMEOUT_MS = envNumber("DEEPSEEK_REQUEST_TIMEOUT_MS", 600000);
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
@@ -163,6 +159,54 @@ function renderPromptTemplate(template, variables) {
 function envNumber(key, fallback) {
   const raw = Number(process.env[key] || "");
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+function envFirstText(keys = [], fallback = "") {
+  for (const key of keys) {
+    const value = safeText(process.env[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+function envFirstNumber(keys = [], fallback) {
+  for (const key of keys) {
+    const raw = Number(process.env[key] || "");
+    if (Number.isFinite(raw) && raw > 0) {
+      return raw;
+    }
+  }
+  return fallback;
+}
+
+function envObjectFirstText(source = {}, keys = [], fallback = "") {
+  const envSource = source && typeof source === "object" ? source : {};
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(envSource, key)) {
+      continue;
+    }
+    const value = safeText(envSource[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+function envObjectFirstNumber(source = {}, keys = [], fallback) {
+  const envSource = source && typeof source === "object" ? source : {};
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(envSource, key)) {
+      continue;
+    }
+    const raw = Number(envSource[key] || "");
+    if (Number.isFinite(raw) && raw > 0) {
+      return raw;
+    }
+  }
+  return fallback;
 }
 
 function decodeDiscordClientIdFromToken(token = "") {
@@ -398,7 +442,7 @@ function createDefaultState() {
     activeRoleCardId: null,
     activeAssistantMode: null,
     conversationSettings: {
-      chatOutputModel: DEEPSEEK_REASONER_MODEL,
+      chatOutputModel: DEFAULT_CHAT_API_MODEL,
       dialogueContextRounds: DEFAULT_DIALOGUE_CONTEXT_ROUNDS
     },
     contextCompression: createDefaultContextCompressionState(),
@@ -415,28 +459,15 @@ function createDefaultState() {
   };
 }
 
-function normalizeDeepSeekModelOption(value, fallback = DEEPSEEK_REASONER_MODEL) {
-  const normalized = safeText(value).toLowerCase();
-  if (normalized === DEEPSEEK_CHAT_MODEL) {
-    return DEEPSEEK_CHAT_MODEL;
-  }
-  if (normalized === DEEPSEEK_REASONER_MODEL) {
-    return DEEPSEEK_REASONER_MODEL;
-  }
-  if (normalized === DEEPSEEK_V4_FLASH_MODEL) {
-    return DEEPSEEK_V4_FLASH_MODEL;
-  }
-  if (normalized === DEEPSEEK_V4_PRO_MODEL) {
-    return DEEPSEEK_V4_PRO_MODEL;
-  }
-  return fallback;
+function normalizeChatApiModelOption(value, fallback = DEFAULT_CHAT_API_MODEL) {
+  return safeText(value) || fallback;
 }
 
 function normalizeConversationSettings(input) {
   const source = input && typeof input === "object" ? input : {};
   const dialogueContextRounds = Number(source.dialogueContextRounds);
   return {
-    chatOutputModel: normalizeDeepSeekModelOption(source.chatOutputModel, DEEPSEEK_REASONER_MODEL),
+    chatOutputModel: normalizeChatApiModelOption(source.chatOutputModel, DEFAULT_CHAT_API_MODEL),
     dialogueContextRounds:
       Number.isFinite(dialogueContextRounds) && dialogueContextRounds > 0
         ? Math.floor(dialogueContextRounds)
@@ -1678,10 +1709,11 @@ function normalizeModelTriggerAction(value = "") {
 
 function normalizeModelAppendTermConfig(input = {}, index = 0) {
   const source = input && typeof input === "object" ? input : {};
+  const player = source.player ?? source.target ?? source.user ?? source.slot ?? "";
   return {
     id: safeText(source.id || source.key) || `append_term_${index + 1}`,
     enabled: source.enabled !== false,
-    player: normalizeDiscordPlayerSlot(source.player || source.target || source.user || source.slot) || "user1",
+    player: normalizeDiscordPlayerSlot(player),
     content: safeText(source.content || source.text || source.appendText || source.prompt)
   };
 }
@@ -1705,12 +1737,14 @@ function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options 
     source.triggers || source.trigger || source.conditions || source.condition || source,
     { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
   );
+  const action = normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction);
   return {
     id: safeText(source.id || source.key) || `trigger_action_${index + 1}`,
     name: safeText(source.name || source.title || source.label) || `觸發組合 ${index + 1}`,
     enabled: source.enabled !== false,
-    action: normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction),
-    skipReasoner: Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
+    action,
+    skipReasoner: action === MODEL_TRIGGER_ACTION_CALL_API &&
+      Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
     triggers
   };
 }
@@ -1779,12 +1813,23 @@ function getDefaultModularPromptModeName(mode = "single") {
   return normalizedMode;
 }
 
+function normalizeDialogueContextRounds(value, fallback = DEFAULT_DIALOGUE_CONTEXT_ROUNDS) {
+  const normalized = Number(value);
+  const fallbackNumber = Number(fallback);
+  return Number.isFinite(normalized) && normalized > 0
+    ? Math.floor(normalized)
+    : Number.isFinite(fallbackNumber) && fallbackNumber > 0
+      ? Math.floor(fallbackNumber)
+      : DEFAULT_DIALOGUE_CONTEXT_ROUNDS;
+}
+
 function createDefaultModularPromptConfig(mode = "single") {
   const normalizedMode = normalizeRoleCardMode(mode);
   return {
     version: 2,
     mode: normalizedMode,
     name: getDefaultModularPromptModeName(normalizedMode),
+    dialogueContextRounds: DEFAULT_DIALOGUE_CONTEXT_ROUNDS,
     contextCompression: {
       mainRules: getContextCompressionPrompt(),
       models: [
@@ -1820,11 +1865,20 @@ function normalizeCompressionModelConfig(input = {}, index = 0) {
 function normalizeContextCompressionPromptConfig(input = {}, fallbackPrompt = "", options = {}) {
   const source = input && typeof input === "object" ? input : {};
   const allowEmptyModels = Boolean(options.allowEmptyModels);
-  const legacyPrompt = safeText(
+  const allowEmptyMainRules = Boolean(options.allowEmptyMainRules);
+  const hasExplicitMainRules = source && typeof source === "object" && [
+    "mainRules",
+    "prompt",
+    "contextCompressionPrompt"
+  ].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  const rawPrompt = safeText(
     typeof input === "string"
       ? input
-      : source.mainRules || source.prompt || source.contextCompressionPrompt || fallbackPrompt
+      : source.mainRules ?? source.prompt ?? source.contextCompressionPrompt ?? ""
   );
+  const legacyPrompt = allowEmptyMainRules && hasExplicitMainRules
+    ? rawPrompt
+    : safeText(rawPrompt || fallbackPrompt);
   const rawModels = Array.isArray(source.models)
     ? source.models
     : Array.isArray(source.modules)
@@ -1834,7 +1888,7 @@ function normalizeContextCompressionPromptConfig(input = {}, fallbackPrompt = ""
     .map((item, index) => normalizeCompressionModelConfig(item, index))
     .filter((item) => item.id);
   return {
-    mainRules: legacyPrompt || getContextCompressionPrompt(),
+    mainRules: legacyPrompt || (allowEmptyMainRules && hasExplicitMainRules ? "" : getContextCompressionPrompt()),
     models: models.length > 0
       ? models
       : allowEmptyModels
@@ -1870,7 +1924,7 @@ function normalizeCompressionProfileConfig(input = {}, index = 0, fallbackContex
   const contextCompression = normalizeContextCompressionPromptConfig(
     source.contextCompression || source.compression || fallbackContextCompression,
     fallbackContextCompression?.mainRules || getContextCompressionPrompt(),
-    { allowEmptyModels: !isStandard }
+    { allowEmptyModels: !isStandard, allowEmptyMainRules: !isStandard }
   );
   const triggerActions = normalizeCompressionTriggerActionsConfig(
     source.triggerActions || source.actions || source.triggerRules || [],
@@ -1956,10 +2010,18 @@ function normalizeModularPromptConfig(input, mode = "single") {
   );
   const standardProfile = compressionProfiles.find((profile) => profile.id === STANDARD_COMPRESSION_PROFILE_ID) ||
     createStandardCompressionProfile(contextCompression);
+  const legacyDialogueContextRounds = source.dialogueContextRounds ??
+    source.reasonerHistory?.dialogueContextRounds ??
+    source.contextRounds ??
+    source.reasonerHistory?.contextRounds;
   return {
     version: 2,
     mode: normalizedMode,
     name: safeText(source.name || source.title || source.displayName) || defaults.name,
+    dialogueContextRounds: normalizeDialogueContextRounds(
+      legacyDialogueContextRounds,
+      defaults.dialogueContextRounds
+    ),
     contextCompression: standardProfile.contextCompression,
     contextCompressionPrompt: standardProfile.contextCompression.mainRules,
     compressionProfiles,
@@ -2778,7 +2840,7 @@ function getRecentDialogueContextMessages(
   const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
 
   // Keep the context-round limit strict when the user sets it to a very small
-  // number. Otherwise "補開場對話" makes DEEPSEEK_DIALOGUE_CONTEXT_ROUNDS=1 look
+  // number. Otherwise "補開場對話" makes the context-round setting look
   // ineffective in AI logs, because the opening line gets appended back in.
   if (normalizedMaxRounds <= 1) {
     if (contextMessages.length === 0 && leadingAssistantMessages.length > 0) {
@@ -2843,10 +2905,14 @@ function getAllConversationContextMessages(currentState, latestUserMessageId = "
 }
 
 function getDialogueContextRounds(currentState = null) {
-  if (currentState?.conversationSettings) {
-    return normalizeConversationSettings(currentState.conversationSettings).dialogueContextRounds;
+  const activeConfig = currentState ? getActiveModularPromptConfig(currentState) : null;
+  if (activeConfig) {
+    return normalizeDialogueContextRounds(
+      activeConfig.dialogueContextRounds,
+      normalizeConversationSettings(currentState?.conversationSettings).dialogueContextRounds
+    );
   }
-  return envNumber("DEEPSEEK_DIALOGUE_CONTEXT_ROUNDS", DEFAULT_DIALOGUE_CONTEXT_ROUNDS);
+  return envFirstNumber(["CHAT_DIALOGUE_CONTEXT_ROUNDS", "DEEPSEEK_DIALOGUE_CONTEXT_ROUNDS"], DEFAULT_DIALOGUE_CONTEXT_ROUNDS);
 }
 
 function buildCharacterCardCreationAssistantSystemPrompt(state, runtimeUserName = "") {
@@ -2979,10 +3045,11 @@ function resolveContextCompressionPromptConfig(currentState = state, config = nu
     (activeConfig.id || activeConfig.triggers || activeConfig.locked !== undefined) &&
     activeConfig.contextCompression;
   if (isProfileConfig) {
+    const isStandardProfile = normalizeCompressionProfileId(activeConfig.id) === STANDARD_COMPRESSION_PROFILE_ID;
     return normalizeContextCompressionPromptConfig(
       activeConfig.contextCompression,
       getContextCompressionPrompt(),
-      { allowEmptyModels: normalizeCompressionProfileId(activeConfig.id) !== STANDARD_COMPRESSION_PROFILE_ID }
+      { allowEmptyModels: !isStandardProfile, allowEmptyMainRules: !isStandardProfile }
     );
   }
 
@@ -2997,10 +3064,15 @@ function resolveContextCompressionPromptConfig(currentState = state, config = nu
 
 function buildContextCompressionInstructionPrompt(currentState = state, config = null) {
   const compressionConfig = resolveContextCompressionPromptConfig(currentState, config);
+  const isCustomProfileConfig = config &&
+    typeof config === "object" &&
+    config.contextCompression &&
+    normalizeCompressionProfileId(config.id) !== STANDARD_COMPRESSION_PROFILE_ID;
+  const mainRules = compressionConfig.mainRules || (isCustomProfileConfig ? "" : getContextCompressionPrompt());
   if (compressionConfig.models.length === 0) {
     return [
       "【模型主要規則】",
-      compressionConfig.mainRules || getContextCompressionPrompt(),
+      mainRules,
       "【輸出規則】",
       "直接輸出更新後的完整壓縮文本，禁止輸出 JSON。",
       "請把目前模型內容與本次上下文合併成可供正文長期承接的純文本。",
@@ -3023,7 +3095,7 @@ function buildContextCompressionInstructionPrompt(currentState = state, config =
   };
   return [
     "【模型主要規則】",
-    compressionConfig.mainRules || getContextCompressionPrompt(),
+    mainRules,
     "【模塊規則】",
     modelRules,
     "【輸出規則】",
@@ -3159,7 +3231,10 @@ function formatCompressionProfileSummaryForReasoner(profile, profileState, curre
   const compressionConfig = normalizeContextCompressionPromptConfig(
     profile.contextCompression,
     getContextCompressionPrompt(),
-    { allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID }
+    {
+      allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID,
+      allowEmptyMainRules: profile.id !== STANDARD_COMPRESSION_PROFILE_ID
+    }
   );
   if (compressionConfig.models.length === 0) {
     return [
@@ -3253,7 +3328,7 @@ function formatModelProcessingCompletionMessage(processedActions = []) {
       .map((item) => safeText(item.profileName) || safeText(item.actionName))
       .filter(Boolean)
   )];
-  return `${(names.length > 0 ? names : ["模型"]).join("、")}完成處理`;
+  return `{${(names.length > 0 ? names : ["大模型"]).join("、")}}已經完成call api`;
 }
 
 function setLastModelProcessingResult(currentState, result = {}) {
@@ -3687,10 +3762,13 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
       const activeCompressionConfig = normalizeContextCompressionPromptConfig(
         profile.contextCompression,
         getContextCompressionPrompt(),
-        { allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID }
+        {
+          allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID,
+          allowEmptyMainRules: profile.id !== STANDARD_COMPRESSION_PROFILE_ID
+        }
       );
       options.onStatus?.("compression");
-      const completion = await callDeepSeekCompletionRaw({
+      const completion = await callChatApiCompletionRaw({
         messages: [
           {
             role: "user",
@@ -3991,40 +4069,173 @@ function buildCharacterCardCreationAssistantMessages(state, runtimeUserName = ""
   );
 }
 
-function getDeepSeekModel(purpose = "chat") {
+function normalizeChatApiProvider(value = "") {
+  const normalized = safeText(value).toLowerCase().replace(/[-\s]+/g, "_");
+  if (["deepseek", "openai", "gemini", "custom"].includes(normalized)) {
+    return normalized;
+  }
+  return DEFAULT_CHAT_API_PROVIDER;
+}
+
+function getChatApiProvider() {
+  return normalizeChatApiProvider(envFirstText(["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER));
+}
+
+function getDefaultChatApiBaseUrl(provider = getChatApiProvider()) {
+  const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openai") {
+    return "https://api.openai.com/v1";
+  }
+  if (normalizedProvider === "gemini") {
+    return "https://generativelanguage.googleapis.com/v1beta/openai";
+  }
+  if (normalizedProvider === "custom") {
+    return "";
+  }
+  return "https://api.deepseek.com";
+}
+
+function getChatApiBaseUrl() {
+  const provider = getChatApiProvider();
+  return envFirstText(
+    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL"],
+    getDefaultChatApiBaseUrl(provider)
+  );
+}
+
+function getChatApiCompletionsUrlFromBaseUrl(baseUrl = "") {
+  const normalizedBaseUrl = safeText(baseUrl).replace(/\/+$/u, "");
+  if (!normalizedBaseUrl) {
+    return "";
+  }
+  if (/\/chat\/completions$/u.test(normalizedBaseUrl)) {
+    return normalizedBaseUrl;
+  }
+  return `${normalizedBaseUrl}/chat/completions`;
+}
+
+function getChatApiCompletionsUrl() {
+  return getChatApiCompletionsUrlFromBaseUrl(getChatApiBaseUrl());
+}
+
+function isContextCompressionPurpose(purpose = "") {
+  return safeText(purpose).startsWith("context_compression");
+}
+
+function getPrimaryChatApiKey() {
+  const provider = getChatApiProvider();
+  const providerKeys = provider === "openai"
+    ? ["OPENAI_API_KEY"]
+    : provider === "gemini"
+      ? ["GEMINI_API_KEY"]
+      : provider === "deepseek"
+        ? ["DEEPSEEK_API_KEY"]
+        : [];
+  return envFirstText([
+    "CHAT_API_KEY",
+    "CONVERSATION_API_KEY",
+    ...providerKeys,
+    "DEEPSEEK_API_KEY"
+  ]);
+}
+
+function getChatApiProcessingKeyEntries(envSource = process.env) {
+  const source = envSource && typeof envSource === "object" ? envSource : {};
+  const entries = Object.entries(source)
+    .map(([key, value]) => {
+      const match = key.match(/^CHAT_API_KEY([2-9]\d*)$/u);
+      if (!match) {
+        return null;
+      }
+      const index = Number(match[1]);
+      const text = safeText(value);
+      return Number.isFinite(index) && index >= 2 && text ? { index, value: text } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.index - b.index);
+
+  if (!entries.some((entry) => entry.index === 2)) {
+    const legacyKey2 = envObjectFirstText(source, [
+      "CONVERSATION_API_KEY2",
+      "DEEPSEEK_API_KEY2",
+      "DEEPSEEK_KEY2",
+      "deepseek_key2"
+    ]);
+    if (legacyKey2) {
+      entries.unshift({ index: 2, value: legacyKey2 });
+    }
+  }
+
+  return entries;
+}
+
+function getContextCompressionProfileIdFromPurpose(purpose = "") {
+  const normalizedPurpose = safeText(purpose);
+  if (!isContextCompressionPurpose(normalizedPurpose)) {
+    return "";
+  }
+  const [, profileId = ""] = normalizedPurpose.split(":");
+  return profileId ? normalizeCompressionProfileId(profileId) : STANDARD_COMPRESSION_PROFILE_ID;
+}
+
+function getContextCompressionProfileOrderIndex(purpose = "", currentState = state) {
+  const profileId = getContextCompressionProfileIdFromPurpose(purpose);
+  if (!profileId) {
+    return 0;
+  }
+  const profiles = getEnabledCompressionProfiles(currentState);
+  const index = profiles.findIndex((profile) => normalizeCompressionProfileId(profile.id) === profileId);
+  return index >= 0 ? index : 0;
+}
+
+function getContextCompressionChatApiKey(purpose = "context_compression") {
+  const processingKeys = getChatApiProcessingKeyEntries(process.env);
+  if (processingKeys.length === 0) {
+    return getPrimaryChatApiKey();
+  }
+  const profileIndex = getContextCompressionProfileOrderIndex(purpose);
+  const keyIndex = Math.min(profileIndex, processingKeys.length - 1);
+  return processingKeys[keyIndex]?.value || getPrimaryChatApiKey();
+}
+
+function getChatApiModel(purpose = "chat") {
   const settings = normalizeConversationSettings(state?.conversationSettings);
-  if (
-    purpose === "reasoner_history_chat" ||
-    purpose === "context_compression" ||
-    purpose === "chat_expand" ||
-    purpose === "character_card_creation_assistant_chat"
-  ) {
-    return settings.chatOutputModel;
-  }
-  return DEFAULT_DEEPSEEK_MODEL;
+  return envFirstText(
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
+    settings.chatOutputModel || DEFAULT_CHAT_API_MODEL
+  );
 }
 
-function getDeepSeekApiKey(purpose = "chat") {
-  if (purpose === "context_compression") {
-    return safeText(process.env.deepseek_key2) ||
-      safeText(process.env.DEEPSEEK_KEY2) ||
-      safeText(process.env.DEEPSEEK_API_KEY2) ||
-      safeText(process.env.DEEPSEEK_API_KEY);
+function getChatApiKey(purpose = "chat") {
+  if (isContextCompressionPurpose(purpose)) {
+    return getContextCompressionChatApiKey(purpose);
   }
-  return safeText(process.env.DEEPSEEK_API_KEY);
+  return getPrimaryChatApiKey();
 }
 
-function getDeepSeekTemperature(purpose = "chat", temperature = null) {
+function getChatApiTemperature(purpose = "chat", temperature = null) {
   if (purpose === "character_card_creation_assistant_chat") {
     return CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE;
   }
   if (Number.isFinite(temperature)) {
     return temperature;
   }
-  return DEEPSEEK_TEMPERATURE;
+  const envTemperature = Number(process.env.CHAT_API_TEMPERATURE || process.env.CONVERSATION_API_TEMPERATURE || "");
+  return Number.isFinite(envTemperature) ? envTemperature : CHAT_API_TEMPERATURE;
 }
 
-function getDeepSeekMaxTokensCap(model = "") {
+function getChatApiRequestTimeoutMs() {
+  return envFirstNumber(
+    ["CHAT_API_REQUEST_TIMEOUT_MS", "CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
+    600000
+  );
+}
+
+function getChatApiMaxTokensCap(model = "") {
+  const configuredCap = envFirstNumber(["CHAT_API_MODEL_TOKEN_CAP", "CONVERSATION_API_MODEL_TOKEN_CAP"], 0);
+  if (configuredCap > 0) {
+    return configuredCap;
+  }
   const normalizedModel = safeText(model).toLowerCase();
   if (normalizedModel === "deepseek-chat") {
     return 8192;
@@ -4032,7 +4243,7 @@ function getDeepSeekMaxTokensCap(model = "") {
   return 64000;
 }
 
-function shouldRetryDeepSeekLength(purpose = "chat") {
+function shouldRetryChatApiLength(purpose = "chat") {
   return (
     purpose === "reasoner_history_chat" ||
     purpose === "chat_expand" ||
@@ -4040,7 +4251,7 @@ function shouldRetryDeepSeekLength(purpose = "chat") {
   );
 }
 
-function buildDeepSeekLengthRetryMessages(messages, partialContent = "") {
+function buildChatApiLengthRetryMessages(messages, partialContent = "") {
   const partial = safeText(partialContent).trim();
   if (partial) {
     return [
@@ -4068,15 +4279,15 @@ function buildDeepSeekLengthRetryMessages(messages, partialContent = "") {
   ];
 }
 
-function resolveDeepSeekMaxTokens({ purpose = "reasoner_history_chat", maxTokens, model = "" } = {}) {
-  const resolvedModel = safeText(model) || getDeepSeekModel(purpose);
-  const modelCap = getDeepSeekMaxTokensCap(resolvedModel);
+function resolveChatApiMaxTokens({ purpose = "reasoner_history_chat", maxTokens, model = "" } = {}) {
+  const resolvedModel = safeText(model) || getChatApiModel(purpose);
+  const modelCap = getChatApiMaxTokensCap(resolvedModel);
 
   if (Number.isFinite(maxTokens) && maxTokens > 0) {
     return Math.min(Math.floor(maxTokens), modelCap);
   }
 
-  const envMaxTokens = Number(process.env.DEEPSEEK_MAX_TOKENS || "");
+  const envMaxTokens = Number(process.env.CHAT_API_MAX_TOKENS || process.env.CONVERSATION_API_MAX_TOKENS || process.env.DEEPSEEK_MAX_TOKENS || "");
   const preferredEnvMaxTokens = envMaxTokens;
   if (
     Number.isFinite(preferredEnvMaxTokens) &&
@@ -4102,7 +4313,7 @@ function resolveDeepSeekMaxTokens({ purpose = "reasoner_history_chat", maxTokens
   return Math.min(700, modelCap);
 }
 
-function extractDeepSeekMessageText(content) {
+function extractChatApiMessageText(content) {
   if (typeof content === "string") {
     return content;
   }
@@ -4126,7 +4337,7 @@ function extractDeepSeekMessageText(content) {
   return "";
 }
 
-function createTimeoutController(timeoutMs = DEEPSEEK_REQUEST_TIMEOUT_MS) {
+function createTimeoutController(timeoutMs = getChatApiRequestTimeoutMs()) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
   return { controller, timeout };
@@ -4134,7 +4345,7 @@ function createTimeoutController(timeoutMs = DEEPSEEK_REQUEST_TIMEOUT_MS) {
 
 function formatFetchErrorMessage(error) {
   if (error?.name === "AbortError") {
-    return `請求逾時（${Math.round(DEEPSEEK_REQUEST_TIMEOUT_MS / 1000)}秒未回應）`;
+    return `請求逾時（${Math.round(getChatApiRequestTimeoutMs() / 1000)}秒未回應）`;
   }
   return safeText(error?.message) || "請求在回傳完成前中斷";
 }
@@ -4357,7 +4568,7 @@ async function ensureMinimumAssistantLength(state, assistantText, runtimeUserNam
     console.warn(`回覆字數不足 ${minimum} 字，開始第 ${attempt + 1} 次補寫。`);
 
     try {
-      const continuation = await callDeepSeekCompletion({
+      const continuation = await callChatApiCompletion({
         messages: buildContinuationMessagesForMinimumLength(state, output, runtimeUserName),
         purpose: "chat_expand"
       });
@@ -4380,7 +4591,228 @@ async function ensureMinimumAssistantLength(state, assistantText, runtimeUserNam
   return output;
 }
 
-async function callDeepSeekCompletionRaw({
+function getMissingChatApiKeyPlaceholder(purpose = "chat") {
+  if (isContextCompressionPurpose(purpose) && !getPrimaryChatApiKey()) {
+    return "尚未設定 CHAT_API_KEY / 對話 API Key，這是本地回覆佔位訊息。";
+  }
+  return "尚未設定 CHAT_API_KEY / 對話 API Key，這是本地回覆佔位訊息。";
+}
+
+function getChatApiMaxTokensParamName() {
+  return normalizeChatApiMaxTokensParamName(
+    envFirstText(["CHAT_API_MAX_TOKENS_PARAM", "CONVERSATION_API_MAX_TOKENS_PARAM"], "max_tokens")
+  );
+}
+
+function normalizeChatApiMaxTokensParamName(value = "") {
+  return value === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens";
+}
+
+function buildChatApiRequestBody({
+  model,
+  temperature,
+  maxTokens,
+  messages,
+  stream = false,
+  responseFormat = null,
+  maxTokensParamName = getChatApiMaxTokensParamName()
+}) {
+  const requestBody = {
+    model,
+    temperature,
+    messages
+  };
+  requestBody[normalizeChatApiMaxTokensParamName(maxTokensParamName)] = maxTokens;
+  if (stream) {
+    requestBody.stream = true;
+    requestBody.stream_options = {
+      include_usage: true
+    };
+  }
+  if (responseFormat && typeof responseFormat === "object") {
+    requestBody.response_format = responseFormat;
+  }
+  return requestBody;
+}
+
+function getChatApiProviderKeyAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
+  const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openai") {
+    return ["OPENAI_API_KEY"];
+  }
+  if (normalizedProvider === "gemini") {
+    return ["GEMINI_API_KEY"];
+  }
+  if (normalizedProvider === "deepseek") {
+    return ["DEEPSEEK_API_KEY"];
+  }
+  return [];
+}
+
+function resolveChatApiTestConfig(envSource = {}) {
+  const provider = normalizeChatApiProvider(
+    envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
+  );
+  const baseUrl = envObjectFirstText(
+    envSource,
+    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL"],
+    getDefaultChatApiBaseUrl(provider)
+  );
+  const apiKey = envObjectFirstText(
+    envSource,
+    [
+      "CHAT_API_KEY",
+      "CONVERSATION_API_KEY",
+      ...getChatApiProviderKeyAliases(provider),
+      "DEEPSEEK_API_KEY"
+    ]
+  );
+  const model = envObjectFirstText(
+    envSource,
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
+    DEFAULT_CHAT_API_MODEL
+  );
+  const requestTimeoutMs = Math.min(
+    envObjectFirstNumber(
+      envSource,
+      ["CHAT_API_TEST_TIMEOUT_MS", "CHAT_API_REQUEST_TIMEOUT_MS", "CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
+      30000
+    ),
+    30000
+  );
+  const maxTokensParamName = normalizeChatApiMaxTokensParamName(
+    envObjectFirstText(envSource, ["CHAT_API_MAX_TOKENS_PARAM", "CONVERSATION_API_MAX_TOKENS_PARAM"], "max_tokens")
+  );
+  return {
+    provider,
+    apiKey,
+    baseUrl,
+    completionsUrl: getChatApiCompletionsUrlFromBaseUrl(baseUrl),
+    model,
+    requestTimeoutMs,
+    maxTokensParamName
+  };
+}
+
+async function testChatApiConnection(envSource = {}) {
+  const startedAt = Date.now();
+  const config = resolveChatApiTestConfig(envSource);
+  const publicConfig = {
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    model: config.model,
+    maxTokensParam: config.maxTokensParamName
+  };
+
+  if (!config.apiKey) {
+    return {
+      ok: false,
+      message: "連接失敗：未設定對話 API Key。",
+      ...publicConfig
+    };
+  }
+
+  if (!config.completionsUrl) {
+    return {
+      ok: false,
+      message: "連接失敗：Base URL 未設定。custom 供應商必須填 CHAT_API_BASE_URL。",
+      ...publicConfig
+    };
+  }
+
+  const requestBody = buildChatApiRequestBody({
+    model: config.model,
+    temperature: 0,
+    maxTokens: 8,
+    maxTokensParamName: config.maxTokensParamName,
+    messages: [
+      {
+        role: "user",
+        content: "Connection test. Reply with OK."
+      }
+    ]
+  });
+
+  let response;
+  const { controller, timeout } = createTimeoutController(config.requestTimeoutMs);
+  try {
+    response = await fetch(config.completionsUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      signal: controller.signal,
+      body: JSON.stringify(requestBody)
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+    return {
+      ok: false,
+      message: `連接失敗：${formatFetchErrorMessage(error)}`,
+      durationMs: Date.now() - startedAt,
+      ...publicConfig
+    };
+  }
+
+  let text = "";
+  try {
+    text = await response.text();
+  } catch (error) {
+    clearTimeout(timeout);
+    return {
+      ok: false,
+      message: `連接失敗：回應讀取失敗：${formatFetchErrorMessage(error)}`,
+      durationMs: Date.now() - startedAt,
+      ...publicConfig
+    };
+  }
+  clearTimeout(timeout);
+
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const errorText = safeText(payload?.error?.message || text).replace(/\s+/g, " ");
+    return {
+      ok: false,
+      message: `連接失敗：HTTP ${response.status}${errorText ? ` ${errorText.slice(0, 220)}` : ""}`,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ...publicConfig
+    };
+  }
+
+  const content = extractChatApiMessageText(payload?.choices?.[0]?.message?.content).trim();
+  const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
+  if (!content && !finishReason) {
+    return {
+      ok: false,
+      message: "連接失敗：API 回應格式不完整。",
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      responsePreview: safeText(text).slice(0, 220),
+      ...publicConfig
+    };
+  }
+
+  return {
+    ok: true,
+    message: `連接成功（${Date.now() - startedAt}ms）。`,
+    status: response.status,
+    durationMs: Date.now() - startedAt,
+    responsePreview: content.slice(0, 80),
+    finishReason,
+    usage: normalizeAiUsage(payload?.usage),
+    ...publicConfig
+  };
+}
+
+async function callChatApiCompletionRaw({
   messages,
   temperature = null,
   maxTokens,
@@ -4388,16 +4820,13 @@ async function callDeepSeekCompletionRaw({
   retryCount = 0,
   responseFormat = null
 }) {
-  const apiKey = getDeepSeekApiKey(purpose);
-  const baseUrl = safeText(process.env.DEEPSEEK_BASE_URL) || "https://api.deepseek.com";
-  const model = getDeepSeekModel(purpose);
-  const resolvedTemperature = getDeepSeekTemperature(purpose, temperature);
-  const resolvedMaxTokens = resolveDeepSeekMaxTokens({ purpose, maxTokens, model });
+  const apiKey = getChatApiKey(purpose);
+  const model = getChatApiModel(purpose);
+  const resolvedTemperature = getChatApiTemperature(purpose, temperature);
+  const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
   const requestMessages = cloneData(messages, []);
   if (!apiKey) {
-    const placeholder = purpose === "context_compression" && !safeText(process.env.DEEPSEEK_API_KEY)
-      ? "尚未設定 DEEPSEEK_API_KEY 或 deepseek_key2，這是本地回覆佔位訊息。"
-      : "尚未設定 DEEPSEEK_API_KEY，這是本地回覆佔位訊息。";
+    const placeholder = getMissingChatApiKeyPlaceholder(purpose);
     appendAiLog({
       purpose,
       model,
@@ -4418,19 +4847,34 @@ async function callDeepSeekCompletionRaw({
     };
   }
 
-  const requestBody = {
+  const completionsUrl = getChatApiCompletionsUrl();
+  if (!completionsUrl) {
+    const errorMessage = "對話 API Base URL 未設定。使用 custom 供應商時請設定 CHAT_API_BASE_URL。";
+    appendAiLog({
+      purpose,
+      model,
+      temperature: resolvedTemperature,
+      maxTokens: resolvedMaxTokens,
+      requestMessages,
+      responseText: "",
+      error: errorMessage,
+      status: "error",
+      createdAt: nowIso()
+    });
+    throw new Error(errorMessage);
+  }
+
+  const requestBody = buildChatApiRequestBody({
     model,
     temperature: resolvedTemperature,
-    max_tokens: resolvedMaxTokens,
-    messages
-  };
-  if (responseFormat && typeof responseFormat === "object") {
-    requestBody.response_format = responseFormat;
-  }
+    maxTokens: resolvedMaxTokens,
+    messages,
+    responseFormat
+  });
   let response;
   const { controller, timeout } = createTimeoutController();
   try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
+    response = await fetch(completionsUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -4449,11 +4893,11 @@ async function callDeepSeekCompletionRaw({
       maxTokens: resolvedMaxTokens,
       requestMessages,
       responseText: "",
-      error: `DeepSeek API 請求失敗: ${message}`,
+      error: `對話 API 請求失敗: ${message}`,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(`DeepSeek API 請求失敗: ${message}`);
+    throw new Error(`對話 API 請求失敗: ${message}`);
   }
 
   if (!response.ok) {
@@ -4470,11 +4914,11 @@ async function callDeepSeekCompletionRaw({
         maxTokens: resolvedMaxTokens,
         requestMessages,
         responseText: "",
-        error: `DeepSeek API 錯誤回應讀取失敗: ${message}`,
+        error: `對話 API 錯誤回應讀取失敗: ${message}`,
         status: "error",
         createdAt: nowIso()
       });
-      throw new Error(`DeepSeek API 錯誤回應讀取失敗: ${message}`);
+      throw new Error(`對話 API 錯誤回應讀取失敗: ${message}`);
     }
     clearTimeout(timeout);
     appendAiLog({
@@ -4484,11 +4928,11 @@ async function callDeepSeekCompletionRaw({
       maxTokens: resolvedMaxTokens,
       requestMessages,
       responseText: text,
-      error: `DeepSeek API 失敗: ${response.status} ${text}`,
+      error: `對話 API 失敗: ${response.status} ${text}`,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(`DeepSeek API 失敗: ${response.status} ${text}`);
+    throw new Error(`對話 API 失敗: ${response.status} ${text}`);
   }
 
   let payload;
@@ -4506,25 +4950,25 @@ async function callDeepSeekCompletionRaw({
       maxTokens: resolvedMaxTokens,
       requestMessages,
       responseText: "",
-      error: `DeepSeek API 回應解析失敗: ${message}`,
+      error: `對話 API 回應解析失敗: ${message}`,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(`DeepSeek API 回應解析失敗: ${message}`);
+    throw new Error(`對話 API 回應解析失敗: ${message}`);
   }
   clearTimeout(timeout);
   const message = payload?.choices?.[0]?.message || {};
   const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
-  const content = extractDeepSeekMessageText(message.content);
-  const reasoningContent = extractDeepSeekMessageText(message.reasoning_content);
+  const content = extractChatApiMessageText(message.content);
+  const reasoningContent = extractChatApiMessageText(message.reasoning_content);
   const trimmed = safeText(content).trim();
   const trimmedReasoning = safeText(reasoningContent).trim();
   const usage = normalizeAiUsage(payload?.usage);
 
   if (
     finishReason === "length" &&
-    shouldRetryDeepSeekLength(purpose) &&
-    retryCount < DEEPSEEK_LENGTH_RETRY_LIMIT
+    shouldRetryChatApiLength(purpose) &&
+    retryCount < CHAT_API_LENGTH_RETRY_LIMIT
   ) {
     appendAiLog({
       purpose,
@@ -4539,8 +4983,8 @@ async function callDeepSeekCompletionRaw({
       createdAt: nowIso()
     });
 
-    const next = await callDeepSeekCompletionRaw({
-      messages: buildDeepSeekLengthRetryMessages(messages, trimmed),
+    const next = await callChatApiCompletionRaw({
+      messages: buildChatApiLengthRetryMessages(messages, trimmed),
       temperature: resolvedTemperature,
       maxTokens: resolvedMaxTokens,
       purpose,
@@ -4556,8 +5000,8 @@ async function callDeepSeekCompletionRaw({
     };
   }
 
-  if (finishReason === "length" && shouldRetryDeepSeekLength(purpose)) {
-    const errorMessage = "DeepSeek 回覆因 finish_reason:length 截斷；重跑一次後仍未完成，已停止。";
+  if (finishReason === "length" && shouldRetryChatApiLength(purpose)) {
+    const errorMessage = "對話 API 回覆因 finish_reason:length 截斷；重跑一次後仍未完成，已停止。";
     appendAiLog({
       purpose,
       model,
@@ -4583,12 +5027,12 @@ async function callDeepSeekCompletionRaw({
       requestMessages,
       responseText: JSON.stringify(payload),
       usage,
-      error: `DeepSeek API 回傳格式不完整${finishReason ? `（finish_reason: ${finishReason}）` : ""}`,
+      error: `對話 API 回傳格式不完整${finishReason ? `（finish_reason: ${finishReason}）` : ""}`,
       status: "error",
       createdAt: nowIso()
     });
     throw new Error(
-      `DeepSeek API 回傳格式不完整${finishReason ? `（finish_reason: ${finishReason}）` : ""}`
+      `對話 API 回傳格式不完整${finishReason ? `（finish_reason: ${finishReason}）` : ""}`
     );
   }
   appendAiLog({
@@ -4613,14 +5057,14 @@ async function callDeepSeekCompletionRaw({
   };
 }
 
-async function readDeepSeekStreamBody(response, handlers = {}) {
+async function readChatApiStreamBody(response, handlers = {}) {
   const onReasoningDelta = typeof handlers.onReasoningDelta === "function" ? handlers.onReasoningDelta : null;
   const onContentDelta = typeof handlers.onContentDelta === "function" ? handlers.onContentDelta : null;
   const decoder = new TextDecoder("utf-8");
   const reader = response.body?.getReader?.();
 
   if (!reader) {
-    throw new Error("DeepSeek 串流回應不可讀取");
+    throw new Error("對話 API 串流回應不可讀取");
   }
 
   let buffer = "";
@@ -4654,8 +5098,8 @@ async function readDeepSeekStreamBody(response, handlers = {}) {
 
     const choice = payload?.choices?.[0] || {};
     const delta = choice?.delta || {};
-    const reasoningDelta = extractDeepSeekMessageText(delta.reasoning_content);
-    const contentDelta = extractDeepSeekMessageText(delta.content);
+    const reasoningDelta = extractChatApiMessageText(delta.reasoning_content);
+    const contentDelta = extractChatApiMessageText(delta.content);
     const nextFinishReason = safeText(choice?.finish_reason);
     if (payload?.usage && hasUsageTokens(payload.usage)) {
       usage = normalizeAiUsage(payload.usage);
@@ -4702,7 +5146,7 @@ async function readDeepSeekStreamBody(response, handlers = {}) {
   };
 }
 
-async function callDeepSeekCompletionStreamRaw({
+async function callChatApiCompletionStreamRaw({
   messages,
   temperature = null,
   maxTokens,
@@ -4712,17 +5156,14 @@ async function callDeepSeekCompletionStreamRaw({
   onReasoningDelta,
   onContentDelta
 }) {
-  const apiKey = getDeepSeekApiKey(purpose);
-  const baseUrl = safeText(process.env.DEEPSEEK_BASE_URL) || "https://api.deepseek.com";
-  const model = getDeepSeekModel(purpose);
-  const resolvedTemperature = getDeepSeekTemperature(purpose, temperature);
-  const resolvedMaxTokens = resolveDeepSeekMaxTokens({ purpose, maxTokens, model });
+  const apiKey = getChatApiKey(purpose);
+  const model = getChatApiModel(purpose);
+  const resolvedTemperature = getChatApiTemperature(purpose, temperature);
+  const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
   const requestMessages = cloneData(messages, []);
 
   if (!apiKey) {
-    const placeholder = purpose === "context_compression" && !safeText(process.env.DEEPSEEK_API_KEY)
-      ? "尚未設定 DEEPSEEK_API_KEY 或 deepseek_key2，這是本地回覆佔位訊息。"
-      : "尚未設定 DEEPSEEK_API_KEY，這是本地回覆佔位訊息。";
+    const placeholder = getMissingChatApiKeyPlaceholder(purpose);
     onContentDelta?.(placeholder);
     if (!suppressLog) {
       appendAiLog({
@@ -4746,21 +5187,37 @@ async function callDeepSeekCompletionStreamRaw({
     };
   }
 
-  const requestBody = {
+  const completionsUrl = getChatApiCompletionsUrl();
+  if (!completionsUrl) {
+    const errorMessage = "對話 API Base URL 未設定。使用 custom 供應商時請設定 CHAT_API_BASE_URL。";
+    if (!suppressLog) {
+      appendAiLog({
+        purpose,
+        model,
+        temperature: resolvedTemperature,
+        maxTokens: resolvedMaxTokens,
+        requestMessages,
+        responseText: "",
+        error: errorMessage,
+        status: "error",
+        createdAt: nowIso()
+      });
+    }
+    throw new Error(errorMessage);
+  }
+
+  const requestBody = buildChatApiRequestBody({
     model,
     temperature: resolvedTemperature,
-    max_tokens: resolvedMaxTokens,
+    maxTokens: resolvedMaxTokens,
     messages,
-    stream: true,
-    stream_options: {
-      include_usage: true
-    }
-  };
+    stream: true
+  });
 
   let response;
   const { controller, timeout } = createTimeoutController();
   try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
+    response = await fetch(completionsUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -4781,12 +5238,12 @@ async function callDeepSeekCompletionStreamRaw({
         requestMessages,
         responseText: "",
         usage: null,
-        error: `DeepSeek API 請求失敗: ${message}`,
+        error: `對話 API 請求失敗: ${message}`,
         status: "error",
         createdAt: nowIso()
       });
     }
-    throw new Error(`DeepSeek API 請求失敗: ${message}`);
+    throw new Error(`對話 API 請求失敗: ${message}`);
   }
 
   if (!response.ok) {
@@ -4805,12 +5262,12 @@ async function callDeepSeekCompletionStreamRaw({
           requestMessages,
           responseText: "",
           usage: null,
-          error: `DeepSeek API 錯誤回應讀取失敗: ${message}`,
+          error: `對話 API 錯誤回應讀取失敗: ${message}`,
           status: "error",
           createdAt: nowIso()
         });
       }
-      throw new Error(`DeepSeek API 錯誤回應讀取失敗: ${message}`);
+      throw new Error(`對話 API 錯誤回應讀取失敗: ${message}`);
     }
     clearTimeout(timeout);
     if (!suppressLog) {
@@ -4822,17 +5279,17 @@ async function callDeepSeekCompletionStreamRaw({
         requestMessages,
         responseText: text,
         usage: null,
-        error: `DeepSeek API 失敗: ${response.status} ${text}`,
+        error: `對話 API 失敗: ${response.status} ${text}`,
         status: "error",
         createdAt: nowIso()
       });
     }
-    throw new Error(`DeepSeek API 失敗: ${response.status} ${text}`);
+    throw new Error(`對話 API 失敗: ${response.status} ${text}`);
   }
 
   let streamed;
   try {
-    streamed = await readDeepSeekStreamBody(response, {
+    streamed = await readChatApiStreamBody(response, {
       onReasoningDelta,
       onContentDelta
     });
@@ -4848,24 +5305,24 @@ async function callDeepSeekCompletionStreamRaw({
         requestMessages,
         responseText: "",
         usage: null,
-        error: `DeepSeek 串流讀取失敗: ${message}`,
+        error: `對話 API 串流讀取失敗: ${message}`,
         status: "error",
         createdAt: nowIso()
       });
     }
-    throw new Error(`DeepSeek 串流讀取失敗: ${message}`);
+    throw new Error(`對話 API 串流讀取失敗: ${message}`);
   }
   clearTimeout(timeout);
 
   if (
     streamed.finishReason === "length" &&
-    shouldRetryDeepSeekLength(purpose) &&
-    retryCount < DEEPSEEK_LENGTH_RETRY_LIMIT
+    shouldRetryChatApiLength(purpose) &&
+    retryCount < CHAT_API_LENGTH_RETRY_LIMIT
   ) {
     let next;
     try {
-      next = await callDeepSeekCompletionStreamRaw({
-        messages: buildDeepSeekLengthRetryMessages(messages, streamed.content),
+      next = await callChatApiCompletionStreamRaw({
+        messages: buildChatApiLengthRetryMessages(messages, streamed.content),
         temperature: resolvedTemperature,
         maxTokens: resolvedMaxTokens,
         purpose,
@@ -4920,8 +5377,8 @@ async function callDeepSeekCompletionStreamRaw({
     };
   }
 
-  if (streamed.finishReason === "length" && shouldRetryDeepSeekLength(purpose)) {
-    const errorMessage = "DeepSeek 回覆因 finish_reason:length 截斷；重跑一次後仍未完成，已停止。";
+  if (streamed.finishReason === "length" && shouldRetryChatApiLength(purpose)) {
+    const errorMessage = "對話 API 回覆因 finish_reason:length 截斷；重跑一次後仍未完成，已停止。";
     if (!suppressLog) {
       appendAiLog({
         purpose,
@@ -4950,13 +5407,13 @@ async function callDeepSeekCompletionStreamRaw({
         requestMessages,
         responseText: "",
         usage: streamed.usage || null,
-        error: `DeepSeek API 回傳格式不完整${streamed.finishReason ? `（finish_reason: ${streamed.finishReason}）` : ""}`,
+        error: `對話 API 回傳格式不完整${streamed.finishReason ? `（finish_reason: ${streamed.finishReason}）` : ""}`,
         status: "error",
         createdAt: nowIso()
       });
     }
     throw new Error(
-      `DeepSeek API 回傳格式不完整${streamed.finishReason ? `（finish_reason: ${streamed.finishReason}）` : ""}`
+      `對話 API 回傳格式不完整${streamed.finishReason ? `（finish_reason: ${streamed.finishReason}）` : ""}`
     );
   }
 
@@ -4984,20 +5441,20 @@ async function callDeepSeekCompletionStreamRaw({
   };
 }
 
-async function callDeepSeekCompletion(options) {
-  const result = await callDeepSeekCompletionRaw(options);
+async function callChatApiCompletion(options) {
+  const result = await callChatApiCompletionRaw(options);
   return result.content;
 }
 
-async function callDeepSeekReasonerHistory(state, runtimeUserName = "", options = {}) {
-  return callDeepSeekCompletion({
+async function callChatApiReasonerHistory(state, runtimeUserName = "", options = {}) {
+  return callChatApiCompletion({
     messages: buildReasonerHistoryMessages(state, runtimeUserName, options),
     purpose: "reasoner_history_chat"
   });
 }
 
-async function callDeepSeekCharacterCardCreationAssistant(state, runtimeUserName = "", options = {}) {
-  return callDeepSeekCompletion({
+async function callChatApiCharacterCardCreationAssistant(state, runtimeUserName = "", options = {}) {
+  return callChatApiCompletion({
     messages: buildCharacterCardCreationAssistantMessages(state, runtimeUserName, options),
     purpose: "character_card_creation_assistant_chat"
   });
@@ -5012,14 +5469,14 @@ async function runAdvancedConversationTurnParallel(state, runtimeUserName = "", 
   if (processingResult.skipReasoner) {
     return formatModelProcessingCompletionMessage(processingResult.processedActions);
   }
-  return callDeepSeekReasonerHistory(state, runtimeUserName, options)
+  return callChatApiReasonerHistory(state, runtimeUserName, options)
     .catch((error) => `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`);
 }
 
 async function runReasonerHistoryConversationTurn(state, runtimeUserName = "", options = {}) {
   if (isCharacterCardCreationAssistantActive(state)) {
     try {
-      return await callDeepSeekCharacterCardCreationAssistant(state, runtimeUserName, options);
+      return await callChatApiCharacterCardCreationAssistant(state, runtimeUserName, options);
     } catch (error) {
       return `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`;
     }
@@ -5046,7 +5503,7 @@ async function ensureMinimumAssistantLengthStreaming(
       break;
     }
 
-    const continuation = await callDeepSeekCompletionStreamRaw({
+    const continuation = await callChatApiCompletionStreamRaw({
       messages: buildContinuationMessagesForMinimumLength(state, output, runtimeUserName),
       purpose: "chat_expand",
       onReasoningDelta: (chunk) => {
@@ -5108,7 +5565,7 @@ async function runConversationTurnStreaming({
     let compressionNotice = false;
     if (isCharacterCardCreationAssistantActive(state)) {
       onPhaseStatus?.("chat");
-      streamed = await callDeepSeekCompletionStreamRaw({
+      streamed = await callChatApiCompletionStreamRaw({
         messages: buildCharacterCardCreationAssistantMessages(state, runtimeUserName),
         purpose: "character_card_creation_assistant_chat",
         onReasoningDelta,
@@ -5131,7 +5588,7 @@ async function runConversationTurnStreaming({
         };
       } else {
         onPhaseStatus?.("chat");
-        streamed = await callDeepSeekCompletionStreamRaw({
+        streamed = await callChatApiCompletionStreamRaw({
           messages: buildReasonerHistoryMessages(state, runtimeUserName),
           purpose: "reasoner_history_chat",
           onReasoningDelta,
@@ -5208,6 +5665,12 @@ function statePayload(state) {
     characterCardCreationAssistantPrompt: getCharacterCardCreationAssistantPrompt(),
     savedSessionsMeta: listSavedSessionSummaries(state),
     uiActions: createUiActions(state),
+    chatApi: {
+      provider: getChatApiProvider(),
+      baseUrl: getChatApiBaseUrl(),
+      model: getChatApiModel("reasoner_history_chat"),
+      maxTokensParam: getChatApiMaxTokensParamName()
+    },
     discord: {
       enabled: Boolean(DISCORD_BOT_TOKEN),
       connected: discordConnected,
@@ -5786,7 +6249,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/env" && method === "GET") {
       sendJson(res, 200, {
         content: readEnvFileContent(),
-        restartHint: "DeepSeek API key 等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
+        restartHint: "對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
       });
       return;
     }
@@ -5796,8 +6259,18 @@ const server = http.createServer(async (req, res) => {
       const content = saveEnvFileContent(body?.content);
       sendJson(res, 200, {
         content,
-        restartHint: "已保存 .env。DeepSeek API key 等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
+        restartHint: "已保存 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
       });
+      return;
+    }
+
+    if (pathname === "/api/chat-api/test" && method === "POST") {
+      const body = await readBody(req);
+      const envSource = body?.env && typeof body.env === "object"
+        ? body.env
+        : parseEnvContent(body?.content || "");
+      const result = await testChatApiConnection(envSource);
+      sendJson(res, 200, result);
       return;
     }
 
@@ -6680,7 +7153,7 @@ async function replyDiscordStatus(message) {
 }
 
 function buildDiscordStatusText() {
-  const testModels = normalizeConversationSettings(state.conversationSettings);
+  const activeConfig = getActiveModularPromptConfig(state);
   const playerState = normalizeDiscordPlayerState(state.discordPlayers);
   const playerLines = Object.entries(playerState.assignments)
     .map(([userId, slot]) => `${slot}: <@${userId}>`);
@@ -6690,7 +7163,7 @@ function buildDiscordStatusText() {
     "玩家座位: /player_set number:2 或在啟用頻道輸入 /player_set 2",
     `AI狀態: ${state.aiSessionStarted ? "已開始" : "未開始"}`,
     `自動對話頻道: ${state.lastDiscordChannelId ? `<#${state.lastDiscordChannelId}>` : "未指定"}`,
-    `對話設定: 正式模式（正文輸出=${testModels.chatOutputModel}｜正文上下文=${testModels.dialogueContextRounds}｜模型內容=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
+    `對話設定: 正式模式（API輸出模型=${getChatApiModel("reasoner_history_chat")}｜目前模式上下文=${normalizeDialogueContextRounds(activeConfig?.dialogueContextRounds)} 輪｜模型內容=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
     `目前模式: ${getCurrentConversationTargetLabel(state)}`,
     `待播開場: ${state.pendingOpeningBroadcast ? "是" : "否"}`,
     `玩家分配: ${playerLines.length > 0 ? playerLines.join("｜") : "尚未分配"}`,
