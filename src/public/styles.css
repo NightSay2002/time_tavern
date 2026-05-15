@@ -517,6 +517,29 @@ button {
   line-height: 1.45;
 }
 
+.time-tracking-section {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.time-tracking-section h4 {
+  margin: 0;
+}
+
+.time-tracking-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.time-tracking-grid textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
 .role-card {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
@@ -1793,6 +1816,10 @@ button {
   }
 
   .mode-editor-row {
+    grid-template-columns: 1fr;
+  }
+
+  .time-tracking-grid {
     grid-template-columns: 1fr;
   }
 

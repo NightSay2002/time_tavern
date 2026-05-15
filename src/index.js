@@ -36,6 +36,21 @@ const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
 const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const KEYWORD_PROXIMITY_CHARS = 10;
+const TIME_PERIOD_MORNING = "morning";
+const TIME_PERIOD_NOON = "noon";
+const TIME_PERIOD_EVENING = "evening";
+const TIME_PERIOD_LABELS = {
+  [TIME_PERIOD_MORNING]: "早上",
+  [TIME_PERIOD_NOON]: "中午",
+  [TIME_PERIOD_EVENING]: "晚上"
+};
+const DEFAULT_TIME_TRACKING_CONFIG = {
+  nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
+  connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
+  morningWords: ["早上", "早晨", "清晨", "早餐", "早飯", "早饭", "上午", "天亮"],
+  noonWords: ["中午", "下午", "午餐", "午飯", "午饭", "正午"],
+  eveningWords: ["晚上", "夜晚", "晚餐", "晚飯", "晚饭", "傍晚", "深夜", "夜裡", "夜里"]
+};
 
 function envText(key, fallback) {
   const raw = process.env[key];
@@ -276,6 +291,8 @@ let contextCompressionPrompt = envTextOrFile(
     defaultFilePath: CONTEXT_COMPRESSION_PROMPT_FILE
   }
 );
+const GENERATION_STOPPED_MESSAGE = "已停止正在生成的對話。";
+let activeGenerationRequest = null;
 
 const DISCORD_SLASH_COMMANDS = [
   {
@@ -303,6 +320,10 @@ const DISCORD_SLASH_COMMANDS = [
   {
     name: "ai_status",
     description: "查看目前 AI 對話狀態"
+  },
+  {
+    name: "stop",
+    description: "停止目前正在生成的 AI 回覆"
   },
   {
     name: "player_set",
@@ -431,6 +452,42 @@ function createDefaultDiscordPlayerState(channelId = "") {
   };
 }
 
+function getMonthDayCount(month) {
+  const normalizedMonth = Math.floor(Number(month));
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(normalizedMonth)) {
+    return 31;
+  }
+  return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][normalizedMonth - 1];
+}
+
+function isValidMonthDate(month, date) {
+  const normalizedMonth = Math.floor(Number(month));
+  const normalizedDate = Math.floor(Number(date));
+  return normalizedMonth >= 1 &&
+    normalizedMonth <= 12 &&
+    normalizedDate >= 1 &&
+    normalizedDate <= getMonthDayCount(normalizedMonth);
+}
+
+function createRandomValidMonthDate() {
+  const month = Math.floor(Math.random() * 12) + 1;
+  const date = Math.floor(Math.random() * getMonthDayCount(month)) + 1;
+  return { month, date };
+}
+
+function createDefaultTimeTrackingState() {
+  const { month, date } = createRandomValidMonthDate();
+  return {
+    enabled: true,
+    currentDayNumber: 1,
+    currentPeriod: TIME_PERIOD_MORNING,
+    currentMonth: month,
+    currentDate: date,
+    config: cloneData(DEFAULT_TIME_TRACKING_CONFIG, DEFAULT_TIME_TRACKING_CONFIG),
+    updatedAt: nowIso()
+  };
+}
+
 function createDefaultState() {
   return {
     userProfile: {
@@ -451,6 +508,7 @@ function createDefaultState() {
     lastDiscordChannelId: "",
     discordPlayers: createDefaultDiscordPlayerState(),
     turnState: createDefaultTurnState(),
+    timeTracking: createDefaultTimeTrackingState(),
     conversation: [],
     aiLogs: [],
     savedSessions: [],
@@ -472,6 +530,91 @@ function normalizeConversationSettings(input) {
       Number.isFinite(dialogueContextRounds) && dialogueContextRounds > 0
         ? Math.floor(dialogueContextRounds)
         : DEFAULT_DIALOGUE_CONTEXT_ROUNDS
+  };
+}
+
+function normalizeTimeTrackingWordList(value, fallback = []) {
+  const source = Array.isArray(value)
+    ? value
+    : safeText(value).split(/[\n,，、;；|/／]+/u);
+  const fallbackList = Array.isArray(fallback) ? fallback : [];
+  const seen = new Set();
+  const words = source
+    .map((item) => safeText(item))
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.normalize("NFKC").toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  return words.length > 0 ? words : [...fallbackList];
+}
+
+function normalizeTimePeriod(value = TIME_PERIOD_MORNING) {
+  const normalized = safeText(value).toLowerCase();
+  if (normalized === TIME_PERIOD_MORNING || normalized === "早" || normalized === "早上" || normalized === "morning") {
+    return TIME_PERIOD_MORNING;
+  }
+  if (normalized === TIME_PERIOD_NOON || normalized === "午" || normalized === "中午" || normalized === "noon" || normalized === "afternoon") {
+    return TIME_PERIOD_NOON;
+  }
+  if (normalized === TIME_PERIOD_EVENING || normalized === "晚" || normalized === "晚上" || normalized === "night" || normalized === "evening") {
+    return TIME_PERIOD_EVENING;
+  }
+  return TIME_PERIOD_MORNING;
+}
+
+function normalizeTimeTrackingConfig(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    nextDayWords: normalizeTimeTrackingWordList(
+      source.nextDayWords || source.dayWords || source.dayProgressWords,
+      DEFAULT_TIME_TRACKING_CONFIG.nextDayWords
+    ),
+    connectorWords: normalizeTimeTrackingWordList(
+      source.connectorWords || source.timeConnectorWords || source.matchWords,
+      DEFAULT_TIME_TRACKING_CONFIG.connectorWords
+    ),
+    morningWords: normalizeTimeTrackingWordList(
+      source.morningWords || source.earlyWords,
+      DEFAULT_TIME_TRACKING_CONFIG.morningWords
+    ),
+    noonWords: normalizeTimeTrackingWordList(
+      source.noonWords || source.afternoonWords,
+      DEFAULT_TIME_TRACKING_CONFIG.noonWords
+    ),
+    eveningWords: normalizeTimeTrackingWordList(
+      source.eveningWords || source.nightWords,
+      DEFAULT_TIME_TRACKING_CONFIG.eveningWords
+    )
+  };
+}
+
+function normalizeTimeTrackingState(input = {}) {
+  const defaults = createDefaultTimeTrackingState();
+  const source = input && typeof input === "object" ? input : {};
+  const currentDayNumber = Math.floor(Number(source.currentDayNumber ?? source.dayNumber ?? source.day));
+  const month = Math.floor(Number(source.currentMonth ?? source.month));
+  const date = Math.floor(Number(source.currentDate ?? source.date ?? source.dayOfMonth));
+  const fallbackMonth = isValidMonthDate(source.startMonth, source.startDate)
+    ? Math.floor(Number(source.startMonth))
+    : defaults.currentMonth;
+  const fallbackDate = isValidMonthDate(source.startMonth, source.startDate)
+    ? Math.floor(Number(source.startDate))
+    : defaults.currentDate;
+  const resolvedMonth = isValidMonthDate(month, date) ? month : fallbackMonth;
+  const resolvedDate = isValidMonthDate(month, date) ? date : fallbackDate;
+  return {
+    enabled: source.enabled !== false,
+    currentDayNumber: Number.isFinite(currentDayNumber) && currentDayNumber > 0 ? currentDayNumber : 1,
+    currentPeriod: normalizeTimePeriod(source.currentPeriod || source.period || source.timeOfDay),
+    currentMonth: resolvedMonth,
+    currentDate: resolvedDate,
+    config: normalizeTimeTrackingConfig(source.config || source.rules || source),
+    updatedAt: safeText(source.updatedAt) || defaults.updatedAt
   };
 }
 
@@ -584,12 +727,25 @@ function syncTurnStateFromConversation(currentState) {
   return currentState.turnState;
 }
 
+function resetTimeTrackingProgress(currentState) {
+  if (!currentState || typeof currentState !== "object") {
+    return;
+  }
+  const previousConfig = normalizeTimeTrackingState(currentState.timeTracking).config;
+  currentState.timeTracking = {
+    ...createDefaultTimeTrackingState(),
+    config: previousConfig,
+    updatedAt: nowIso()
+  };
+}
+
 function resetConversationProgress(currentState) {
   if (!currentState || typeof currentState !== "object") {
     return;
   }
   currentState.conversation = [];
   currentState.turnState = createDefaultTurnState();
+  resetTimeTrackingProgress(currentState);
 }
 
 function resetDiscordPlayerAssignments(currentState, channelId = "") {
@@ -770,6 +926,7 @@ function loadState() {
       activeAssistantMode: normalizeAssistantMode(parsed.activeAssistantMode),
       conversationSettings: normalizeConversationSettings(parsed.conversationSettings),
       contextCompression: normalizeContextCompressionState(parsed.contextCompression),
+      timeTracking: normalizeTimeTrackingState(parsed.timeTracking),
       aiSessionStarted: Boolean(parsed.aiSessionStarted),
       pendingOpeningBroadcast: Boolean(parsed.pendingOpeningBroadcast),
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
@@ -813,6 +970,7 @@ function loadState() {
 function saveState(state) {
   state.turnState = normalizeTurnState(state.turnState, state);
   state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
+  state.timeTracking = normalizeTimeTrackingState(state.timeTracking);
   state.activeSavedSessionId = null;
   state.updatedAt = nowIso();
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
@@ -879,6 +1037,7 @@ function captureRuntimeSnapshot(currentState) {
     activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
     conversationSettings: normalizeConversationSettings(currentState.conversationSettings),
     contextCompression: normalizeContextCompressionState(currentState.contextCompression),
+    timeTracking: normalizeTimeTrackingState(currentState.timeTracking),
     aiSessionStarted: Boolean(currentState.aiSessionStarted),
     pendingOpeningBroadcast: Boolean(currentState.pendingOpeningBroadcast),
     lastDiscordChannelId: safeText(currentState.lastDiscordChannelId),
@@ -895,6 +1054,7 @@ function captureNarrativeCheckpoint(currentState) {
     activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
     conversationSettings: normalizeConversationSettings(currentState.conversationSettings),
     contextCompression: normalizeContextCompressionState(currentState.contextCompression),
+    timeTracking: normalizeTimeTrackingState(currentState.timeTracking),
     roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState),
     turnState: normalizeTurnState(currentState.turnState, currentState)
   };
@@ -907,6 +1067,7 @@ function applyNarrativeCheckpoint(currentState, checkpoint) {
   delete currentState.conversationMode;
   currentState.conversationSettings = normalizeConversationSettings(source.conversationSettings);
   currentState.contextCompression = normalizeContextCompressionState(source.contextCompression);
+  currentState.timeTracking = normalizeTimeTrackingState(source.timeTracking);
   if (currentState.activeAssistantMode) {
     currentState.activeRoleCardId = null;
   }
@@ -972,6 +1133,7 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   delete currentState.conversationMode;
   currentState.conversationSettings = normalizeConversationSettings(source.conversationSettings);
   currentState.contextCompression = normalizeContextCompressionState(source.contextCompression);
+  currentState.timeTracking = normalizeTimeTrackingState(source.timeTracking);
   if (!currentState.roleCards.some((card) => card.id === currentState.activeRoleCardId)) {
     currentState.activeRoleCardId = null;
   }
@@ -2373,6 +2535,240 @@ function formatStructuredItemsForPrompt(items, maxItems = 10) {
   return normalized.slice(-Math.max(1, maxItems)).join("\n\n");
 }
 
+function normalizeTimeMatchText(text = "") {
+  return safeText(text).normalize("NFKC").toLowerCase();
+}
+
+function textIncludesAnyTimeTrackingWord(text = "", words = []) {
+  const normalizedText = normalizeTimeMatchText(text);
+  return (Array.isArray(words) ? words : [])
+    .map((word) => normalizeTimeMatchText(word))
+    .filter(Boolean)
+    .some((word) => normalizedText.includes(word));
+}
+
+function parseChineseSmallNumber(value = "") {
+  const raw = safeText(value).replace(/[兩两]/g, "二");
+  if (!raw) {
+    return null;
+  }
+  if (/^\d+$/u.test(raw)) {
+    return Math.max(0, Math.floor(Number(raw)));
+  }
+  const digits = {
+    零: 0,
+    一: 1,
+    二: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9
+  };
+  if (Object.prototype.hasOwnProperty.call(digits, raw)) {
+    return digits[raw];
+  }
+  const hundredParts = raw.split("百");
+  if (hundredParts.length === 2) {
+    const hundreds = hundredParts[0] ? parseChineseSmallNumber(hundredParts[0]) : 1;
+    const rest = hundredParts[1] ? parseChineseSmallNumber(hundredParts[1]) : 0;
+    return hundreds * 100 + rest;
+  }
+  const tenParts = raw.split("十");
+  if (tenParts.length === 2) {
+    const tens = tenParts[0] ? parseChineseSmallNumber(tenParts[0]) : 1;
+    const ones = tenParts[1] ? parseChineseSmallNumber(tenParts[1]) : 0;
+    return tens * 10 + ones;
+  }
+  return null;
+}
+
+function findExplicitDayNumber(text = "") {
+  const match = safeText(text).match(/第\s*(\d{1,4})\s*天/u);
+  if (!match) {
+    return null;
+  }
+  const dayNumber = Math.floor(Number(match[1]));
+  return Number.isFinite(dayNumber) && dayNumber > 0 ? dayNumber : null;
+}
+
+function findDayAfterIncrement(text = "") {
+  const matches = [...safeText(text).matchAll(/([0-9]+|[一二三四五六七八九十百兩两]+)\s*天\s*[後后]/gu)];
+  const values = matches
+    .map((match) => parseChineseSmallNumber(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return values.length > 0 ? Math.max(...values) : 0;
+}
+
+function findExplicitMonthDate(text = "") {
+  const matches = [...safeText(text).matchAll(/(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|號|号)/gu)];
+  for (const match of matches) {
+    const month = Math.floor(Number(match[1]));
+    const date = Math.floor(Number(match[2]));
+    if (isValidMonthDate(month, date)) {
+      return { month, date };
+    }
+  }
+  return null;
+}
+
+function addDaysToMonthDate(month, date, days = 0) {
+  let nextMonth = Math.floor(Number(month));
+  let nextDate = Math.floor(Number(date));
+  let remaining = Math.max(0, Math.floor(Number(days) || 0));
+  if (!isValidMonthDate(nextMonth, nextDate)) {
+    const randomDate = createRandomValidMonthDate();
+    nextMonth = randomDate.month;
+    nextDate = randomDate.date;
+  }
+  while (remaining > 0) {
+    nextDate += 1;
+    if (nextDate > getMonthDayCount(nextMonth)) {
+      nextDate = 1;
+      nextMonth = nextMonth >= 12 ? 1 : nextMonth + 1;
+    }
+    remaining -= 1;
+  }
+  return { month: nextMonth, date: nextDate };
+}
+
+function advanceTimeTrackingDays(timeTracking, days = 1) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const increment = Math.max(0, Math.floor(Number(days) || 0));
+  if (increment <= 0) {
+    return normalized;
+  }
+  const nextDate = addDaysToMonthDate(normalized.currentMonth, normalized.currentDate, increment);
+  return {
+    ...normalized,
+    currentDayNumber: normalized.currentDayNumber + increment,
+    currentMonth: nextDate.month,
+    currentDate: nextDate.date,
+    updatedAt: nowIso()
+  };
+}
+
+function setTimeTrackingDayNumber(timeTracking, dayNumber) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const nextDayNumber = Math.max(1, Math.floor(Number(dayNumber) || 1));
+  const dayDelta = nextDayNumber - normalized.currentDayNumber;
+  const nextDate = dayDelta >= 0
+    ? addDaysToMonthDate(normalized.currentMonth, normalized.currentDate, dayDelta)
+    : {
+        month: normalized.currentMonth,
+        date: normalized.currentDate
+      };
+  return {
+    ...normalized,
+    currentDayNumber: nextDayNumber,
+    currentMonth: nextDate.month,
+    currentDate: nextDate.date,
+    updatedAt: nowIso()
+  };
+}
+
+function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+  const normalizedText = normalizeTimeMatchText(text);
+  if (!normalizedText) {
+    return "";
+  }
+  const candidates = [
+    [TIME_PERIOD_MORNING, config.morningWords],
+    [TIME_PERIOD_NOON, config.noonWords],
+    [TIME_PERIOD_EVENING, config.eveningWords]
+  ].flatMap(([period, words]) =>
+    (Array.isArray(words) ? words : [])
+      .map((word) => {
+        const normalizedWord = normalizeTimeMatchText(word);
+        return normalizedWord
+          ? { period, index: normalizedText.lastIndexOf(normalizedWord) }
+          : null;
+      })
+      .filter((item) => item && item.index >= 0)
+  );
+  candidates.sort((left, right) => right.index - left.index);
+  return candidates[0]?.period || "";
+}
+
+function updateTimeTrackingFromText(currentState, text = "") {
+  if (!currentState || typeof currentState !== "object") {
+    return;
+  }
+  let timeTracking = normalizeTimeTrackingState(currentState.timeTracking);
+  if (!timeTracking.enabled) {
+    currentState.timeTracking = timeTracking;
+    return;
+  }
+  const content = safeText(text);
+  if (!content) {
+    currentState.timeTracking = timeTracking;
+    return;
+  }
+  const config = normalizeTimeTrackingConfig(timeTracking.config);
+  let dayChangedByText = false;
+
+  const explicitDate = findExplicitMonthDate(content);
+  if (explicitDate) {
+    timeTracking = {
+      ...timeTracking,
+      currentMonth: explicitDate.month,
+      currentDate: explicitDate.date,
+      updatedAt: nowIso()
+    };
+  }
+
+  const explicitDayNumber = findExplicitDayNumber(content);
+  if (explicitDayNumber) {
+    timeTracking = setTimeTrackingDayNumber(timeTracking, explicitDayNumber);
+    dayChangedByText = true;
+  } else {
+    const dayAfterIncrement = findDayAfterIncrement(content);
+    if (dayAfterIncrement > 0) {
+      timeTracking = advanceTimeTrackingDays(timeTracking, dayAfterIncrement);
+      dayChangedByText = true;
+    } else if (textIncludesAnyTimeTrackingWord(content, config.nextDayWords)) {
+      timeTracking = advanceTimeTrackingDays(timeTracking, 1);
+      dayChangedByText = true;
+    }
+  }
+
+  const detectedPeriod = detectTimePeriodFromText(content, config);
+  if (detectedPeriod) {
+    if (!dayChangedByText && timeTracking.currentPeriod === TIME_PERIOD_EVENING && detectedPeriod === TIME_PERIOD_MORNING) {
+      timeTracking = advanceTimeTrackingDays(timeTracking, 1);
+    }
+    timeTracking = {
+      ...timeTracking,
+      currentPeriod: detectedPeriod,
+      updatedAt: nowIso()
+    };
+  }
+
+  currentState.timeTracking = normalizeTimeTrackingState(timeTracking);
+}
+
+function updateTimeTrackingFromMessage(currentState, message = {}) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  updateTimeTrackingFromText(currentState, message.role === "user"
+    ? safeText(message.content || message.baseModelContent || message.extra?.baseModelContent)
+    : safeText(message.content));
+}
+
+function formatTimeTrackingPromptBlock(currentState = state) {
+  const timeTracking = normalizeTimeTrackingState(currentState?.timeTracking);
+  if (!timeTracking.enabled) {
+    return "";
+  }
+  const periodLabel = TIME_PERIOD_LABELS[timeTracking.currentPeriod] || TIME_PERIOD_LABELS[TIME_PERIOD_MORNING];
+  return [
+    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentMonth}月${timeTracking.currentDate}日`
+  ].join("\n");
+}
+
 function appendUserIdentityTextToContent(content = "", currentState = state) {
   const base = safeText(content);
   const userDisplayName = resolveUserDisplayName(currentState?.userProfile);
@@ -2393,6 +2789,10 @@ function appendTriggeredLorebooksToUserContent(content = "", currentState = stat
   const resolvedUserName = resolveUserDisplayName(currentState?.userProfile, runtimeUserName);
   const lorebooksBlock = formatTriggeredLorebooksForPrompt(currentState, activeRoleCard, resolvedUserName, "reasoner");
   return [base, lorebooksBlock].filter(Boolean).join("\n\n");
+}
+
+function appendTimeTrackingTextToContent(content = "", currentState = state) {
+  return [safeText(content), formatTimeTrackingPromptBlock(currentState)].filter(Boolean).join("\n\n");
 }
 
 function getUserMessageDiscordPlayerSlot(message = {}) {
@@ -2463,11 +2863,18 @@ function getUserBaseModelContent(message) {
 
 function getCurrentUserModelContent(message, currentState = state, runtimeUserName = "") {
   const storedModelContent = safeText(message?.modelContent || message?.extra?.modelContent);
+  if (message?.preparedModelContent === true && storedModelContent) {
+    return storedModelContent;
+  }
   if (storedModelContent.includes("【觸發世界書 Lorebooks】") || storedModelContent.includes("【使用者自訂補充】")) {
     return storedModelContent;
   }
   return appendUserIdentityTextToContent(
-    appendTriggeredLorebooksToUserContent(getUserBaseModelContent(message), currentState, runtimeUserName),
+    appendTriggeredLorebooksToUserContent(
+      appendTimeTrackingTextToContent(getUserBaseModelContent(message), currentState),
+      currentState,
+      runtimeUserName
+    ),
     currentState
   );
 }
@@ -2494,6 +2901,7 @@ function attachTriggeredLorebooksToUserMessage(message, currentState = state, ru
     [
       prependDiscordPlayerSlotToUserContent(baseModelContent, playerSlot),
       modelAppendTerms,
+      formatTimeTrackingPromptBlock(currentState),
       formatLorebookEntriesForPrompt(triggeredLorebooks)
     ].filter(Boolean).join("\n\n"),
     currentState
@@ -3854,7 +4262,7 @@ function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUs
     "【輸出規則】",
     finalizePromptTemplate(activeConfig.reasonerHistory.contextRules, { user: resolvedUserName }),
     "【處理要求】",
-    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
+    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、統計時間、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
   ].filter(Boolean).join("\n");
 }
 
@@ -4337,17 +4745,87 @@ function extractChatApiMessageText(content) {
   return "";
 }
 
-function createTimeoutController(timeoutMs = getChatApiRequestTimeoutMs()) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
-  return { controller, timeout };
+function createGenerationStoppedError() {
+  const error = new Error(GENERATION_STOPPED_MESSAGE);
+  error.name = "GenerationStoppedError";
+  error.code = "GENERATION_STOPPED";
+  return error;
 }
 
-function formatFetchErrorMessage(error) {
+function isGenerationStoppedError(error) {
+  return error?.code === "GENERATION_STOPPED" ||
+    error?.name === "GenerationStoppedError" ||
+    safeText(error?.message) === GENERATION_STOPPED_MESSAGE;
+}
+
+function registerActiveGenerationRequest(entry) {
+  activeGenerationRequest = entry;
+}
+
+function clearActiveGenerationRequest(entry) {
+  if (activeGenerationRequest === entry) {
+    activeGenerationRequest = null;
+  }
+}
+
+function requestStopActiveGeneration() {
+  if (!activeGenerationRequest || activeGenerationRequest.controller?.signal?.aborted) {
+    return false;
+  }
+  activeGenerationRequest.stoppedByUser = true;
+  activeGenerationRequest.controller.abort(createGenerationStoppedError());
+  return true;
+}
+
+function isActiveGenerationRunning() {
+  return Boolean(activeGenerationRequest && !activeGenerationRequest.controller?.signal?.aborted);
+}
+
+function createTimeoutController(timeoutMs = getChatApiRequestTimeoutMs(), options = {}) {
+  const controller = new AbortController();
+  const generationEntry = options.trackGeneration
+    ? {
+        controller,
+        purpose: safeText(options.purpose),
+        startedAt: nowIso(),
+        stoppedByUser: false,
+        timedOut: false
+      }
+    : null;
+  if (generationEntry) {
+    registerActiveGenerationRequest(generationEntry);
+  }
+  const timeout = setTimeout(() => {
+    if (generationEntry) {
+      generationEntry.timedOut = true;
+    }
+    controller.abort();
+  }, Math.max(1000, timeoutMs));
+  return {
+    controller,
+    timeout,
+    generationEntry,
+    cleanup: () => {
+      clearTimeout(timeout);
+      clearActiveGenerationRequest(generationEntry);
+    }
+  };
+}
+
+function formatFetchErrorMessage(error, generationEntry = null) {
+  if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+    return GENERATION_STOPPED_MESSAGE;
+  }
   if (error?.name === "AbortError") {
     return `請求逾時（${Math.round(getChatApiRequestTimeoutMs() / 1000)}秒未回應）`;
   }
   return safeText(error?.message) || "請求在回傳完成前中斷";
+}
+
+function throwIfGenerationStopped(generationEntry = null) {
+  if (generationEntry?.stoppedByUser) {
+    throw createGenerationStoppedError();
+  }
 }
 
 function appendReloadFeedbackMessage(messages, reloadFeedback = "") {
@@ -4872,7 +5350,10 @@ async function callChatApiCompletionRaw({
     responseFormat
   });
   let response;
-  const { controller, timeout } = createTimeoutController();
+  const { controller, generationEntry, cleanup } = createTimeoutController(undefined, {
+    trackGeneration: true,
+    purpose
+  });
   try {
     response = await fetch(completionsUrl, {
       method: "POST",
@@ -4884,8 +5365,11 @@ async function callChatApiCompletionRaw({
       body: JSON.stringify(requestBody)
     });
   } catch (error) {
-    clearTimeout(timeout);
-    const message = formatFetchErrorMessage(error);
+    cleanup();
+    const message = formatFetchErrorMessage(error, generationEntry);
+    if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+      throw createGenerationStoppedError();
+    }
     appendAiLog({
       purpose,
       model,
@@ -4905,8 +5389,11 @@ async function callChatApiCompletionRaw({
     try {
       text = await response.text();
     } catch (error) {
-      clearTimeout(timeout);
-      const message = formatFetchErrorMessage(error);
+      cleanup();
+      const message = formatFetchErrorMessage(error, generationEntry);
+      if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+        throw createGenerationStoppedError();
+      }
       appendAiLog({
         purpose,
         model,
@@ -4920,7 +5407,7 @@ async function callChatApiCompletionRaw({
       });
       throw new Error(`對話 API 錯誤回應讀取失敗: ${message}`);
     }
-    clearTimeout(timeout);
+    cleanup();
     appendAiLog({
       purpose,
       model,
@@ -4939,10 +5426,13 @@ async function callChatApiCompletionRaw({
   try {
     payload = await response.json();
   } catch (error) {
-    clearTimeout(timeout);
-    const message = error?.name === "AbortError"
-      ? formatFetchErrorMessage(error)
+    cleanup();
+    const message = error?.name === "AbortError" || isGenerationStoppedError(error)
+      ? formatFetchErrorMessage(error, generationEntry)
       : safeText(error?.message) || "JSON 解析失敗";
+    if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+      throw createGenerationStoppedError();
+    }
     appendAiLog({
       purpose,
       model,
@@ -4956,7 +5446,8 @@ async function callChatApiCompletionRaw({
     });
     throw new Error(`對話 API 回應解析失敗: ${message}`);
   }
-  clearTimeout(timeout);
+  cleanup();
+  throwIfGenerationStopped(generationEntry);
   const message = payload?.choices?.[0]?.message || {};
   const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
   const content = extractChatApiMessageText(message.content);
@@ -5215,7 +5706,10 @@ async function callChatApiCompletionStreamRaw({
   });
 
   let response;
-  const { controller, timeout } = createTimeoutController();
+  const { controller, generationEntry, cleanup } = createTimeoutController(undefined, {
+    trackGeneration: true,
+    purpose
+  });
   try {
     response = await fetch(completionsUrl, {
       method: "POST",
@@ -5227,8 +5721,11 @@ async function callChatApiCompletionStreamRaw({
       body: JSON.stringify(requestBody)
     });
   } catch (error) {
-    clearTimeout(timeout);
-    const message = formatFetchErrorMessage(error);
+    cleanup();
+    const message = formatFetchErrorMessage(error, generationEntry);
+    if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+      throw createGenerationStoppedError();
+    }
     if (!suppressLog) {
       appendAiLog({
         purpose,
@@ -5251,8 +5748,11 @@ async function callChatApiCompletionStreamRaw({
     try {
       text = await response.text();
     } catch (error) {
-      clearTimeout(timeout);
-      const message = formatFetchErrorMessage(error);
+      cleanup();
+      const message = formatFetchErrorMessage(error, generationEntry);
+      if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+        throw createGenerationStoppedError();
+      }
       if (!suppressLog) {
         appendAiLog({
           purpose,
@@ -5269,7 +5769,7 @@ async function callChatApiCompletionStreamRaw({
       }
       throw new Error(`對話 API 錯誤回應讀取失敗: ${message}`);
     }
-    clearTimeout(timeout);
+    cleanup();
     if (!suppressLog) {
       appendAiLog({
         purpose,
@@ -5294,8 +5794,11 @@ async function callChatApiCompletionStreamRaw({
       onContentDelta
     });
   } catch (error) {
-    clearTimeout(timeout);
-    const message = formatFetchErrorMessage(error);
+    cleanup();
+    const message = formatFetchErrorMessage(error, generationEntry);
+    if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+      throw createGenerationStoppedError();
+    }
     if (!suppressLog) {
       appendAiLog({
         purpose,
@@ -5312,7 +5815,8 @@ async function callChatApiCompletionStreamRaw({
     }
     throw new Error(`對話 API 串流讀取失敗: ${message}`);
   }
-  clearTimeout(timeout);
+  cleanup();
+  throwIfGenerationStopped(generationEntry);
 
   if (
     streamed.finishReason === "length" &&
@@ -5470,7 +5974,12 @@ async function runAdvancedConversationTurnParallel(state, runtimeUserName = "", 
     return formatModelProcessingCompletionMessage(processingResult.processedActions);
   }
   return callChatApiReasonerHistory(state, runtimeUserName, options)
-    .catch((error) => `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`);
+    .catch((error) => {
+      if (isGenerationStoppedError(error)) {
+        throw error;
+      }
+      return `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`;
+    });
 }
 
 async function runReasonerHistoryConversationTurn(state, runtimeUserName = "", options = {}) {
@@ -5478,6 +5987,9 @@ async function runReasonerHistoryConversationTurn(state, runtimeUserName = "", o
     try {
       return await callChatApiCharacterCardCreationAssistant(state, runtimeUserName, options);
     } catch (error) {
+      if (isGenerationStoppedError(error)) {
+        throw error;
+      }
       return `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`;
     }
   }
@@ -5557,6 +6069,7 @@ async function runConversationTurnStreaming({
       }
     });
     appendConversationMessage(userMessage);
+    updateTimeTrackingFromMessage(state, userMessage);
 
     const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
     attachTriggeredLorebooksToUserMessage(userMessage, state, runtimeUserName);
@@ -5617,6 +6130,7 @@ async function runConversationTurnStreaming({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
+    updateTimeTrackingFromText(state, assistantText);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -5729,7 +6243,19 @@ function scheduleServerRestart() {
 }
 
 function withStateLock(task) {
-  const chain = stateWriteQueue.then(task, task);
+  const runTask = async () => {
+    const snapshotBeforeTask = captureRuntimeSnapshot(state);
+    try {
+      return await task();
+    } catch (error) {
+      if (isGenerationStoppedError(error)) {
+        applyRuntimeSnapshot(state, snapshotBeforeTask);
+        saveState(state);
+      }
+      throw error;
+    }
+  };
+  const chain = stateWriteQueue.then(runTask, runTask);
   stateWriteQueue = chain.catch(() => {});
   return chain;
 }
@@ -5894,6 +6420,7 @@ async function regenerateLatestAssistantReply({
     const { latestUser, removedAssistant } = removeLatestAssistantTurnForReload(state);
     const latestUserIndex = state.conversation.findIndex((item) => item?.id === latestUser?.id);
     restoreNarrativeStateForReplay(state, latestUserIndex);
+    updateTimeTrackingFromMessage(state, latestUser);
     const runtimeUserName = resolveUserDisplayName(state.userProfile, extra.discordUserName || "");
     const options = { reloadFeedback };
     const compressionBefore = normalizeContextCompressionState(state.contextCompression);
@@ -5909,6 +6436,7 @@ async function regenerateLatestAssistantReply({
       userInput: latestUser?.content
     });
     assistantText = finalizedAssistantOutput.content;
+    updateTimeTrackingFromText(state, assistantText);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -5990,6 +6518,7 @@ async function replayConversationFromMessageNumber({
       }
     });
     appendConversationMessage(userMessage);
+    updateTimeTrackingFromMessage(state, userMessage);
     attachTriggeredLorebooksToUserMessage(
       userMessage,
       state,
@@ -6010,6 +6539,7 @@ async function replayConversationFromMessageNumber({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
+    updateTimeTrackingFromText(state, assistantText);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6094,6 +6624,7 @@ async function replayConversationFromDiscordMessageId({
       }
     });
     appendConversationMessage(userMessage);
+    updateTimeTrackingFromMessage(state, userMessage);
     attachTriggeredLorebooksToUserMessage(
       userMessage,
       state,
@@ -6113,6 +6644,7 @@ async function replayConversationFromDiscordMessageId({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
+    updateTimeTrackingFromText(state, assistantText);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6168,6 +6700,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
       }
     });
     appendConversationMessage(userMessage);
+    updateTimeTrackingFromMessage(state, userMessage);
 
     const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
     attachTriggeredLorebooksToUserMessage(userMessage, state, runtimeUserName);
@@ -6184,6 +6717,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
+    updateTimeTrackingFromText(state, assistantText);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6215,6 +6749,7 @@ function getDiscordGuidance() {
     authorizeUrl ? `新增 Bot：${authorizeUrl}` : "",
     "主對話：`/ai content:你的內容`，或 `/ai file:上傳txt檔`",
     "開始對話：`/ai_start`，之後該頻道可以直接輸入對話，不需要 `!ai`",
+    "停止生成：`/stop`，或在已啟用頻道輸入 `/stop`",
     "玩家座位：`/player_set number:2`，或在已啟用頻道輸入 `/player_set 2`",
     "查看狀態：`/ai_status`",
     "重跑最新回覆：`/reload feedback:不滿意或要改進的地方`",
@@ -6319,6 +6854,38 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         contextCompression: normalizeContextCompressionState(state.contextCompression),
         compressionProfiles: getEnabledCompressionProfiles(state),
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (pathname === "/api/time-tracking" && method === "GET") {
+      sendJson(res, 200, {
+        timeTracking: normalizeTimeTrackingState(state.timeTracking),
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (pathname === "/api/time-tracking" && method === "PUT") {
+      const body = await readBody(req);
+      const current = normalizeTimeTrackingState(state.timeTracking);
+      const rawMonth = body?.currentMonth ?? current.currentMonth;
+      const rawDate = body?.currentDate ?? current.currentDate;
+      const month = Math.floor(Number(rawMonth));
+      const date = Math.floor(Number(rawDate));
+      const dateFields = isValidMonthDate(month, date)
+        ? { currentMonth: month, currentDate: date }
+        : { currentMonth: current.currentMonth, currentDate: current.currentDate };
+      state.timeTracking = normalizeTimeTrackingState({
+        ...current,
+        ...body,
+        ...dateFields,
+        config: normalizeTimeTrackingConfig(body?.config || current.config)
+      });
+      saveState(state);
+      sendJson(res, 200, {
+        timeTracking: normalizeTimeTrackingState(state.timeTracking),
         state: statePayload(state)
       });
       return;
@@ -6769,6 +7336,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/chat/stop" && method === "POST") {
+      const stopped = requestStopActiveGeneration();
+      sendJson(res, 200, {
+        stopped,
+        message: stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"
+      });
+      return;
+    }
+
     if (pathname === "/api/chat/send-stream" && method === "POST") {
       sendJson(res, 403, { error: getDiscordGuidance() });
       return;
@@ -6794,7 +7370,7 @@ const server = http.createServer(async (req, res) => {
 
     sendJson(res, 404, { error: "Not Found" });
   } catch (error) {
-    sendJson(res, 500, { error: error.message || "伺服器錯誤" });
+    sendJson(res, isGenerationStoppedError(error) ? 499 : 500, { error: error.message || "伺服器錯誤" });
   }
 });
 
@@ -6811,6 +7387,11 @@ function shouldTreatAsHelpCommand(input) {
 function shouldTreatAsStatusCommand(input) {
   const normalized = safeText(input).toLowerCase();
   return normalized === "status" || normalized === "ai_status" || normalized === "狀態";
+}
+
+function shouldTreatAsStopCommand(input) {
+  const normalized = safeText(input).toLowerCase();
+  return normalized === "stop" || normalized === "停止" || normalized === "中止";
 }
 
 function parseDiscordTextInput(input, options = {}) {
@@ -6833,6 +7414,9 @@ function parseDiscordTextInput(input, options = {}) {
   }
   if (shouldTreatAsStatusCommand(keyword)) {
     return { type: "meta", command: "status", args };
+  }
+  if (shouldTreatAsStopCommand(keyword)) {
+    return { type: "meta", command: "stop", args };
   }
   if (shouldTreatAsStartCommand(keyword)) {
     return { type: "meta", command: "start", args };
@@ -7075,6 +7659,7 @@ async function consumePendingOpening(channelId, fallbackUserName = "") {
     if (!safeText(state.discordPlayers?.channelId)) {
       resetDiscordPlayerAssignments(state, channelId);
     }
+    updateTimeTrackingFromText(state, openingDialogue);
     appendConversationMessage(
       createMessageRecord({
         role: "assistant",
@@ -7122,6 +7707,7 @@ async function startSessionFromDiscord(channelId, userInfo) {
 
     const resolvedUserName = resolveUserDisplayName(state.userProfile, userInfo.userName);
     const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName);
+    updateTimeTrackingFromText(state, openingDialogue);
     appendConversationMessage(
       createMessageRecord({
         role: "assistant",
@@ -7162,6 +7748,7 @@ function buildDiscordStatusText() {
     "主對話指令: /ai_start 後，該頻道可直接輸入對話；也可用 /ai content:你的內容",
     "玩家座位: /player_set number:2 或在啟用頻道輸入 /player_set 2",
     `AI狀態: ${state.aiSessionStarted ? "已開始" : "未開始"}`,
+    `生成狀態: ${isActiveGenerationRunning() ? "生成中，可用 /stop 停止" : "閒置"}`,
     `自動對話頻道: ${state.lastDiscordChannelId ? `<#${state.lastDiscordChannelId}>` : "未指定"}`,
     `對話設定: 正式模式（API輸出模型=${getChatApiModel("reasoner_history_chat")}｜目前模式上下文=${normalizeDialogueContextRounds(activeConfig?.dialogueContextRounds)} 輪｜模型內容=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
     `目前模式: ${getCurrentConversationTargetLabel(state)}`,
@@ -7602,6 +8189,16 @@ async function handleSlashCommand(interaction) {
     return;
   }
 
+  if (name === "stop") {
+    const stopped = requestStopActiveGeneration();
+    await safeSendInteractionText(
+      interaction,
+      stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。",
+      { ephemeral: true }
+    );
+    return;
+  }
+
   if (name === "player_set") {
     const number = interaction.options.getInteger("number");
     const result = await setDiscordPlayerSlotFromCommand({
@@ -7880,6 +8477,12 @@ function setupDiscordBot() {
           return;
         }
 
+        if (parsedInput.command === "stop") {
+          const stopped = requestStopActiveGeneration();
+          await message.reply(stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。");
+          return;
+        }
+
         if (parsedInput.command === "start") {
           const result = await startSessionFromDiscord(message.channelId, {
             userId: message.author.id,
@@ -7934,6 +8537,10 @@ function setupDiscordBot() {
 
       await handleDiscordChat(message, parsedInput.content);
     } catch (error) {
+      if (isGenerationStoppedError(error)) {
+        await message.reply(GENERATION_STOPPED_MESSAGE);
+        return;
+      }
       await message.reply(`處理失敗：${error.message || "未知錯誤"}`);
     }
   });
@@ -7997,6 +8604,10 @@ function setupDiscordBot() {
         stopTyping();
       }
     } catch (error) {
+      if (isGenerationStoppedError(error)) {
+        await message.reply(GENERATION_STOPPED_MESSAGE);
+        return;
+      }
       await message.reply(`編輯後重算失敗：${error.message || "未知錯誤"}`);
     }
   });
@@ -8014,6 +8625,10 @@ function setupDiscordBot() {
     } catch (error) {
       if (isUnknownInteractionError(error)) {
         console.warn("Discord interaction 已過期，訊息無法送出。");
+        return;
+      }
+      if (isGenerationStoppedError(error)) {
+        await safeSendInteractionError(interaction, GENERATION_STOPPED_MESSAGE);
         return;
       }
       const content = `處理失敗：${error.message || "未知錯誤"}`;

@@ -17,6 +17,7 @@
 
   editAiOutputBtn: document.getElementById("editAiOutputBtn"),
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
+  timeTrackingSettingsBtn: document.getElementById("timeTrackingSettingsBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
   mobilePageChatBtn: document.getElementById("mobilePageChatBtn"),
   mobilePageControlsBtn: document.getElementById("mobilePageControlsBtn"),
@@ -82,6 +83,20 @@
   contextCompressionContentView: document.getElementById("contextCompressionContentView"),
   saveContextCompressionDialog: document.getElementById("saveContextCompressionDialog"),
   closeContextCompressionDialog: document.getElementById("closeContextCompressionDialog"),
+
+  timeTrackingDialog: document.getElementById("timeTrackingDialog"),
+  timeTrackingForm: document.getElementById("timeTrackingForm"),
+  timeTrackingMeta: document.getElementById("timeTrackingMeta"),
+  timeTrackingDayNumber: document.getElementById("timeTrackingDayNumber"),
+  timeTrackingMonth: document.getElementById("timeTrackingMonth"),
+  timeTrackingDate: document.getElementById("timeTrackingDate"),
+  timeTrackingPeriod: document.getElementById("timeTrackingPeriod"),
+  timeTrackingNextDayWords: document.getElementById("timeTrackingNextDayWords"),
+  timeTrackingConnectorWords: document.getElementById("timeTrackingConnectorWords"),
+  timeTrackingMorningWords: document.getElementById("timeTrackingMorningWords"),
+  timeTrackingNoonWords: document.getElementById("timeTrackingNoonWords"),
+  timeTrackingEveningWords: document.getElementById("timeTrackingEveningWords"),
+  closeTimeTrackingDialog: document.getElementById("closeTimeTrackingDialog"),
 
   envSettingsDialog: document.getElementById("envSettingsDialog"),
   envSettingsForm: document.getElementById("envSettingsForm"),
@@ -152,6 +167,11 @@ const STANDARD_COMPRESSION_PROFILE_ID = "standard";
 const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
 const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
+const TIME_PERIOD_LABELS = {
+  morning: "早上",
+  noon: "中午",
+  evening: "晚上"
+};
 const ENV_FIELD_GROUPS = [
   {
     title: "伺服器",
@@ -3459,6 +3479,98 @@ async function saveContextCompressionContent() {
   }
 }
 
+function normalizeTimeTrackingWordListForEditor(value = "") {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[\n,，、;；|/／]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getTimeTrackingDialogPayload() {
+  return {
+    enabled: true,
+    currentDayNumber: Math.max(1, Math.floor(Number(el.timeTrackingDayNumber?.value || 1))),
+    currentMonth: Math.max(1, Math.floor(Number(el.timeTrackingMonth?.value || 1))),
+    currentDate: Math.max(1, Math.floor(Number(el.timeTrackingDate?.value || 1))),
+    currentPeriod: el.timeTrackingPeriod?.value || "morning",
+    config: {
+      nextDayWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNextDayWords?.value || ""),
+      connectorWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingConnectorWords?.value || ""),
+      morningWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingMorningWords?.value || ""),
+      noonWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNoonWords?.value || ""),
+      eveningWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingEveningWords?.value || "")
+    }
+  };
+}
+
+function setTextareaWordList(field, words = []) {
+  if (!field) {
+    return;
+  }
+  field.value = (Array.isArray(words) ? words : []).join("\n");
+}
+
+function renderTimeTrackingDialog(timeTracking = {}) {
+  const config = timeTracking.config || {};
+  const period = TIME_PERIOD_LABELS[timeTracking.currentPeriod] ? timeTracking.currentPeriod : "morning";
+  if (el.timeTrackingMeta) {
+    el.timeTrackingMeta.textContent = [
+      `當前天數: 第${Number(timeTracking.currentDayNumber || 1)}天`,
+      `當前時間: ${TIME_PERIOD_LABELS[period]} ${Number(timeTracking.currentMonth || 1)}月${Number(timeTracking.currentDate || 1)}日`,
+      timeTracking.updatedAt ? `更新時間: ${new Date(timeTracking.updatedAt).toLocaleString("zh-Hant")}` : ""
+    ].filter(Boolean).join("｜");
+  }
+  if (el.timeTrackingDayNumber) {
+    el.timeTrackingDayNumber.value = Number(timeTracking.currentDayNumber || 1);
+  }
+  if (el.timeTrackingMonth) {
+    el.timeTrackingMonth.value = Number(timeTracking.currentMonth || 1);
+  }
+  if (el.timeTrackingDate) {
+    el.timeTrackingDate.value = Number(timeTracking.currentDate || 1);
+  }
+  if (el.timeTrackingPeriod) {
+    el.timeTrackingPeriod.value = period;
+  }
+  setTextareaWordList(el.timeTrackingNextDayWords, config.nextDayWords || []);
+  setTextareaWordList(el.timeTrackingConnectorWords, config.connectorWords || []);
+  setTextareaWordList(el.timeTrackingMorningWords, config.morningWords || []);
+  setTextareaWordList(el.timeTrackingNoonWords, config.noonWords || []);
+  setTextareaWordList(el.timeTrackingEveningWords, config.eveningWords || []);
+}
+
+async function openTimeTrackingDialog() {
+  try {
+    const payload = await request("/api/time-tracking", { method: "GET" });
+    if (payload?.state) {
+      appState = payload.state;
+    }
+    renderTimeTrackingDialog(payload?.timeTracking || appState?.timeTracking || {});
+    el.timeTrackingDialog?.showModal();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function saveTimeTrackingSettings() {
+  try {
+    const payload = await request("/api/time-tracking", {
+      method: "PUT",
+      body: JSON.stringify(getTimeTrackingDialogPayload())
+    });
+    if (payload?.state) {
+      appState = payload.state;
+    }
+    renderTimeTrackingDialog(payload?.timeTracking || appState?.timeTracking || {});
+    showToast("統計判斷已保存");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 async function openEnvSettingsDialog() {
   try {
     const payload = await request("/api/env", { method: "GET" });
@@ -4005,6 +4117,12 @@ function bindEvents() {
     });
   }
 
+  if (el.timeTrackingSettingsBtn) {
+    el.timeTrackingSettingsBtn.addEventListener("click", async () => {
+      await openTimeTrackingDialog();
+    });
+  }
+
   if (el.contextCompressionProfileSelect) {
     el.contextCompressionProfileSelect.addEventListener("change", () => {
       renderContextCompressionProfileView(el.contextCompressionProfileSelect.value);
@@ -4025,6 +4143,10 @@ function bindEvents() {
 
   if (el.closeContextCompressionDialog) {
     el.closeContextCompressionDialog.addEventListener("click", () => el.contextCompressionDialog.close());
+  }
+
+  if (el.closeTimeTrackingDialog) {
+    el.closeTimeTrackingDialog.addEventListener("click", () => el.timeTrackingDialog.close());
   }
 
   if (el.cancelEnvSettingsDialog) {
@@ -4088,6 +4210,13 @@ function bindEvents() {
     el.contextCompressionForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       await saveContextCompressionContent();
+    });
+  }
+
+  if (el.timeTrackingForm) {
+    el.timeTrackingForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveTimeTrackingSettings();
     });
   }
 

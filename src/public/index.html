@@ -70,6 +70,7 @@
           <h2>功能按鈕</h2>
           <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
           <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
+          <button id="timeTrackingSettingsBtn" type="button" class="secondary">統計判斷編輯</button>
           <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
         </div>
       </section>
@@ -234,6 +235,67 @@
         <div class="dialog-actions">
           <button type="submit" id="saveContextCompressionDialog">保存模型內容</button>
           <button type="button" id="closeContextCompressionDialog">關閉</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="timeTrackingDialog" class="dialog prompt-viewer-dialog">
+      <form id="timeTrackingForm" method="dialog" class="stack">
+        <h3>統計判斷編輯</h3>
+        <p id="timeTrackingMeta" class="form-hint">目前尚未開始對話。</p>
+        <section class="time-tracking-section stack">
+          <h4>天數</h4>
+          <div class="time-tracking-grid">
+            <label>
+              當前天數
+              <input id="timeTrackingDayNumber" type="number" min="1" step="1" />
+            </label>
+            <label>
+              月
+              <input id="timeTrackingMonth" type="number" min="1" max="12" step="1" />
+            </label>
+            <label>
+              日
+              <input id="timeTrackingDate" type="number" min="1" max="31" step="1" />
+            </label>
+          </div>
+          <label>
+            +1天關鍵字
+            <textarea id="timeTrackingNextDayWords" rows="4" placeholder="下一天&#10;第二天&#10;隔天"></textarea>
+          </label>
+        </section>
+        <section class="time-tracking-section stack">
+          <h4>時間</h4>
+          <label>
+            當前時間
+            <select id="timeTrackingPeriod">
+              <option value="morning">早上</option>
+              <option value="noon">中午</option>
+              <option value="evening">晚上</option>
+            </select>
+          </label>
+          <label>
+            配合詞
+            <textarea id="timeTrackingConnectorWords" rows="4" placeholder="來到&#10;已經&#10;現在"></textarea>
+          </label>
+          <div class="time-tracking-grid">
+            <label>
+              早上欄位
+              <textarea id="timeTrackingMorningWords" rows="5" placeholder="早上&#10;早晨&#10;早餐"></textarea>
+            </label>
+            <label>
+              中午欄位
+              <textarea id="timeTrackingNoonWords" rows="5" placeholder="中午&#10;下午&#10;午餐"></textarea>
+            </label>
+            <label>
+              晚上欄位
+              <textarea id="timeTrackingEveningWords" rows="5" placeholder="晚上&#10;夜晚&#10;晚餐"></textarea>
+            </label>
+          </div>
+        </section>
+        <div class="dialog-actions">
+          <button type="submit">保存統計判斷</button>
+          <button type="button" id="closeTimeTrackingDialog">關閉</button>
         </div>
       </form>
     </dialog>
