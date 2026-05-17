@@ -535,6 +535,10 @@ button {
   align-items: start;
 }
 
+.time-tracking-date-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .time-tracking-grid textarea {
   min-height: 120px;
   resize: vertical;

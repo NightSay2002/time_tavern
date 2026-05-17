@@ -245,10 +245,14 @@
         <p id="timeTrackingMeta" class="form-hint">目前尚未開始對話。</p>
         <section class="time-tracking-section stack">
           <h4>天數</h4>
-          <div class="time-tracking-grid">
+          <div class="time-tracking-grid time-tracking-date-grid">
             <label>
               當前天數
               <input id="timeTrackingDayNumber" type="number" min="1" step="1" />
+            </label>
+            <label>
+              年
+              <input id="timeTrackingYear" type="number" min="1" max="9999" step="1" />
             </label>
             <label>
               月
@@ -263,6 +267,9 @@
             +1天關鍵字
             <textarea id="timeTrackingNextDayWords" rows="4" placeholder="下一天&#10;第二天&#10;隔天"></textarea>
           </label>
+          <p class="form-hint">配合詞與 +1天關鍵字在 5 字內時，會自動 +1天。</p>
+          <p class="form-hint">配合詞與「3天後 / 三天後」在 5 字內時，會自動加對應天數。</p>
+          <p class="form-hint">配合詞與「第3天」在 5 字內時，會直接把天數改成第 3 天。</p>
         </section>
         <section class="time-tracking-section stack">
           <h4>時間</h4>
@@ -278,6 +285,11 @@
             配合詞
             <textarea id="timeTrackingConnectorWords" rows="4" placeholder="來到&#10;已經&#10;現在"></textarea>
           </label>
+          <label>
+            不改詞
+            <textarea id="timeTrackingNoChangeWords" rows="4" placeholder="等到&#10;等一下&#10;的時候"></textarea>
+          </label>
+          <p class="form-hint">不改詞與配合詞在 5 字內時，本次不會改天數，也不會改早中晚。</p>
           <div class="time-tracking-grid">
             <label>
               早上欄位

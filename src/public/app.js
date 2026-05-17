@@ -88,11 +88,13 @@
   timeTrackingForm: document.getElementById("timeTrackingForm"),
   timeTrackingMeta: document.getElementById("timeTrackingMeta"),
   timeTrackingDayNumber: document.getElementById("timeTrackingDayNumber"),
+  timeTrackingYear: document.getElementById("timeTrackingYear"),
   timeTrackingMonth: document.getElementById("timeTrackingMonth"),
   timeTrackingDate: document.getElementById("timeTrackingDate"),
   timeTrackingPeriod: document.getElementById("timeTrackingPeriod"),
   timeTrackingNextDayWords: document.getElementById("timeTrackingNextDayWords"),
   timeTrackingConnectorWords: document.getElementById("timeTrackingConnectorWords"),
+  timeTrackingNoChangeWords: document.getElementById("timeTrackingNoChangeWords"),
   timeTrackingMorningWords: document.getElementById("timeTrackingMorningWords"),
   timeTrackingNoonWords: document.getElementById("timeTrackingNoonWords"),
   timeTrackingEveningWords: document.getElementById("timeTrackingEveningWords"),
@@ -3493,12 +3495,14 @@ function getTimeTrackingDialogPayload() {
   return {
     enabled: true,
     currentDayNumber: Math.max(1, Math.floor(Number(el.timeTrackingDayNumber?.value || 1))),
+    currentYear: Math.max(1, Math.floor(Number(el.timeTrackingYear?.value || new Date().getFullYear()))),
     currentMonth: Math.max(1, Math.floor(Number(el.timeTrackingMonth?.value || 1))),
     currentDate: Math.max(1, Math.floor(Number(el.timeTrackingDate?.value || 1))),
     currentPeriod: el.timeTrackingPeriod?.value || "morning",
     config: {
       nextDayWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNextDayWords?.value || ""),
       connectorWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingConnectorWords?.value || ""),
+      noChangeWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNoChangeWords?.value || ""),
       morningWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingMorningWords?.value || ""),
       noonWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNoonWords?.value || ""),
       eveningWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingEveningWords?.value || "")
@@ -3519,12 +3523,15 @@ function renderTimeTrackingDialog(timeTracking = {}) {
   if (el.timeTrackingMeta) {
     el.timeTrackingMeta.textContent = [
       `當前天數: 第${Number(timeTracking.currentDayNumber || 1)}天`,
-      `當前時間: ${TIME_PERIOD_LABELS[period]} ${Number(timeTracking.currentMonth || 1)}月${Number(timeTracking.currentDate || 1)}日`,
+      `當前時間: ${TIME_PERIOD_LABELS[period]} ${Number(timeTracking.currentYear || new Date().getFullYear())}年${Number(timeTracking.currentMonth || 1)}月${Number(timeTracking.currentDate || 1)}日`,
       timeTracking.updatedAt ? `更新時間: ${new Date(timeTracking.updatedAt).toLocaleString("zh-Hant")}` : ""
     ].filter(Boolean).join("｜");
   }
   if (el.timeTrackingDayNumber) {
     el.timeTrackingDayNumber.value = Number(timeTracking.currentDayNumber || 1);
+  }
+  if (el.timeTrackingYear) {
+    el.timeTrackingYear.value = Number(timeTracking.currentYear || new Date().getFullYear());
   }
   if (el.timeTrackingMonth) {
     el.timeTrackingMonth.value = Number(timeTracking.currentMonth || 1);
@@ -3537,6 +3544,7 @@ function renderTimeTrackingDialog(timeTracking = {}) {
   }
   setTextareaWordList(el.timeTrackingNextDayWords, config.nextDayWords || []);
   setTextareaWordList(el.timeTrackingConnectorWords, config.connectorWords || []);
+  setTextareaWordList(el.timeTrackingNoChangeWords, config.noChangeWords || []);
   setTextareaWordList(el.timeTrackingMorningWords, config.morningWords || []);
   setTextareaWordList(el.timeTrackingNoonWords, config.noonWords || []);
   setTextareaWordList(el.timeTrackingEveningWords, config.eveningWords || []);

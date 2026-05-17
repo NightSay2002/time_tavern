@@ -36,6 +36,7 @@ const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
 const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const KEYWORD_PROXIMITY_CHARS = 10;
+const TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS = 5;
 const TIME_PERIOD_MORNING = "morning";
 const TIME_PERIOD_NOON = "noon";
 const TIME_PERIOD_EVENING = "evening";
@@ -47,6 +48,7 @@ const TIME_PERIOD_LABELS = {
 const DEFAULT_TIME_TRACKING_CONFIG = {
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
   connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
+  noChangeWords: ["等到", "等一下", "的時候", "的时候"],
   morningWords: ["早上", "早晨", "清晨", "早餐", "早飯", "早饭", "上午", "天亮"],
   noonWords: ["中午", "下午", "午餐", "午飯", "午饭", "正午"],
   eveningWords: ["晚上", "夜晚", "晚餐", "晚飯", "晚饭", "傍晚", "深夜", "夜裡", "夜里"]
@@ -452,35 +454,63 @@ function createDefaultDiscordPlayerState(channelId = "") {
   };
 }
 
-function getMonthDayCount(month) {
+function getCurrentCalendarYear() {
+  const year = new Date().getFullYear();
+  return Number.isFinite(year) && year > 0 ? year : 2026;
+}
+
+function isLeapYear(year = getCurrentCalendarYear()) {
+  const normalizedYear = Math.floor(Number(year));
+  return normalizedYear % 4 === 0 && (normalizedYear % 100 !== 0 || normalizedYear % 400 === 0);
+}
+
+function normalizeTimeTrackingYear(value, fallback = getCurrentCalendarYear()) {
+  const normalized = Math.floor(Number(value));
+  const fallbackYear = Math.floor(Number(fallback));
+  if (Number.isFinite(normalized) && normalized >= 1 && normalized <= 9999) {
+    return normalized;
+  }
+  return Number.isFinite(fallbackYear) && fallbackYear >= 1 && fallbackYear <= 9999
+    ? fallbackYear
+    : getCurrentCalendarYear();
+}
+
+function getMonthDayCount(month, year = getCurrentCalendarYear()) {
   const normalizedMonth = Math.floor(Number(month));
   if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(normalizedMonth)) {
     return 31;
   }
+  if (normalizedMonth === 2 && isLeapYear(year)) {
+    return 29;
+  }
   return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][normalizedMonth - 1];
 }
 
-function isValidMonthDate(month, date) {
+function isValidMonthDate(month, date, year = getCurrentCalendarYear()) {
   const normalizedMonth = Math.floor(Number(month));
   const normalizedDate = Math.floor(Number(date));
+  const normalizedYear = normalizeTimeTrackingYear(year);
   return normalizedMonth >= 1 &&
     normalizedMonth <= 12 &&
     normalizedDate >= 1 &&
-    normalizedDate <= getMonthDayCount(normalizedMonth);
+    normalizedDate <= getMonthDayCount(normalizedMonth, normalizedYear);
 }
 
-function createRandomValidMonthDate() {
+function createRandomValidMonthDate(year = getCurrentCalendarYear()) {
+  const normalizedYear = normalizeTimeTrackingYear(year);
   const month = Math.floor(Math.random() * 12) + 1;
-  const date = Math.floor(Math.random() * getMonthDayCount(month)) + 1;
+  const date = Math.floor(Math.random() * getMonthDayCount(month, normalizedYear)) + 1;
   return { month, date };
 }
 
 function createDefaultTimeTrackingState() {
-  const { month, date } = createRandomValidMonthDate();
+  const currentYear = getCurrentCalendarYear();
+  const { month, date } = createRandomValidMonthDate(currentYear);
   return {
     enabled: true,
     currentDayNumber: 1,
     currentPeriod: TIME_PERIOD_MORNING,
+    currentYear,
     currentMonth: month,
     currentDate: date,
     config: cloneData(DEFAULT_TIME_TRACKING_CONFIG, DEFAULT_TIME_TRACKING_CONFIG),
@@ -578,6 +608,10 @@ function normalizeTimeTrackingConfig(input = {}) {
       source.connectorWords || source.timeConnectorWords || source.matchWords,
       DEFAULT_TIME_TRACKING_CONFIG.connectorWords
     ),
+    noChangeWords: normalizeTimeTrackingWordList(
+      source.noChangeWords || source.blockWords || source.ignoreWords || source.preventWords,
+      DEFAULT_TIME_TRACKING_CONFIG.noChangeWords
+    ),
     morningWords: normalizeTimeTrackingWordList(
       source.morningWords || source.earlyWords,
       DEFAULT_TIME_TRACKING_CONFIG.morningWords
@@ -597,20 +631,22 @@ function normalizeTimeTrackingState(input = {}) {
   const defaults = createDefaultTimeTrackingState();
   const source = input && typeof input === "object" ? input : {};
   const currentDayNumber = Math.floor(Number(source.currentDayNumber ?? source.dayNumber ?? source.day));
+  const currentYear = normalizeTimeTrackingYear(source.currentYear ?? source.year, defaults.currentYear);
   const month = Math.floor(Number(source.currentMonth ?? source.month));
   const date = Math.floor(Number(source.currentDate ?? source.date ?? source.dayOfMonth));
-  const fallbackMonth = isValidMonthDate(source.startMonth, source.startDate)
+  const fallbackMonth = isValidMonthDate(source.startMonth, source.startDate, currentYear)
     ? Math.floor(Number(source.startMonth))
     : defaults.currentMonth;
-  const fallbackDate = isValidMonthDate(source.startMonth, source.startDate)
+  const fallbackDate = isValidMonthDate(source.startMonth, source.startDate, currentYear)
     ? Math.floor(Number(source.startDate))
     : defaults.currentDate;
-  const resolvedMonth = isValidMonthDate(month, date) ? month : fallbackMonth;
-  const resolvedDate = isValidMonthDate(month, date) ? date : fallbackDate;
+  const resolvedMonth = isValidMonthDate(month, date, currentYear) ? month : fallbackMonth;
+  const resolvedDate = isValidMonthDate(month, date, currentYear) ? date : fallbackDate;
   return {
     enabled: source.enabled !== false,
     currentDayNumber: Number.isFinite(currentDayNumber) && currentDayNumber > 0 ? currentDayNumber : 1,
     currentPeriod: normalizeTimePeriod(source.currentPeriod || source.period || source.timeOfDay),
+    currentYear,
     currentMonth: resolvedMonth,
     currentDate: resolvedDate,
     config: normalizeTimeTrackingConfig(source.config || source.rules || source),
@@ -2539,12 +2575,67 @@ function normalizeTimeMatchText(text = "") {
   return safeText(text).normalize("NFKC").toLowerCase();
 }
 
-function textIncludesAnyTimeTrackingWord(text = "", words = []) {
+function findTimeTrackingWordOccurrences(normalizedText = "", word = "") {
+  const normalizedWord = normalizeTimeMatchText(word);
+  const occurrences = [];
+  if (!normalizedText || !normalizedWord) {
+    return occurrences;
+  }
+  let index = normalizedText.indexOf(normalizedWord);
+  while (index >= 0) {
+    occurrences.push({
+      start: index,
+      end: index + normalizedWord.length
+    });
+    index = normalizedText.indexOf(normalizedWord, index + Math.max(1, normalizedWord.length));
+  }
+  return occurrences;
+}
+
+function getTimeTrackingRangeGap(left, right) {
+  if (!left || !right) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (left.end <= right.start) {
+    return right.start - left.end;
+  }
+  if (right.end <= left.start) {
+    return left.start - right.end;
+  }
+  return 0;
+}
+
+function getTimeTrackingConnectorOccurrences(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
   const normalizedText = normalizeTimeMatchText(text);
-  return (Array.isArray(words) ? words : [])
-    .map((word) => normalizeTimeMatchText(word))
-    .filter(Boolean)
-    .some((word) => normalizedText.includes(word));
+  return (Array.isArray(config.connectorWords) ? config.connectorWords : [])
+    .flatMap((word) => findTimeTrackingWordOccurrences(normalizedText, word));
+}
+
+function getTimeTrackingNoChangeOccurrences(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+  const normalizedText = normalizeTimeMatchText(text);
+  return (Array.isArray(config.noChangeWords) ? config.noChangeWords : [])
+    .flatMap((word) => findTimeTrackingWordOccurrences(normalizedText, word));
+}
+
+function isTimeTrackingConnectorBlocked(text = "", connectorRange = null, config = DEFAULT_TIME_TRACKING_CONFIG) {
+  if (!connectorRange) {
+    return false;
+  }
+  return getTimeTrackingNoChangeOccurrences(text, config)
+    .some((blockedRange) =>
+      getTimeTrackingRangeGap(blockedRange, connectorRange) <= TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS
+    );
+}
+
+function isNearTimeTrackingConnector(text = "", range = null, config = DEFAULT_TIME_TRACKING_CONFIG) {
+  if (!range) {
+    return false;
+  }
+  return getTimeTrackingConnectorOccurrences(text, config)
+    .some((connectorRange) =>
+      getTimeTrackingRangeGap(connectorRange, range) <= TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS &&
+      !isTimeTrackingConnectorBlocked(text, connectorRange, config)
+    );
 }
 
 function parseChineseSmallNumber(value = "") {
@@ -2585,53 +2676,141 @@ function parseChineseSmallNumber(value = "") {
   return null;
 }
 
-function findExplicitDayNumber(text = "") {
-  const match = safeText(text).match(/第\s*(\d{1,4})\s*天/u);
-  if (!match) {
+function parseChineseDigitYear(value = "") {
+  const raw = safeText(value)
+    .replace(/[〇○Ｏ]/gu, "零")
+    .replace(/\s+/g, "");
+  if (/^\d{3,4}$/u.test(raw)) {
+    return normalizeTimeTrackingYear(raw, 0);
+  }
+  const digits = {
+    零: "0",
+    一: "1",
+    二: "2",
+    三: "3",
+    四: "4",
+    五: "5",
+    六: "6",
+    七: "7",
+    八: "8",
+    九: "9"
+  };
+  if (!/^[零一二三四五六七八九]{3,4}$/u.test(raw)) {
     return null;
   }
-  const dayNumber = Math.floor(Number(match[1]));
-  return Number.isFinite(dayNumber) && dayNumber > 0 ? dayNumber : null;
+  const parsed = Number([...raw].map((char) => digits[char]).join(""));
+  return Number.isFinite(parsed) && parsed >= 1 && parsed <= 9999 ? parsed : null;
 }
 
-function findDayAfterIncrement(text = "") {
-  const matches = [...safeText(text).matchAll(/([0-9]+|[一二三四五六七八九十百兩两]+)\s*天\s*[後后]/gu)];
+function findExplicitYear(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+  const normalizedText = normalizeTimeMatchText(text);
+  const matches = [...normalizedText.matchAll(/(\d{3,4}|[零一二三四五六七八九〇○Ｏ]{3,4})\s*年/gu)];
+  const candidates = matches
+    .map((match) => {
+      const year = parseChineseDigitYear(match[1]);
+      const range = {
+        start: match.index,
+        end: match.index + match[0].length
+      };
+      return year && isNearTimeTrackingConnector(normalizedText, range, config)
+        ? { year, index: match.index }
+        : null;
+    })
+    .filter(Boolean);
+  candidates.sort((left, right) => right.index - left.index);
+  return candidates[0]?.year || null;
+}
+
+function findExplicitDayNumber(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+  const normalizedText = normalizeTimeMatchText(text);
+  const matches = [...normalizedText.matchAll(/第\s*(\d{1,4})\s*天/gu)];
+  const candidates = matches
+    .map((match) => {
+      const dayNumber = Math.floor(Number(match[1]));
+      const range = {
+        start: match.index,
+        end: match.index + match[0].length
+      };
+      return Number.isFinite(dayNumber) &&
+        dayNumber > 0 &&
+        isNearTimeTrackingConnector(normalizedText, range, config)
+        ? { dayNumber, index: match.index }
+        : null;
+    })
+    .filter(Boolean);
+  candidates.sort((left, right) => right.index - left.index);
+  return candidates[0]?.dayNumber || null;
+}
+
+function findDayAfterIncrement(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+  const normalizedText = normalizeTimeMatchText(text);
+  const matches = [...normalizedText.matchAll(/([0-9]+|[一二三四五六七八九十百兩两]+)\s*天\s*[後后]/gu)];
   const values = matches
+    .filter((match) => isNearTimeTrackingConnector(normalizedText, {
+      start: match.index,
+      end: match.index + match[0].length
+    }, config))
     .map((match) => parseChineseSmallNumber(match[1]))
     .filter((value) => Number.isFinite(value) && value > 0);
   return values.length > 0 ? Math.max(...values) : 0;
 }
 
-function findExplicitMonthDate(text = "") {
-  const matches = [...safeText(text).matchAll(/(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|號|号)/gu)];
-  for (const match of matches) {
-    const month = Math.floor(Number(match[1]));
-    const date = Math.floor(Number(match[2]));
-    if (isValidMonthDate(month, date)) {
-      return { month, date };
-    }
-  }
-  return null;
+function findNextDayIncrement(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+  const normalizedText = normalizeTimeMatchText(text);
+  return (Array.isArray(config.nextDayWords) ? config.nextDayWords : [])
+    .flatMap((word) => findTimeTrackingWordOccurrences(normalizedText, word))
+    .some((range) => isNearTimeTrackingConnector(normalizedText, range, config));
 }
 
-function addDaysToMonthDate(month, date, days = 0) {
+function findExplicitMonthDate(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, fallbackYear = getCurrentCalendarYear()) {
+  const normalizedText = normalizeTimeMatchText(text);
+  const matches = [...normalizedText.matchAll(/(?:(\d{3,4}|[零一二三四五六七八九〇○Ｏ]{3,4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|號|号)/gu)];
+  const candidates = [];
+  for (const match of matches) {
+    const range = {
+      start: match.index,
+      end: match.index + match[0].length
+    };
+    if (!isNearTimeTrackingConnector(normalizedText, range, config)) {
+      continue;
+    }
+    const year = match[1]
+      ? parseChineseDigitYear(match[1])
+      : normalizeTimeTrackingYear(fallbackYear);
+    const month = Math.floor(Number(match[2]));
+    const date = Math.floor(Number(match[3]));
+    if (year && isValidMonthDate(month, date, year)) {
+      candidates.push({ year, month, date, index: match.index });
+    }
+  }
+  candidates.sort((left, right) => right.index - left.index);
+  return candidates[0] || null;
+}
+
+function addDaysToMonthDate(year, month, date, days = 0) {
+  let nextYear = normalizeTimeTrackingYear(year);
   let nextMonth = Math.floor(Number(month));
   let nextDate = Math.floor(Number(date));
   let remaining = Math.max(0, Math.floor(Number(days) || 0));
-  if (!isValidMonthDate(nextMonth, nextDate)) {
-    const randomDate = createRandomValidMonthDate();
+  if (!isValidMonthDate(nextMonth, nextDate, nextYear)) {
+    const randomDate = createRandomValidMonthDate(nextYear);
     nextMonth = randomDate.month;
     nextDate = randomDate.date;
   }
   while (remaining > 0) {
     nextDate += 1;
-    if (nextDate > getMonthDayCount(nextMonth)) {
+    if (nextDate > getMonthDayCount(nextMonth, nextYear)) {
       nextDate = 1;
-      nextMonth = nextMonth >= 12 ? 1 : nextMonth + 1;
+      if (nextMonth >= 12) {
+        nextMonth = 1;
+        nextYear += 1;
+      } else {
+        nextMonth += 1;
+      }
     }
     remaining -= 1;
   }
-  return { month: nextMonth, date: nextDate };
+  return { year: nextYear, month: nextMonth, date: nextDate };
 }
 
 function advanceTimeTrackingDays(timeTracking, days = 1) {
@@ -2640,10 +2819,16 @@ function advanceTimeTrackingDays(timeTracking, days = 1) {
   if (increment <= 0) {
     return normalized;
   }
-  const nextDate = addDaysToMonthDate(normalized.currentMonth, normalized.currentDate, increment);
+  const nextDate = addDaysToMonthDate(
+    normalized.currentYear,
+    normalized.currentMonth,
+    normalized.currentDate,
+    increment
+  );
   return {
     ...normalized,
     currentDayNumber: normalized.currentDayNumber + increment,
+    currentYear: nextDate.year,
     currentMonth: nextDate.month,
     currentDate: nextDate.date,
     updatedAt: nowIso()
@@ -2655,14 +2840,16 @@ function setTimeTrackingDayNumber(timeTracking, dayNumber) {
   const nextDayNumber = Math.max(1, Math.floor(Number(dayNumber) || 1));
   const dayDelta = nextDayNumber - normalized.currentDayNumber;
   const nextDate = dayDelta >= 0
-    ? addDaysToMonthDate(normalized.currentMonth, normalized.currentDate, dayDelta)
+    ? addDaysToMonthDate(normalized.currentYear, normalized.currentMonth, normalized.currentDate, dayDelta)
     : {
+        year: normalized.currentYear,
         month: normalized.currentMonth,
         date: normalized.currentDate
       };
   return {
     ...normalized,
     currentDayNumber: nextDayNumber,
+    currentYear: nextDate.year,
     currentMonth: nextDate.month,
     currentDate: nextDate.date,
     updatedAt: nowIso()
@@ -2682,10 +2869,11 @@ function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONF
     (Array.isArray(words) ? words : [])
       .map((word) => {
         const normalizedWord = normalizeTimeMatchText(word);
-        return normalizedWord
-          ? { period, index: normalizedText.lastIndexOf(normalizedWord) }
-          : null;
+        return findTimeTrackingWordOccurrences(normalizedText, normalizedWord)
+          .filter((range) => isNearTimeTrackingConnector(normalizedText, range, config))
+          .map((range) => ({ period, index: range.start }));
       })
+      .flat()
       .filter((item) => item && item.index >= 0)
   );
   candidates.sort((left, right) => right.index - left.index);
@@ -2709,26 +2897,36 @@ function updateTimeTrackingFromText(currentState, text = "") {
   const config = normalizeTimeTrackingConfig(timeTracking.config);
   let dayChangedByText = false;
 
-  const explicitDate = findExplicitMonthDate(content);
+  const explicitDate = findExplicitMonthDate(content, config, timeTracking.currentYear);
   if (explicitDate) {
     timeTracking = {
       ...timeTracking,
+      currentYear: explicitDate.year,
       currentMonth: explicitDate.month,
       currentDate: explicitDate.date,
       updatedAt: nowIso()
     };
+  } else {
+    const explicitYear = findExplicitYear(content, config);
+    if (explicitYear) {
+      timeTracking = {
+        ...timeTracking,
+        currentYear: explicitYear,
+        updatedAt: nowIso()
+      };
+    }
   }
 
-  const explicitDayNumber = findExplicitDayNumber(content);
+  const explicitDayNumber = findExplicitDayNumber(content, config);
   if (explicitDayNumber) {
     timeTracking = setTimeTrackingDayNumber(timeTracking, explicitDayNumber);
     dayChangedByText = true;
   } else {
-    const dayAfterIncrement = findDayAfterIncrement(content);
+    const dayAfterIncrement = findDayAfterIncrement(content, config);
     if (dayAfterIncrement > 0) {
       timeTracking = advanceTimeTrackingDays(timeTracking, dayAfterIncrement);
       dayChangedByText = true;
-    } else if (textIncludesAnyTimeTrackingWord(content, config.nextDayWords)) {
+    } else if (findNextDayIncrement(content, config)) {
       timeTracking = advanceTimeTrackingDays(timeTracking, 1);
       dayChangedByText = true;
     }
@@ -2759,13 +2957,16 @@ function updateTimeTrackingFromMessage(currentState, message = {}) {
 }
 
 function formatTimeTrackingPromptBlock(currentState = state) {
+  if (isCharacterCardCreationAssistantActive(currentState)) {
+    return "";
+  }
   const timeTracking = normalizeTimeTrackingState(currentState?.timeTracking);
   if (!timeTracking.enabled) {
     return "";
   }
   const periodLabel = TIME_PERIOD_LABELS[timeTracking.currentPeriod] || TIME_PERIOD_LABELS[TIME_PERIOD_MORNING];
   return [
-    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentMonth}月${timeTracking.currentDate}日`
+    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentYear}年${timeTracking.currentMonth}月${timeTracking.currentDate}日`
   ].join("\n");
 }
 
@@ -6870,13 +7071,15 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/time-tracking" && method === "PUT") {
       const body = await readBody(req);
       const current = normalizeTimeTrackingState(state.timeTracking);
+      const rawYear = body?.currentYear ?? current.currentYear;
       const rawMonth = body?.currentMonth ?? current.currentMonth;
       const rawDate = body?.currentDate ?? current.currentDate;
+      const year = normalizeTimeTrackingYear(rawYear, current.currentYear);
       const month = Math.floor(Number(rawMonth));
       const date = Math.floor(Number(rawDate));
-      const dateFields = isValidMonthDate(month, date)
-        ? { currentMonth: month, currentDate: date }
-        : { currentMonth: current.currentMonth, currentDate: current.currentDate };
+      const dateFields = isValidMonthDate(month, date, year)
+        ? { currentYear: year, currentMonth: month, currentDate: date }
+        : { currentYear: current.currentYear, currentMonth: current.currentMonth, currentDate: current.currentDate };
       state.timeTracking = normalizeTimeTrackingState({
         ...current,
         ...body,
