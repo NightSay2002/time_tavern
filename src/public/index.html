@@ -56,6 +56,8 @@
           <h2>角色卡</h2>
           <button id="selectRoleCardBtn" type="button" class="secondary desktop-role-picker-btn">選擇角色卡</button>
           <button id="createRoleCardBtn" type="button">建立角色卡</button>
+          <button id="importRoleCardBtn" type="button" class="secondary">匯入角色卡</button>
+          <input id="roleCardImportFile" type="file" class="hidden" accept=".json,.png,.jpg,.jpeg,application/json,image/png,image/jpeg" />
           <div id="roleCardList" class="card-list role-card-inline-list"></div>
         </div>
 
@@ -127,10 +129,17 @@
           <div id="roleCardCustomSectionList" class="custom-section-list"></div>
           <button id="addRoleCardCustomSectionBtn" type="button" class="secondary">＋ 新增自定義內容</button>
         </section>
-        <label>
-          開場對話
-          <textarea id="roleCardOpening" rows="4"></textarea>
-        </label>
+        <section class="stack opening-dialogue-editor">
+          <div class="opening-dialogue-header">
+            <h4>開場對話</h4>
+            <button id="addRoleCardOpeningBtn" type="button" class="secondary">＋</button>
+          </div>
+          <div id="roleCardOpeningTabs" class="opening-dialogue-tabs" aria-label="開場對話切換"></div>
+          <label>
+            內容
+            <textarea id="roleCardOpening" rows="4"></textarea>
+          </label>
+        </section>
         <section class="stack">
           <h4>世界書 Lorebooks</h4>
           <p class="form-hint">條目會在最近對話或本輪輸入命中關鍵字時，自動插入到角色卡區塊下方。</p>
@@ -244,6 +253,13 @@
         <h3>統計判斷編輯</h3>
         <p id="timeTrackingMeta" class="form-hint">目前尚未開始對話。</p>
         <section class="time-tracking-section stack">
+          <h4>啟用</h4>
+          <label class="checkbox-label">
+            <input id="timeTrackingEnabled" type="checkbox" />
+            啟用統計時間並附加到 user 對話
+          </label>
+        </section>
+        <section class="time-tracking-section stack">
           <h4>天數</h4>
           <div class="time-tracking-grid time-tracking-date-grid">
             <label>
@@ -270,6 +286,7 @@
           <p class="form-hint">配合詞與 +1天關鍵字在 5 字內時，會自動 +1天。</p>
           <p class="form-hint">配合詞與「3天後 / 三天後」在 5 字內時，會自動加對應天數。</p>
           <p class="form-hint">配合詞與「第3天」在 5 字內時，會直接把天數改成第 3 天。</p>
+          <p class="form-hint">開場對話與用戶所有輸入可以不用配合詞直接更改時間；不改詞仍然會攔截。</p>
         </section>
         <section class="time-tracking-section stack">
           <h4>時間</h4>
@@ -304,6 +321,17 @@
               <textarea id="timeTrackingEveningWords" rows="5" placeholder="晚上&#10;夜晚&#10;晚餐"></textarea>
             </label>
           </div>
+          <div class="time-tracking-grid">
+            <label class="checkbox-label">
+              <input id="timeTrackingAutoPeriodEnabled" type="checkbox" />
+              自動切換早中晚
+            </label>
+            <label>
+              每幾個回合切換
+              <input id="timeTrackingAutoPeriodRounds" type="number" min="1" step="1" value="3" />
+            </label>
+          </div>
+          <p class="form-hint">自動切換會按早上→中午→晚上→早上前進，晚上→早上會自動 +1 天。切換前一個回合會提示，可在對話加入 {保持時間} 或 ｛保持時間｝，延後目前設定的回合數。</p>
         </section>
         <div class="dialog-actions">
           <button type="submit">保存統計判斷</button>
@@ -380,6 +408,13 @@
               大模型名字
               <input id="compressionProfileName" type="text" placeholder="例如：跑團事件記憶" />
             </label>
+            <label>
+              讀取範圍
+              <select id="compressionProfileContextScope">
+                <option value="text_only">正文 only</option>
+                <option value="role_and_text">角色卡 + 正文</option>
+              </select>
+            </label>
             <label class="checkbox-label compression-profile-enabled">
               <input id="compressionProfileEnabled" type="checkbox" />
               啟用這個大模型
@@ -390,7 +425,7 @@
             <button id="addCompressionTriggerActionBtn" type="button" class="secondary">＋ 新增組合</button>
           </div>
           <div id="compressionTriggerActionList" class="custom-section-list compression-trigger-action-list"></div>
-          <p class="form-hint">call api 會使用這個大模型自己的模型主要規則＋模塊輸出模型內容；可勾選「不call正文」讓觸發後只處理大模型並回覆完成訊息。複製用戶輸入（不call api）只會把用戶輸入存成模型內容。</p>
+          <p class="form-hint">讀取範圍只影響 call api；「觸發關鍵字後續動作」只在關鍵字觸發時決定繼續正文或停下。正文上限、指定回合與每回合觸發都會繼續正文。複製用戶輸入（不call api）只會把用戶輸入存成模型內容。</p>
           <div class="inline-actions">
             <strong>首次觸發後追加詞</strong>
             <button id="addCompressionAppendTermBtn" type="button" class="secondary">＋ 新增追加詞</button>

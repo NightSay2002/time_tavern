@@ -10,6 +10,8 @@
 
   selectRoleCardBtn: document.getElementById("selectRoleCardBtn"),
   createRoleCardBtn: document.getElementById("createRoleCardBtn"),
+  importRoleCardBtn: document.getElementById("importRoleCardBtn"),
+  roleCardImportFile: document.getElementById("roleCardImportFile"),
   roleCardList: document.getElementById("roleCardList"),
   selectSessionBtn: document.getElementById("selectSessionBtn"),
   saveSessionBtn: document.getElementById("saveSessionBtn"),
@@ -42,6 +44,8 @@
   removeRoleCardCoverBtn: document.getElementById("removeRoleCardCoverBtn"),
   roleCardCustomSectionList: document.getElementById("roleCardCustomSectionList"),
   addRoleCardCustomSectionBtn: document.getElementById("addRoleCardCustomSectionBtn"),
+  roleCardOpeningTabs: document.getElementById("roleCardOpeningTabs"),
+  addRoleCardOpeningBtn: document.getElementById("addRoleCardOpeningBtn"),
   roleCardOpening: document.getElementById("roleCardOpening"),
   roleCardLorebookList: document.getElementById("roleCardLorebookList"),
   addRoleCardLorebookBtn: document.getElementById("addRoleCardLorebookBtn"),
@@ -87,11 +91,14 @@
   timeTrackingDialog: document.getElementById("timeTrackingDialog"),
   timeTrackingForm: document.getElementById("timeTrackingForm"),
   timeTrackingMeta: document.getElementById("timeTrackingMeta"),
+  timeTrackingEnabled: document.getElementById("timeTrackingEnabled"),
   timeTrackingDayNumber: document.getElementById("timeTrackingDayNumber"),
   timeTrackingYear: document.getElementById("timeTrackingYear"),
   timeTrackingMonth: document.getElementById("timeTrackingMonth"),
   timeTrackingDate: document.getElementById("timeTrackingDate"),
   timeTrackingPeriod: document.getElementById("timeTrackingPeriod"),
+  timeTrackingAutoPeriodEnabled: document.getElementById("timeTrackingAutoPeriodEnabled"),
+  timeTrackingAutoPeriodRounds: document.getElementById("timeTrackingAutoPeriodRounds"),
   timeTrackingNextDayWords: document.getElementById("timeTrackingNextDayWords"),
   timeTrackingConnectorWords: document.getElementById("timeTrackingConnectorWords"),
   timeTrackingNoChangeWords: document.getElementById("timeTrackingNoChangeWords"),
@@ -127,6 +134,7 @@
   deleteCompressionProfileBtn: document.getElementById("deleteCompressionProfileBtn"),
   compressionProfileName: document.getElementById("compressionProfileName"),
   compressionProfileEnabled: document.getElementById("compressionProfileEnabled"),
+  compressionProfileContextScope: document.getElementById("compressionProfileContextScope"),
   compressionTriggerActionList: document.getElementById("compressionTriggerActionList"),
   addCompressionTriggerActionBtn: document.getElementById("addCompressionTriggerActionBtn"),
   compressionAppendTermList: document.getElementById("compressionAppendTermList"),
@@ -150,6 +158,8 @@ let mobilePage = "chat";
 let mobileInfoOpen = false;
 let roleCardLorebooksDraft = [];
 let roleCardCustomSectionsDraft = [];
+let roleCardOpeningDialoguesDraft = [];
+let selectedRoleCardOpeningId = "";
 let compressionModelsDraft = [];
 let compressionProfilesDraft = [];
 let selectedCompressionProfileId = "standard";
@@ -165,9 +175,14 @@ const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
 const SESSION_PICKER_PAGE_SIZE = 9;
 const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
+const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
 const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
 const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
+const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
+const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
+const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
+const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const TIME_PERIOD_LABELS = {
   morning: "早上",
@@ -351,7 +366,18 @@ function normalizeRoleCardMode(mode = "") {
   if (normalized === "no_role" || normalized === "norole" || normalized === "none") {
     return "no_role";
   }
-  return normalized || "single";
+  return normalized || DEFAULT_ROLE_CARD_MODE;
+}
+
+function normalizeLorebookProbability(value, fallback = 100) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, Math.floor(normalized)));
 }
 
 function isMultiRoleCard(card) {
@@ -368,17 +394,44 @@ function getRoleCardModeLabel(card) {
 
 function normalizeRoleCardLorebookEntry(entry = {}) {
   const source = entry && typeof entry === "object" ? entry : {};
-  const keywords = Array.isArray(source.keywords)
-    ? source.keywords.map((item) => String(item || "").trim()).filter(Boolean)
-    : parseTermInput(source.keywords || "");
+  const content = String(source.content || source.text || source.內容 || "").trim();
+  const keywords = dedupeTextList(parseTermInput(source.keywords ?? source.keyword ?? source.keys ?? source.關鍵字 ?? source["关键词"] ?? ""));
+  const secondaryKeywords = dedupeTextList(
+    parseTermInput(source.secondaryKeywords ?? source.secondaryKeyword ?? source.secondary_keys ?? source.secondaryKeys ?? source["第二關鍵字"] ?? source["第二关键词"] ?? "")
+  );
+  const permanent = Boolean(
+    source.permanent ??
+    source.constant ??
+    source.alwaysActive ??
+    source.always_active ??
+    source.activation?.permanent
+  );
+  const probability = normalizeLorebookProbability(
+    source.probability ?? source.activation?.probability ?? source.extensions?.probability,
+    100
+  );
+  const key = String(
+    source.key ||
+    source.title ||
+    source.name ||
+    source.comment ||
+    source.標題 ||
+    source.名稱 ||
+    getFirstMarkdownHeading(content) ||
+    keywords[0] ||
+    ""
+  ).trim();
   const activation = source.activation && typeof source.activation === "object" ? source.activation : {};
   return {
     id: String(source.id || `lore_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).trim(),
     expanded: Boolean(source.expanded),
-    key: String(source.key || source.title || "").trim(),
+    key,
     keywords,
-    content: String(source.content || "").trim(),
+    secondaryKeywords,
+    content,
     enabled: source.enabled !== false,
+    permanent,
+    probability,
     activation: {
       activeTurns: 0,
       onCloseActivate: []
@@ -391,17 +444,21 @@ function normalizeRoleCardCustomSection(section = {}) {
   return {
     id: String(source.id || `section_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).trim(),
     name: String(source.name || source.title || "").trim(),
-    content: String(source.content || source.text || "").trim()
+    content: String(source.content || source.text || "").trim(),
+    enabled: source.enabled !== false
   };
 }
 
 function getLegacyRoleCardCustomSections(card = {}) {
   return [
     { name: "性格", content: card.personality || "" },
-    { name: "場景", content: card.scene || "" },
-    { name: "系統指令", content: card.systemInstruction || "" },
+    { name: "場景", content: card.scene || card.scenario || "" },
+    { name: "系統指令", content: card.systemInstruction || card.system_prompt || "" },
     { name: "詳細描述", content: card.description || "" },
-    { name: "人物關係（純文字）", content: card.relationships || "" }
+    { name: "人物關係（純文字）", content: card.relationships || "" },
+    { name: "後續指示", content: card.post_history_instructions || "" },
+    { name: "範例對話", content: card.mes_example || "" },
+    { name: "創作者備註", content: card.creator_notes || "" }
   ]
     .filter((item) => String(item.content || "").trim())
     .map((item) => normalizeRoleCardCustomSection(item));
@@ -513,9 +570,26 @@ function normalizeKeywordTriggerSource(value = "") {
   return ["user", "assistant", "both"].includes(normalized) ? normalized : "both";
 }
 
+function normalizeCompressionContextScope(value = "") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (
+    normalized === COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT ||
+    normalized === "role_text" ||
+    normalized === "role_card" ||
+    normalized === "character_card" ||
+    normalized === "card_and_text" ||
+    normalized === "角色卡_正文" ||
+    normalized === "角色卡+正文"
+  ) {
+    return COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT;
+  }
+  return COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY;
+}
+
 function normalizeCompressionTriggerConfig(input = {}, options = {}) {
   const source = input && typeof input === "object" ? input : {};
   return {
+    everyTurn: Boolean(source.everyTurn ?? source.eachTurn ?? source.everyRound ?? source.onEveryTurn),
     roundLimit: Boolean(source.roundLimit ?? source.onRoundLimit ?? options.defaultRoundLimit),
     keywords: parseKeywordList(source.keywords ?? source.keyword ?? source.triggerKeywords),
     keywordSource: normalizeKeywordTriggerSource(source.keywordSource || source.source),
@@ -541,6 +615,34 @@ function getModelTriggerActionLabel(value = "") {
   return normalizeModelTriggerAction(value) === MODEL_TRIGGER_ACTION_COPY_USER_INPUT
     ? "複製用戶輸入（不call api）"
     : "call api（使用本大模型規則＋模塊）";
+}
+
+function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) {
+  const raw = String(value || "").trim();
+  const normalized = raw.toLowerCase().replace(/[-\s]+/g, "_");
+  if (
+    normalized === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL ||
+    normalized === "stop" ||
+    normalized === "stop_reasoner" ||
+    normalized === "skip_reasoner" ||
+    normalized === "no_reasoner" ||
+    raw === "停下" ||
+    raw === "不call正文" ||
+    raw === "只輸出完成訊息"
+  ) {
+    return KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
+  }
+  if (
+    normalized === KEYWORD_FOLLOWUP_CONTINUE_REASONER ||
+    normalized === "continue" ||
+    normalized === "continue_chat" ||
+    normalized === "call_reasoner" ||
+    raw === "繼續" ||
+    raw === "繼續觸發正文"
+  ) {
+    return KEYWORD_FOLLOWUP_CONTINUE_REASONER;
+  }
+  return legacySkipReasoner ? KEYWORD_FOLLOWUP_STOP_AFTER_MODEL : KEYWORD_FOLLOWUP_CONTINUE_REASONER;
 }
 
 function normalizeModelAppendPlayer(value = "") {
@@ -584,13 +686,23 @@ function normalizeModelAppendTermsConfig(input = {}) {
 function normalizeCompressionTriggerActionConfig(action = {}, index = 0, options = {}) {
   const source = action && typeof action === "object" ? action : {};
   const processingAction = normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction);
+  const legacySkipReasoner = Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat);
+  const keywordFollowupAction = normalizeKeywordFollowupAction(
+    source.keywordFollowupAction ||
+      source.keywordFollowup ||
+      source.afterKeywordAction ||
+      source.keywordAfterAction ||
+      source["觸發關鍵字後續動作"],
+    legacySkipReasoner
+  );
   return {
     id: String(source.id || source.key || `trigger_action_${index + 1}`).trim(),
     name: String(source.name || source.title || source.label || `觸發組合 ${index + 1}`).trim(),
     enabled: source.enabled !== false,
     action: processingAction,
+    keywordFollowupAction,
     skipReasoner: processingAction === MODEL_TRIGGER_ACTION_CALL_API &&
-      Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
+      keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL,
     triggers: normalizeCompressionTriggerConfig(
       source.triggers || source.trigger || source.conditions || source.condition || source,
       { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
@@ -617,6 +729,7 @@ function normalizeCompressionTriggerActionsConfig(input = {}, options = {}) {
     name: options.defaultName || "標準觸發",
     enabled: true,
     action: MODEL_TRIGGER_ACTION_CALL_API,
+    keywordFollowupAction: KEYWORD_FOLLOWUP_CONTINUE_REASONER,
     skipReasoner: false,
     triggers: Object.keys(legacyTriggers).length > 0
       ? legacyTriggers
@@ -634,6 +747,7 @@ function createStandardCompressionProfile(contextCompression = {}) {
     name: "標準壓縮模型",
     enabled: true,
     locked: true,
+    contextScope: COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY,
     triggers: normalizeCompressionTriggerConfig({ roundLimit: true }, { defaultRoundLimit: true }),
     triggerActions: normalizeCompressionTriggerActionsConfig([], {
       defaultRoundLimit: true,
@@ -658,6 +772,9 @@ function normalizeCompressionProfileConfig(profile = {}, index = 0, fallbackCont
     name: String(source.name || source.title || source.displayName || getDefaultCompressionProfileName(id)).trim(),
     enabled: isStandard ? true : source.enabled !== false,
     locked: isStandard || Boolean(source.locked),
+    contextScope: normalizeCompressionContextScope(
+      source.contextScope || source.contextSource || source.readingScope || source.scope
+    ),
     triggers: triggerActions[0]?.triggers ||
       normalizeCompressionTriggerConfig(source.triggers || source.trigger || {}, { defaultRoundLimit: isStandard }),
     triggerActions,
@@ -1354,10 +1471,242 @@ function containsReplacementCharacter(input) {
 }
 
 function parseTermInput(raw) {
+  if (Array.isArray(raw)) {
+    return raw
+      .flatMap((item) => parseTermInput(item))
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
   return String(raw || "")
     .split(/[\r\n,，、;；|/／]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function dedupeTextList(items = []) {
+  const seen = new Set();
+  const result = [];
+  (Array.isArray(items) ? items : [items]).forEach((item) => {
+    const normalized = String(item || "").trim();
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  });
+  return result;
+}
+
+function getFirstMarkdownHeading(text = "") {
+  const match = String(text || "").match(/^\s{0,3}#{1,6}\s+(.+)$/mu);
+  return match ? match[1].replace(/#+\s*$/u, "").trim() : "";
+}
+
+function encodeBase64Utf8(text = "") {
+  const bytes = new TextEncoder().encode(String(text || ""));
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.slice(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function decodeBase64Utf8(text = "") {
+  const binary = atob(String(text || "").trim());
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function parseRoleCardPayloadText(text = "") {
+  const source = String(text || "").trim();
+  const candidates = [source];
+  try {
+    candidates.push(decodeBase64Utf8(source));
+  } catch {
+    // Plain JSON is also valid.
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next representation.
+    }
+  }
+  throw new Error("找不到可讀取的角色卡 JSON 資料。");
+}
+
+function readPngChunkType(bytes, offset) {
+  return String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+}
+
+function readPngTextChunk(data) {
+  const separatorIndex = data.indexOf(0);
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  return {
+    key: new TextDecoder("latin1").decode(data.slice(0, separatorIndex)),
+    value: new TextDecoder("latin1").decode(data.slice(separatorIndex + 1))
+  };
+}
+
+function readPngInternationalTextChunk(data) {
+  const keywordEnd = data.indexOf(0);
+  if (keywordEnd <= 0 || keywordEnd + 3 >= data.length) {
+    return null;
+  }
+  const compressed = data[keywordEnd + 1] === 1;
+  if (compressed) {
+    return null;
+  }
+  let cursor = keywordEnd + 3;
+  while (cursor < data.length && data[cursor] !== 0) {
+    cursor += 1;
+  }
+  cursor += 1;
+  while (cursor < data.length && data[cursor] !== 0) {
+    cursor += 1;
+  }
+  cursor += 1;
+  if (cursor >= data.length) {
+    return null;
+  }
+  return {
+    key: new TextDecoder().decode(data.slice(0, keywordEnd)),
+    value: new TextDecoder().decode(data.slice(cursor))
+  };
+}
+
+function extractPngRoleCardPayload(bytes) {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (!signature.every((value, index) => bytes[index] === value)) {
+    return null;
+  }
+  const metadataKeys = new Set(["chara", "character", "ccv3", "chara_card_v2", "sillytavern_json"]);
+  let offset = 8;
+  while (offset + 12 <= bytes.length) {
+    const length = (
+      (bytes[offset] << 24) |
+      (bytes[offset + 1] << 16) |
+      (bytes[offset + 2] << 8) |
+      bytes[offset + 3]
+    ) >>> 0;
+    const type = readPngChunkType(bytes, offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd > bytes.length) {
+      break;
+    }
+    const data = bytes.slice(dataStart, dataEnd);
+    const textEntry = type === "tEXt"
+      ? readPngTextChunk(data)
+      : type === "iTXt"
+        ? readPngInternationalTextChunk(data)
+        : null;
+    if (textEntry && metadataKeys.has(String(textEntry.key || "").trim())) {
+      return parseRoleCardPayloadText(textEntry.value);
+    }
+    offset = dataEnd + 4;
+  }
+  return null;
+}
+
+const JPEG_ROLE_CARD_MAGIC = "TimeTavernRoleCard\0";
+
+function extractJpegRoleCardPayload(bytes) {
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    return null;
+  }
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let offset = 2;
+  while (offset + 4 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      break;
+    }
+    while (bytes[offset] === 0xff) {
+      offset += 1;
+    }
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xda || marker === 0xd9) {
+      break;
+    }
+    if (marker >= 0xd0 && marker <= 0xd7) {
+      continue;
+    }
+    const length = (bytes[offset] << 8) | bytes[offset + 1];
+    if (!length || offset + length > bytes.length) {
+      break;
+    }
+    const data = bytes.slice(offset + 2, offset + length);
+    if (marker === 0xef) {
+      const text = decoder.decode(data);
+      if (text.startsWith(JPEG_ROLE_CARD_MAGIC)) {
+        const rest = text.slice(JPEG_ROLE_CARD_MAGIC.length);
+        const separatorIndex = rest.indexOf("\0");
+        if (separatorIndex >= 0 && /^\d{4}\/\d{4}$/u.test(rest.slice(0, separatorIndex))) {
+          const [indexText, totalText] = rest.slice(0, separatorIndex).split("/");
+          chunks.push({
+            index: Number(indexText),
+            total: Number(totalText),
+            content: rest.slice(separatorIndex + 1)
+          });
+        } else {
+          return parseRoleCardPayloadText(rest);
+        }
+      }
+    }
+    if (marker === 0xfe) {
+      const text = decoder.decode(data);
+      if (text.includes("{") && text.includes("}")) {
+        try {
+          return parseRoleCardPayloadText(text.slice(text.indexOf("{")));
+        } catch {
+          // Comments are optional metadata.
+        }
+      }
+    }
+    offset += length;
+  }
+  if (chunks.length === 0) {
+    return null;
+  }
+  chunks.sort((a, b) => a.index - b.index);
+  const expectedTotal = chunks[0].total;
+  if (chunks.length !== expectedTotal) {
+    throw new Error("JPG 角色卡資料不完整。");
+  }
+  return parseRoleCardPayloadText(chunks.map((chunk) => chunk.content).join(""));
+}
+
+function extractRoleCardPayloadFromImageBytes(bytes) {
+  return extractPngRoleCardPayload(bytes) || extractJpegRoleCardPayload(bytes);
+}
+
+function attachImportedImageCover(payload, imageDataUrl = "") {
+  if (!payload || !imageDataUrl) {
+    return payload;
+  }
+  if (payload.data && typeof payload.data === "object") {
+    payload.data.avatar = payload.data.avatar || imageDataUrl;
+    const embedded = payload.data.extensions?.time_tavern_role_card || payload.data.extensions?.timeTavernRoleCard;
+    if (embedded && typeof embedded === "object" && !embedded.coverImage) {
+      embedded.coverImage = imageDataUrl;
+    }
+    return payload;
+  }
+  if (payload && typeof payload === "object" && !payload.coverImage) {
+    payload.coverImage = imageDataUrl;
+  }
+  return payload;
 }
 
 function serializeDisplayValue(value) {
@@ -1404,7 +1753,8 @@ function normalizeCoverPosition(value = "") {
 function getDisplayedRoleCard(card, state = appState) {
   const runtime = state?.roleCardRuntimeState?.[card?.id] || {};
   const customSections = normalizeRoleCardCustomSections(card?.customSections, card);
-  const getSection = (name) => customSections.find((section) => section.name === name)?.content || "";
+  const getSection = (name) => customSections
+    .find((section) => section.enabled !== false && section.name === name)?.content || "";
   return {
     ...card,
     customSections,
@@ -1419,6 +1769,7 @@ function getDisplayedRoleCard(card, state = appState) {
 function buildRoleCardIntro(card, state = appState) {
   const displayedCard = getDisplayedRoleCard(card, state);
   const sectionSummary = normalizeRoleCardCustomSections(displayedCard.customSections, displayedCard)
+    .filter((section) => section.enabled !== false)
     .slice(0, 3)
     .map((section) => `${section.name}：${truncateText(section.content, 60)}`)
     .join("｜");
@@ -1500,6 +1851,239 @@ function loadImage(dataUrl) {
     img.onload = () => resolve(img);
     img.src = dataUrl;
   });
+}
+
+function loadImageForExport(source = "") {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onerror = () => reject(new Error("封面圖片無法匯出，請改用本機上傳的封面或先移除封面匯出 JSON。"));
+    img.onload = () => resolve(img);
+    img.src = source;
+  });
+}
+
+function sanitizeDownloadFileName(value = "role-card") {
+  return String(value || "role-card")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80) || "role-card";
+}
+
+function cloneSerializable(value) {
+  return JSON.parse(JSON.stringify(value || null));
+}
+
+function getRoleCardSectionContentForExport(card = {}, names = []) {
+  const nameSet = new Set((Array.isArray(names) ? names : [names]).map((item) => String(item || "").trim()));
+  return normalizeRoleCardCustomSections(card.customSections, card)
+    .find((section) => section.enabled !== false && nameSet.has(section.name))?.content || "";
+}
+
+function buildRoleCardExportPayload(card = {}, options = {}) {
+  const includeCoverImage = options.includeCoverImage !== false;
+  const roleCard = {
+    ...cloneSerializable(card),
+    coverImage: includeCoverImage ? String(card.coverImage || "") : ""
+  };
+  const openings = normalizeRoleCardOpeningDialoguesForEditor(card.openingDialogues, card.openingDialogue);
+  const activeOpening = openings.find((entry) => entry.id === card.activeOpeningDialogueId) ||
+    openings.find((entry) => entry.content === card.openingDialogue) ||
+    openings[0] ||
+    null;
+  const firstMessage = activeOpening?.content || card.openingDialogue || "";
+  const alternateGreetings = openings
+    .filter((entry) => entry.content && entry.id !== activeOpening?.id)
+    .map((entry) => entry.content);
+  const lorebooks = normalizeRoleCardLorebooks(card.lorebooks);
+  return {
+    spec: "chara_card_v2",
+    spec_version: "2.0",
+    data: {
+      name: card.name || "未命名角色卡",
+      description: getRoleCardSectionContentForExport(card, "詳細描述") || card.description || "",
+      personality: getRoleCardSectionContentForExport(card, "性格") || card.personality || "",
+      scenario: getRoleCardSectionContentForExport(card, "場景") || card.scene || "",
+      first_mes: firstMessage,
+      mes_example: getRoleCardSectionContentForExport(card, "範例對話"),
+      creator_notes: getRoleCardSectionContentForExport(card, "創作者備註"),
+      system_prompt: getRoleCardSectionContentForExport(card, "系統指令") || card.systemInstruction || "",
+      post_history_instructions: getRoleCardSectionContentForExport(card, "後續指示"),
+      alternate_greetings: alternateGreetings,
+      tags: [],
+      creator: "Time Tavern",
+      character_version: "1.0",
+      avatar: includeCoverImage ? String(card.coverImage || "") : "",
+      extensions: {
+        time_tavern_role_card: roleCard
+      },
+      character_book: {
+        name: `${card.name || "角色卡"} 世界書`,
+        scan_depth: 3,
+        token_budget: 3000,
+        recursive_scanning: false,
+        entries: lorebooks.map((entry, index) => ({
+          id: index + 1,
+          name: entry.key || `條目 ${index + 1}`,
+          comment: entry.key || `條目 ${index + 1}`,
+          keys: Array.isArray(entry.keywords) ? entry.keywords : [],
+          secondary_keys: Array.isArray(entry.secondaryKeywords) ? entry.secondaryKeywords : [],
+          content: entry.content || "",
+          enabled: entry.enabled !== false,
+          constant: Boolean(entry.permanent),
+          selective: !entry.permanent,
+          position: "before_char",
+          priority: 10,
+          insertion_order: 100 + index,
+          probability: normalizeLorebookProbability(entry.probability, 100)
+        }))
+      }
+    }
+  };
+}
+
+function triggerBlobDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function canvasToJpegBlob(canvas, quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+      reject(new Error("JPG 建立失敗。"));
+    }, "image/jpeg", quality);
+  });
+}
+
+async function createJpegBlobFromCover(coverImage = "") {
+  const image = await loadImageForExport(coverImage);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  return canvasToJpegBlob(canvas);
+}
+
+function createJpegRoleCardMetadataSegments(payload) {
+  const encoder = new TextEncoder();
+  const payloadText = encodeBase64Utf8(JSON.stringify(payload));
+  const maxSegmentDataLength = 65000;
+  const sampleHeader = `${JPEG_ROLE_CARD_MAGIC}0001/0001\0`;
+  const chunkSize = Math.max(1, maxSegmentDataLength - encoder.encode(sampleHeader).length);
+  const total = Math.ceil(payloadText.length / chunkSize) || 1;
+  const segments = [];
+  for (let index = 0; index < total; index += 1) {
+    const header = `${JPEG_ROLE_CARD_MAGIC}${String(index + 1).padStart(4, "0")}/${String(total).padStart(4, "0")}\0`;
+    const data = encoder.encode(`${header}${payloadText.slice(index * chunkSize, (index + 1) * chunkSize)}`);
+    const segment = new Uint8Array(data.length + 4);
+    segment[0] = 0xff;
+    segment[1] = 0xef;
+    const length = data.length + 2;
+    segment[2] = (length >> 8) & 0xff;
+    segment[3] = length & 0xff;
+    segment.set(data, 4);
+    segments.push(segment);
+  }
+  return segments;
+}
+
+async function injectJpegRoleCardPayload(jpegBlob, payload) {
+  const jpegBytes = new Uint8Array(await jpegBlob.arrayBuffer());
+  if (jpegBytes[0] !== 0xff || jpegBytes[1] !== 0xd8) {
+    throw new Error("封面轉換後不是有效 JPG。");
+  }
+  const segments = createJpegRoleCardMetadataSegments(payload);
+  const totalLength = jpegBytes.length + segments.reduce((sum, segment) => sum + segment.length, 0);
+  const output = new Uint8Array(totalLength);
+  output.set(jpegBytes.slice(0, 2), 0);
+  let offset = 2;
+  segments.forEach((segment) => {
+    output.set(segment, offset);
+    offset += segment.length;
+  });
+  output.set(jpegBytes.slice(2), offset);
+  return new Blob([output], { type: "image/jpeg" });
+}
+
+async function exportRoleCard(card) {
+  try {
+    const fileBaseName = sanitizeDownloadFileName(card?.name || "role-card");
+    if (String(card?.coverImage || "").trim()) {
+      const payload = buildRoleCardExportPayload(card, { includeCoverImage: false });
+      const jpegBlob = await createJpegBlobFromCover(card.coverImage);
+      const roleCardJpeg = await injectJpegRoleCardPayload(jpegBlob, payload);
+      triggerBlobDownload(roleCardJpeg, `${fileBaseName}.jpg`);
+      showToast("已匯出 JPG 角色卡");
+      return;
+    }
+    const payload = buildRoleCardExportPayload(card, { includeCoverImage: true });
+    const jsonBlob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+    triggerBlobDownload(jsonBlob, `${fileBaseName}.json`);
+    showToast("已匯出 JSON 角色卡");
+  } catch (error) {
+    showToast(error.message || "角色卡匯出失敗", "error");
+  }
+}
+
+function isJsonRoleCardFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  return file?.type === "application/json" || name.endsWith(".json");
+}
+
+async function readRoleCardPayloadFromFile(file) {
+  if (isJsonRoleCardFile(file)) {
+    return parseRoleCardPayloadText(await file.text());
+  }
+  if (!String(file?.type || "").startsWith("image/")) {
+    throw new Error("只支援匯入 JSON、PNG、JPG 圖片角色卡。");
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const payload = extractRoleCardPayloadFromImageBytes(bytes);
+  if (!payload) {
+    throw new Error("這張圖片沒有找到可讀取的角色卡資料。");
+  }
+  const imageDataUrl = await readImageFileAsDataUrl(file);
+  return attachImportedImageCover(payload, imageDataUrl);
+}
+
+async function importRoleCardFromFile(file) {
+  if (!file) {
+    return;
+  }
+  try {
+    const payload = await readRoleCardPayloadFromFile(file);
+    const response = await request("/api/role-cards", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    appState = response?.state || appState;
+    await refresh();
+    showToast("角色卡已匯入");
+  } catch (error) {
+    showToast(error.message || "角色卡匯入失敗", "error");
+  } finally {
+    if (el.roleCardImportFile) {
+      el.roleCardImportFile.value = "";
+    }
+  }
 }
 
 function clamp(value, min, max) {
@@ -1773,6 +2357,13 @@ function renderRoleCards(state) {
     editBtn.disabled = Boolean(pendingRoleCardStartId);
     editBtn.addEventListener("click", () => openRoleCardDialog(card));
 
+    const exportBtn = document.createElement("button");
+    exportBtn.className = "secondary";
+    exportBtn.type = "button";
+    exportBtn.textContent = "匯出";
+    exportBtn.disabled = Boolean(pendingRoleCardStartId);
+    exportBtn.addEventListener("click", () => exportRoleCard(card));
+
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "muted";
     deleteBtn.type = "button";
@@ -1780,7 +2371,7 @@ function renderRoleCards(state) {
     deleteBtn.disabled = Boolean(pendingRoleCardStartId);
     deleteBtn.addEventListener("click", () => removeRoleCard(card));
 
-    actions.append(startBtn, editBtn, deleteBtn);
+    actions.append(startBtn, editBtn, exportBtn, deleteBtn);
     item.append(title, desc, actions);
     el.roleCardList.appendChild(item);
   });
@@ -1934,6 +2525,13 @@ function createRoleCardPickerTile(card, state) {
     openRoleCardDialog(card);
   });
 
+  const exportBtn = document.createElement("button");
+  exportBtn.className = "secondary";
+  exportBtn.type = "button";
+  exportBtn.textContent = "匯出";
+  exportBtn.disabled = Boolean(pendingRoleCardStartId);
+  exportBtn.addEventListener("click", () => exportRoleCard(card));
+
   const deleteBtn = document.createElement("button");
   deleteBtn.className = "muted";
   deleteBtn.type = "button";
@@ -1941,7 +2539,7 @@ function createRoleCardPickerTile(card, state) {
   deleteBtn.disabled = Boolean(pendingRoleCardStartId);
   deleteBtn.addEventListener("click", () => removeRoleCard(card));
 
-  actions.append(startBtn, editBtn, deleteBtn);
+  actions.append(startBtn, editBtn, exportBtn, deleteBtn);
   tile.append(createPickerCover(card.coverImage, card.name || "封面", card.coverPosition), title, intro, actions);
   return tile;
 }
@@ -2437,8 +3035,10 @@ function collectCompressionTriggerActionsFromEditor(options = {}) {
       name: item.querySelector("[data-field='triggerActionName']")?.value || "",
       enabled: item.querySelector("[data-field='triggerActionEnabled']")?.checked !== false,
       action: item.querySelector("[data-field='triggerActionProcessing']")?.value || MODEL_TRIGGER_ACTION_CALL_API,
-      skipReasoner: Boolean(item.querySelector("[data-field='triggerActionSkipReasoner']")?.checked),
+      keywordFollowupAction: item.querySelector("[data-field='triggerKeywordFollowupAction']")?.value ||
+        KEYWORD_FOLLOWUP_CONTINUE_REASONER,
       triggers: {
+        everyTurn: Boolean(item.querySelector("[data-field='triggerEveryTurn']")?.checked),
         roundLimit: Boolean(item.querySelector("[data-field='triggerRoundLimit']")?.checked),
         turns: parseIntegerList(item.querySelector("[data-field='triggerTurns']")?.value || ""),
         keywords: parseKeywordList(item.querySelector("[data-field='triggerKeywords']")?.value || ""),
@@ -2451,6 +3051,9 @@ function collectCompressionTriggerActionsFromEditor(options = {}) {
 function formatTriggerActionSummary(action = {}, index = 0) {
   const triggers = normalizeCompressionTriggerConfig(action.triggers || {});
   const triggerParts = [];
+  if (triggers.everyTurn) {
+    triggerParts.push("每回合");
+  }
   if (triggers.roundLimit) {
     triggerParts.push("正文上限");
   }
@@ -2464,7 +3067,8 @@ function formatTriggerActionSummary(action = {}, index = 0) {
     action.name || `觸發組合 ${index + 1}`,
     triggerParts.length > 0 ? `(${triggerParts.join(" + ")})` : "(未設定觸發)",
     getModelTriggerActionLabel(action.action),
-    action.skipReasoner ? "不call正文" : ""
+    normalizeKeywordFollowupAction(action.keywordFollowupAction, action.skipReasoner) ===
+      KEYWORD_FOLLOWUP_STOP_AFTER_MODEL ? "關鍵字後停下" : ""
   ].filter(Boolean).join(" -> ");
 }
 
@@ -2571,13 +3175,29 @@ function renderCompressionTriggerActionEditor(actions = []) {
     actionSelect.value = normalizeModelTriggerAction(action.action);
     actionLabel.appendChild(actionSelect);
 
-    const skipLabel = document.createElement("label");
-    skipLabel.className = "checkbox-label";
-    const skipInput = document.createElement("input");
-    skipInput.type = "checkbox";
-    skipInput.checked = Boolean(action.skipReasoner);
-    skipInput.dataset.field = "triggerActionSkipReasoner";
-    skipLabel.append(skipInput, document.createTextNode("大模型 call api 後不call正文，只輸出完成訊息"));
+    const keywordFollowupLabel = document.createElement("label");
+    keywordFollowupLabel.textContent = "觸發關鍵字後續動作";
+    const keywordFollowupSelect = document.createElement("select");
+    keywordFollowupSelect.dataset.field = "triggerKeywordFollowupAction";
+    [
+      [KEYWORD_FOLLOWUP_CONTINUE_REASONER, "按照對話繼續觸發正文"],
+      [KEYWORD_FOLLOWUP_STOP_AFTER_MODEL, "停下，只輸出完成訊息"]
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      keywordFollowupSelect.appendChild(option);
+    });
+    keywordFollowupSelect.value = normalizeKeywordFollowupAction(action.keywordFollowupAction, action.skipReasoner);
+    keywordFollowupLabel.appendChild(keywordFollowupSelect);
+
+    const everyTurnLabel = document.createElement("label");
+    everyTurnLabel.className = "checkbox-label";
+    const everyTurnInput = document.createElement("input");
+    everyTurnInput.type = "checkbox";
+    everyTurnInput.checked = Boolean(triggers.everyTurn);
+    everyTurnInput.dataset.field = "triggerEveryTurn";
+    everyTurnLabel.append(everyTurnInput, document.createTextNode("每回合觸發"));
 
     const roundLabel = document.createElement("label");
     roundLabel.className = "checkbox-label";
@@ -2628,7 +3248,8 @@ function renderCompressionTriggerActionEditor(actions = []) {
       enabledInput,
       nameLabel,
       actionLabel,
-      skipLabel,
+      keywordFollowupLabel,
+      everyTurnLabel,
       roundLabel,
       turnsLabel,
       keywordLabel,
@@ -2812,6 +3433,7 @@ function syncSelectedCompressionProfileFromEditor() {
   profile.name = el.compressionProfileName?.value?.trim() || getDefaultCompressionProfileName(profile.id);
   profile.enabled = isStandard ? true : Boolean(el.compressionProfileEnabled?.checked);
   profile.locked = isStandard || Boolean(profile.locked);
+  profile.contextScope = normalizeCompressionContextScope(el.compressionProfileContextScope?.value || profile.contextScope);
   profile.triggerActions = collectCompressionTriggerActionsFromEditor();
   profile.triggers = profile.triggerActions[0]?.triggers ||
     normalizeCompressionTriggerConfig({}, { defaultRoundLimit: isStandard });
@@ -2846,6 +3468,9 @@ function renderCompressionProfileEditor(profileId = selectedCompressionProfileId
     el.compressionProfileEnabled.disabled = isStandard;
     el.compressionProfileEnabled.title = isStandard ? "標準壓縮模型固定啟用" : "";
   }
+  if (el.compressionProfileContextScope) {
+    el.compressionProfileContextScope.value = normalizeCompressionContextScope(profile.contextScope);
+  }
   if (el.deleteCompressionProfileBtn) {
     el.deleteCompressionProfileBtn.disabled = isStandard;
     el.deleteCompressionProfileBtn.title = isStandard ? "標準壓縮模型不可刪除" : "";
@@ -2877,8 +3502,9 @@ function createCompressionProfile() {
         name: "觸發組合 1",
         enabled: true,
         action: MODEL_TRIGGER_ACTION_CALL_API,
+        keywordFollowupAction: KEYWORD_FOLLOWUP_CONTINUE_REASONER,
         skipReasoner: false,
-        triggers: { roundLimit: false, keywords: [], keywordSource: "both", turns: [] },
+        triggers: { everyTurn: false, roundLimit: false, keywords: [], keywordSource: "both", turns: [] },
         expanded: true
       }
     ],
@@ -3067,7 +3693,8 @@ function collectRoleCardCustomSectionsFromEditor(options = {}) {
     .map((item) => normalizeRoleCardCustomSection({
       id: item.dataset.customSectionId || "",
       name: item.querySelector("[data-field='sectionName']")?.value || "",
-      content: item.querySelector("[data-field='sectionContent']")?.value || ""
+      content: item.querySelector("[data-field='sectionContent']")?.value || "",
+      enabled: Boolean(item.querySelector("[data-field='sectionEnabled']")?.checked)
     }));
   return keepEmpty ? sections : sections.filter((item) => item.name || item.content);
 }
@@ -3096,20 +3723,39 @@ function renderRoleCardCustomSectionEditor(sections = []) {
     title.className = "inline-actions";
 
     const label = document.createElement("strong");
-    label.textContent = section.name || `自定義內容 ${index + 1}`;
+    label.textContent = `${section.name || `自定義內容 ${index + 1}`}${section.enabled === false ? "｜停用" : ""}`;
     label.style.flex = "1";
+
+    const enabledBtn = document.createElement("button");
+    enabledBtn.type = "button";
+    enabledBtn.className = section.enabled !== false ? "secondary" : "muted";
+    enabledBtn.textContent = section.enabled !== false ? "啟用" : "停用";
+    enabledBtn.addEventListener("click", () => {
+      roleCardCustomSectionsDraft = collectRoleCardCustomSectionsFromEditor({ keepEmpty: true })
+        .map((item) => item.id === section.id ? { ...item, enabled: item.enabled === false } : item);
+      renderRoleCardCustomSectionEditor(roleCardCustomSectionsDraft);
+    });
 
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "muted";
-      deleteBtn.textContent = "刪除";
-      deleteBtn.addEventListener("click", () => {
+    deleteBtn.textContent = "刪除";
+    deleteBtn.addEventListener("click", () => {
       roleCardCustomSectionsDraft = collectRoleCardCustomSectionsFromEditor({ keepEmpty: true })
         .filter((item) => item.id !== section.id);
       renderRoleCardCustomSectionEditor(roleCardCustomSectionsDraft);
     });
 
-    title.append(label, deleteBtn);
+    title.append(label, enabledBtn, deleteBtn);
+
+    const enabledLabel = document.createElement("label");
+    enabledLabel.textContent = "啟用";
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = section.enabled !== false;
+    enabledInput.dataset.field = "sectionEnabled";
+    enabledLabel.prepend(enabledInput);
+    enabledLabel.hidden = true;
 
     const nameLabel = document.createElement("label");
     nameLabel.textContent = "自定義名字";
@@ -3129,9 +3775,120 @@ function renderRoleCardCustomSectionEditor(sections = []) {
     contentInput.dataset.field = "sectionContent";
     contentLabel.appendChild(contentInput);
 
-    item.append(title, nameLabel, contentLabel);
+    item.append(title, enabledLabel, nameLabel, contentLabel);
     el.roleCardCustomSectionList.appendChild(item);
   });
+}
+
+function normalizeRoleCardOpeningDialogueEntry(entry = {}, index = 0) {
+  const source = typeof entry === "string"
+    ? { content: entry }
+    : entry && typeof entry === "object"
+      ? entry
+      : {};
+  const content = String(
+    source.content ??
+    source.text ??
+    source.value ??
+    source.openingDialogue ??
+    source.first_mes ??
+    ""
+  ).trim();
+  return {
+    id: String(source.id || `opening_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`).trim(),
+    name: String(source.name || source.title || source.label || `開場 ${index + 1}`).trim(),
+    content
+  };
+}
+
+function normalizeRoleCardOpeningDialoguesForEditor(value = [], fallbackOpening = "") {
+  const rawItems = Array.isArray(value) ? value : [];
+  const entries = rawItems
+    .map((item, index) => normalizeRoleCardOpeningDialogueEntry(item, index))
+    .filter((item) => item.name || item.content);
+  const fallback = String(fallbackOpening || "").trim();
+  if (fallback && !entries.some((item) => item.content === fallback)) {
+    entries.unshift(normalizeRoleCardOpeningDialogueEntry({ id: "opening_primary", name: "開場 1", content: fallback }, 0));
+  }
+  if (entries.length === 0) {
+    entries.push(normalizeRoleCardOpeningDialogueEntry({ name: "開場 1", content: "" }, 0));
+  }
+  return entries.map((entry, index) => ({
+    ...entry,
+    name: entry.name || `開場 ${index + 1}`
+  }));
+}
+
+function syncSelectedRoleCardOpeningFromEditor() {
+  if (!selectedRoleCardOpeningId || !el.roleCardOpening) {
+    return;
+  }
+  const content = el.roleCardOpening.value;
+  roleCardOpeningDialoguesDraft = roleCardOpeningDialoguesDraft.map((entry) =>
+    entry.id === selectedRoleCardOpeningId ? { ...entry, content } : entry
+  );
+}
+
+function renderRoleCardOpeningTabs(selectedId = "") {
+  if (!el.roleCardOpeningTabs || !el.roleCardOpening) {
+    return;
+  }
+  if (roleCardOpeningDialoguesDraft.length === 0) {
+    roleCardOpeningDialoguesDraft = normalizeRoleCardOpeningDialoguesForEditor([], "");
+  }
+  selectedRoleCardOpeningId = roleCardOpeningDialoguesDraft.some((entry) => entry.id === selectedId)
+    ? selectedId
+    : roleCardOpeningDialoguesDraft[0]?.id || "";
+  const selectedEntry = roleCardOpeningDialoguesDraft.find((entry) => entry.id === selectedRoleCardOpeningId);
+  el.roleCardOpening.value = selectedEntry?.content || "";
+  el.roleCardOpeningTabs.innerHTML = "";
+
+  roleCardOpeningDialoguesDraft.forEach((entry, index) => {
+    const tab = document.createElement("div");
+    tab.className = `opening-dialogue-tab${entry.id === selectedRoleCardOpeningId ? " active" : ""}`;
+
+    const switchBtn = document.createElement("button");
+    switchBtn.type = "button";
+    switchBtn.className = "opening-dialogue-tab-label";
+    switchBtn.textContent = entry.name || `開場 ${index + 1}`;
+    switchBtn.title = entry.name || `開場 ${index + 1}`;
+    switchBtn.addEventListener("click", () => {
+      syncSelectedRoleCardOpeningFromEditor();
+      renderRoleCardOpeningTabs(entry.id);
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "opening-dialogue-tab-close";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = "刪除這個開場";
+    deleteBtn.addEventListener("click", () => {
+      syncSelectedRoleCardOpeningFromEditor();
+      const currentIndex = roleCardOpeningDialoguesDraft.findIndex((item) => item.id === entry.id);
+      if (roleCardOpeningDialoguesDraft.length <= 1) {
+        roleCardOpeningDialoguesDraft = normalizeRoleCardOpeningDialoguesForEditor([], "");
+        renderRoleCardOpeningTabs(roleCardOpeningDialoguesDraft[0]?.id || "");
+        return;
+      }
+      roleCardOpeningDialoguesDraft = roleCardOpeningDialoguesDraft.filter((item) => item.id !== entry.id);
+      const nextEntry = roleCardOpeningDialoguesDraft[Math.max(0, currentIndex - 1)] || roleCardOpeningDialoguesDraft[0];
+      renderRoleCardOpeningTabs(nextEntry?.id || "");
+    });
+
+    tab.append(switchBtn, deleteBtn);
+    el.roleCardOpeningTabs.appendChild(tab);
+  });
+}
+
+function collectRoleCardOpeningDialoguesFromEditor() {
+  syncSelectedRoleCardOpeningFromEditor();
+  return roleCardOpeningDialoguesDraft
+    .map((entry, index) => normalizeRoleCardOpeningDialogueEntry(entry, index))
+    .filter((entry) => entry.content);
+}
+
+function getSelectedRoleCardOpeningDialogue(dialogues = []) {
+  return dialogues.find((entry) => entry.id === selectedRoleCardOpeningId)?.content || dialogues[0]?.content || "";
 }
 
 function collectRoleCardLorebookDraftsFromEditor() {
@@ -3144,8 +3901,11 @@ function collectRoleCardLorebookDraftsFromEditor() {
       expanded: Boolean(item.open),
       key: item.querySelector("[data-field='key']")?.value || "",
       keywords: parseTermInput(item.querySelector("[data-field='keywords']")?.value || ""),
+      secondaryKeywords: parseTermInput(item.querySelector("[data-field='secondaryKeywords']")?.value || ""),
       content: item.querySelector("[data-field='content']")?.value || "",
       enabled: Boolean(item.querySelector("[data-field='enabled']")?.checked),
+      permanent: Boolean(item.querySelector("[data-field='permanent']")?.checked),
+      probability: normalizeLorebookProbability(item.querySelector("[data-field='probability']")?.value, 100),
       activation: {
         activeTurns: 0,
         onCloseActivate: []
@@ -3157,7 +3917,7 @@ function collectRoleCardLorebookDraftsFromEditor() {
 function collectRoleCardLorebooksFromEditor() {
   return collectRoleCardLorebookDraftsFromEditor()
     .filter((item) => {
-      return item.key || item.content || item.keywords.length > 0;
+      return item.key || item.content || item.keywords.length > 0 || item.secondaryKeywords.length > 0;
     });
 }
 
@@ -3186,7 +3946,13 @@ function renderRoleCardLorebookEditor(entries = []) {
     header.className = "inline-actions";
 
     const title = document.createElement("strong");
-    title.textContent = entry.key || `條目 ${index + 1}`;
+    const titleParts = [
+      entry.key || `條目 ${index + 1}`,
+      entry.permanent ? "永久" : "",
+      entry.secondaryKeywords?.length > 0 ? "第二關鍵字" : "",
+      normalizeLorebookProbability(entry.probability, 100) < 100 ? `${normalizeLorebookProbability(entry.probability, 100)}%` : ""
+    ].filter(Boolean);
+    title.textContent = titleParts.join("｜");
     title.style.flex = "1";
 
     const enabledBtn = document.createElement("button");
@@ -3234,6 +4000,14 @@ function renderRoleCardLorebookEditor(entries = []) {
     enabledLabel.prepend(enabledInput);
     enabledLabel.hidden = true;
 
+    const permanentLabel = document.createElement("label");
+    permanentLabel.className = "checkbox-label";
+    const permanentInput = document.createElement("input");
+    permanentInput.type = "checkbox";
+    permanentInput.checked = Boolean(entry.permanent);
+    permanentInput.dataset.field = "permanent";
+    permanentLabel.append(permanentInput, document.createTextNode("永久啟用（放入角色卡自定義內容位置）"));
+
     const keyLabel = document.createElement("label");
     keyLabel.textContent = "條目標題 (Key)";
     const keyInput = document.createElement("input");
@@ -3252,6 +4026,26 @@ function renderRoleCardLorebookEditor(entries = []) {
     keywordInput.dataset.field = "keywords";
     keywordLabel.appendChild(keywordInput);
 
+    const secondaryKeywordLabel = document.createElement("label");
+    secondaryKeywordLabel.textContent = "第二關鍵字";
+    const secondaryKeywordInput = document.createElement("textarea");
+    secondaryKeywordInput.rows = 2;
+    secondaryKeywordInput.value = Array.isArray(entry.secondaryKeywords) ? entry.secondaryKeywords.join(", ") : "";
+    secondaryKeywordInput.placeholder = "有填時，需要主關鍵字 + 第二關鍵字同時命中才會觸發。";
+    secondaryKeywordInput.dataset.field = "secondaryKeywords";
+    secondaryKeywordLabel.appendChild(secondaryKeywordInput);
+
+    const probabilityLabel = document.createElement("label");
+    probabilityLabel.textContent = "百分比啟用";
+    const probabilityInput = document.createElement("input");
+    probabilityInput.type = "number";
+    probabilityInput.min = "0";
+    probabilityInput.max = "100";
+    probabilityInput.step = "1";
+    probabilityInput.value = String(normalizeLorebookProbability(entry.probability, 100));
+    probabilityInput.dataset.field = "probability";
+    probabilityLabel.appendChild(probabilityInput);
+
     const contentLabel = document.createElement("label");
     contentLabel.textContent = "內容 (Content)";
     const contentInput = document.createElement("textarea");
@@ -3265,8 +4059,11 @@ function renderRoleCardLorebookEditor(entries = []) {
     editor.className = "stack";
     editor.append(
       enabledLabel,
+      permanentLabel,
       keyLabel,
       keywordLabel,
+      secondaryKeywordLabel,
+      probabilityLabel,
       contentLabel
     );
 
@@ -3285,18 +4082,20 @@ function openRoleCardDialog(card = null) {
     el.roleCardCoverImageFile.value = "";
     setRoleCardCoverPreview(card.coverImage || "", card.coverPosition || "center center");
     renderRoleCardCustomSectionEditor(normalizeRoleCardCustomSections(card.customSections, card));
-    el.roleCardOpening.value = card.openingDialogue;
+    roleCardOpeningDialoguesDraft = normalizeRoleCardOpeningDialoguesForEditor(card.openingDialogues, card.openingDialogue);
+    renderRoleCardOpeningTabs(card.activeOpeningDialogueId || roleCardOpeningDialoguesDraft[0]?.id || "");
     renderRoleCardLorebookEditor(card.lorebooks || []);
   } else {
     el.roleCardDialogTitle.textContent = "建立角色卡";
     roleCardCoverImageReadTask = null;
     el.roleCardId.value = "";
-    renderPromptModeOptions(el.roleCardMode, "single");
+    renderPromptModeOptions(el.roleCardMode, DEFAULT_ROLE_CARD_MODE);
     el.roleCardName.value = "";
     el.roleCardCoverImageFile.value = "";
     setRoleCardCoverPreview("", "center center");
     renderRoleCardCustomSectionEditor([]);
-    el.roleCardOpening.value = "";
+    roleCardOpeningDialoguesDraft = normalizeRoleCardOpeningDialoguesForEditor([], "");
+    renderRoleCardOpeningTabs(roleCardOpeningDialoguesDraft[0]?.id || "");
     renderRoleCardLorebookEditor([]);
   }
 
@@ -3493,12 +4292,16 @@ function normalizeTimeTrackingWordListForEditor(value = "") {
 
 function getTimeTrackingDialogPayload() {
   return {
-    enabled: true,
+    enabled: Boolean(el.timeTrackingEnabled?.checked),
     currentDayNumber: Math.max(1, Math.floor(Number(el.timeTrackingDayNumber?.value || 1))),
     currentYear: Math.max(1, Math.floor(Number(el.timeTrackingYear?.value || new Date().getFullYear()))),
     currentMonth: Math.max(1, Math.floor(Number(el.timeTrackingMonth?.value || 1))),
     currentDate: Math.max(1, Math.floor(Number(el.timeTrackingDate?.value || 1))),
     currentPeriod: el.timeTrackingPeriod?.value || "morning",
+    autoPeriod: {
+      enabled: Boolean(el.timeTrackingAutoPeriodEnabled?.checked),
+      roundsPerPeriod: Math.max(1, Math.floor(Number(el.timeTrackingAutoPeriodRounds?.value || 3)))
+    },
     config: {
       nextDayWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNextDayWords?.value || ""),
       connectorWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingConnectorWords?.value || ""),
@@ -3519,13 +4322,19 @@ function setTextareaWordList(field, words = []) {
 
 function renderTimeTrackingDialog(timeTracking = {}) {
   const config = timeTracking.config || {};
+  const autoPeriod = timeTracking.autoPeriod || {};
   const period = TIME_PERIOD_LABELS[timeTracking.currentPeriod] ? timeTracking.currentPeriod : "morning";
   if (el.timeTrackingMeta) {
     el.timeTrackingMeta.textContent = [
+      `統計時間: ${timeTracking.enabled === false ? "停用" : "啟用"}`,
       `當前天數: 第${Number(timeTracking.currentDayNumber || 1)}天`,
       `當前時間: ${TIME_PERIOD_LABELS[period]} ${Number(timeTracking.currentYear || new Date().getFullYear())}年${Number(timeTracking.currentMonth || 1)}月${Number(timeTracking.currentDate || 1)}日`,
+      autoPeriod.enabled ? `自動切換: 每 ${Number(autoPeriod.roundsPerPeriod || 3)} 回合` : "自動切換: 停用",
       timeTracking.updatedAt ? `更新時間: ${new Date(timeTracking.updatedAt).toLocaleString("zh-Hant")}` : ""
     ].filter(Boolean).join("｜");
+  }
+  if (el.timeTrackingEnabled) {
+    el.timeTrackingEnabled.checked = timeTracking.enabled !== false;
   }
   if (el.timeTrackingDayNumber) {
     el.timeTrackingDayNumber.value = Number(timeTracking.currentDayNumber || 1);
@@ -3541,6 +4350,12 @@ function renderTimeTrackingDialog(timeTracking = {}) {
   }
   if (el.timeTrackingPeriod) {
     el.timeTrackingPeriod.value = period;
+  }
+  if (el.timeTrackingAutoPeriodEnabled) {
+    el.timeTrackingAutoPeriodEnabled.checked = autoPeriod.enabled === true;
+  }
+  if (el.timeTrackingAutoPeriodRounds) {
+    el.timeTrackingAutoPeriodRounds.value = Math.max(1, Math.floor(Number(autoPeriod.roundsPerPeriod || 3)));
   }
   setTextareaWordList(el.timeTrackingNextDayWords, config.nextDayWords || []);
   setTextareaWordList(el.timeTrackingConnectorWords, config.connectorWords || []);
@@ -3866,6 +4681,12 @@ function bindEvents() {
   }
 
   el.createRoleCardBtn.addEventListener("click", () => openRoleCardDialog(null));
+  if (el.importRoleCardBtn && el.roleCardImportFile) {
+    el.importRoleCardBtn.addEventListener("click", () => el.roleCardImportFile.click());
+    el.roleCardImportFile.addEventListener("change", async () => {
+      await importRoleCardFromFile(el.roleCardImportFile.files?.[0]);
+    });
+  }
   if (el.selectSessionBtn) {
     el.selectSessionBtn.addEventListener("click", () => {
       sessionPickerPage = 1;
@@ -3980,6 +4801,20 @@ function bindEvents() {
     });
   }
 
+  if (el.addRoleCardOpeningBtn) {
+    el.addRoleCardOpeningBtn.addEventListener("click", () => {
+      syncSelectedRoleCardOpeningFromEditor();
+      const index = roleCardOpeningDialoguesDraft.length;
+      const entry = normalizeRoleCardOpeningDialogueEntry({ name: `開場 ${index + 1}`, content: "" }, index);
+      roleCardOpeningDialoguesDraft.push(entry);
+      renderRoleCardOpeningTabs(entry.id);
+    });
+  }
+
+  if (el.roleCardOpening) {
+    el.roleCardOpening.addEventListener("input", syncSelectedRoleCardOpeningFromEditor);
+  }
+
   el.roleCardForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -3995,19 +4830,24 @@ function bindEvents() {
       return;
     }
 
+    const openingDialogues = collectRoleCardOpeningDialoguesFromEditor();
+    const activeOpening = openingDialogues.find((entry) => entry.id === selectedRoleCardOpeningId) || openingDialogues[0] || null;
     const payload = {
       mode: normalizeRoleCardMode(el.roleCardMode.value),
       name: el.roleCardName.value.trim(),
       coverImage: el.roleCardCoverImage.value.trim(),
       coverPosition: "center center",
       customSections: collectRoleCardCustomSectionsFromEditor(),
-      openingDialogue: el.roleCardOpening.value.trim(),
+      openingDialogue: (activeOpening?.content || getSelectedRoleCardOpeningDialogue(openingDialogues)).trim(),
+      openingDialogues,
+      activeOpeningDialogueId: activeOpening?.id || selectedRoleCardOpeningId,
       lorebooks: collectRoleCardLorebooksFromEditor()
     };
     const corruptedFields = Object.entries({
       名字: payload.name,
       自定義內容: JSON.stringify(payload.customSections),
       開場對話: payload.openingDialogue,
+      開場對話分頁: JSON.stringify(payload.openingDialogues),
       世界書: JSON.stringify(payload.lorebooks)
     })
       .filter(([, value]) => containsReplacementCharacter(value))
@@ -4294,8 +5134,9 @@ function bindEvents() {
         name: `觸發組合 ${current.length + 1}`,
         enabled: true,
         action: MODEL_TRIGGER_ACTION_CALL_API,
+        keywordFollowupAction: KEYWORD_FOLLOWUP_CONTINUE_REASONER,
         skipReasoner: false,
-        triggers: { roundLimit: false, keywords: [], keywordSource: "both", turns: [] },
+        triggers: { everyTurn: false, roundLimit: false, keywords: [], keywordSource: "both", turns: [] },
         expanded: true
       }, current.length));
       renderCompressionTriggerActionEditor(current);
@@ -4322,7 +5163,8 @@ function bindEvents() {
 
   [
     el.compressionProfileName,
-    el.compressionProfileEnabled
+    el.compressionProfileEnabled,
+    el.compressionProfileContextScope
   ].forEach((field) => {
     if (field) {
       field.addEventListener("input", () => {

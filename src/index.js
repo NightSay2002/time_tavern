@@ -31,9 +31,14 @@ const CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE = 0.9;
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
+const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
 const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
 const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
+const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
+const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
+const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
+const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const KEYWORD_PROXIMITY_CHARS = 10;
 const TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS = 5;
@@ -45,6 +50,8 @@ const TIME_PERIOD_LABELS = {
   [TIME_PERIOD_NOON]: "中午",
   [TIME_PERIOD_EVENING]: "晚上"
 };
+const DEFAULT_AUTO_TIME_PERIOD_ROUNDS = 3;
+const KEEP_TIME_DIRECTIVE_PATTERN = /[｛{]\s*保持時間\s*[｝}]/gu;
 const DEFAULT_TIME_TRACKING_CONFIG = {
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
   connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
@@ -513,6 +520,11 @@ function createDefaultTimeTrackingState() {
     currentYear,
     currentMonth: month,
     currentDate: date,
+    autoPeriod: {
+      enabled: false,
+      roundsPerPeriod: DEFAULT_AUTO_TIME_PERIOD_ROUNDS,
+      turnsSinceChange: 0
+    },
     config: cloneData(DEFAULT_TIME_TRACKING_CONFIG, DEFAULT_TIME_TRACKING_CONFIG),
     updatedAt: nowIso()
   };
@@ -627,6 +639,27 @@ function normalizeTimeTrackingConfig(input = {}) {
   };
 }
 
+function normalizeTimeTrackingAutoPeriodConfig(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const rawRounds = Number(
+    source.roundsPerPeriod ??
+    source.turnsPerPeriod ??
+    source.intervalRounds ??
+    source.rounds ??
+    source.turns
+  );
+  const rawTurnsSinceChange = Number(source.turnsSinceChange ?? source.roundsSinceChange ?? source.counter);
+  return {
+    enabled: source.enabled === true,
+    roundsPerPeriod: Number.isFinite(rawRounds) && rawRounds > 0
+      ? Math.floor(rawRounds)
+      : DEFAULT_AUTO_TIME_PERIOD_ROUNDS,
+    turnsSinceChange: Number.isFinite(rawTurnsSinceChange) && rawTurnsSinceChange >= 0
+      ? Math.floor(rawTurnsSinceChange)
+      : 0
+  };
+}
+
 function normalizeTimeTrackingState(input = {}) {
   const defaults = createDefaultTimeTrackingState();
   const source = input && typeof input === "object" ? input : {};
@@ -649,6 +682,7 @@ function normalizeTimeTrackingState(input = {}) {
     currentYear,
     currentMonth: resolvedMonth,
     currentDate: resolvedDate,
+    autoPeriod: normalizeTimeTrackingAutoPeriodConfig(source.autoPeriod || source.autoTime || source.autoSwitch),
     config: normalizeTimeTrackingConfig(source.config || source.rules || source),
     updatedAt: safeText(source.updatedAt) || defaults.updatedAt
   };
@@ -767,10 +801,15 @@ function resetTimeTrackingProgress(currentState) {
   if (!currentState || typeof currentState !== "object") {
     return;
   }
-  const previousConfig = normalizeTimeTrackingState(currentState.timeTracking).config;
+  const previous = normalizeTimeTrackingState(currentState.timeTracking);
   currentState.timeTracking = {
     ...createDefaultTimeTrackingState(),
-    config: previousConfig,
+    enabled: previous.enabled,
+    autoPeriod: {
+      ...previous.autoPeriod,
+      turnsSinceChange: 0
+    },
+    config: previous.config,
     updatedAt: nowIso()
   };
 }
@@ -902,9 +941,11 @@ function verifyPersistedRoleCard(cardId, expectedFields = {}) {
         ? normalizeRoleCardRelationships(persistedCard[field])
         : field === "lorebooks"
           ? JSON.stringify(normalizeRoleCardLorebooks(persistedCard[field]))
-          : field === "customSections"
-            ? JSON.stringify(normalizeRoleCardCustomSections(persistedCard[field], persistedCard))
-          : safeText(persistedCard[field]);
+          : field === "openingDialogues"
+            ? JSON.stringify(normalizeRoleCardOpeningDialogues(persistedCard[field], persistedCard.openingDialogue))
+            : field === "customSections"
+              ? JSON.stringify(normalizeRoleCardCustomSections(persistedCard[field], persistedCard))
+              : safeText(persistedCard[field]);
       return actualValue !== safeText(expectedValue);
     });
 
@@ -923,6 +964,7 @@ function verifyPersistedRoleCard(cardId, expectedFields = {}) {
       description: persistedCard.description,
       relationships: normalizeRoleCardRelationships(persistedCard.relationships),
       openingDialogue: persistedCard.openingDialogue,
+      openingDialogues: JSON.stringify(normalizeRoleCardOpeningDialogues(persistedCard.openingDialogues, persistedCard.openingDialogue)),
       customSections: JSON.stringify(normalizeRoleCardCustomSections(persistedCard.customSections, persistedCard)),
       lorebooks: JSON.stringify(normalizeRoleCardLorebooks(persistedCard.lorebooks))
     });
@@ -1694,19 +1736,136 @@ function splitLorebookLinkTargets(value) {
   );
 }
 
+function normalizeLorebookProbability(value, fallback = 100) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, Math.floor(normalized)));
+}
+
+function getFirstMarkdownHeading(text = "") {
+  const match = safeText(text).match(/^\s{0,3}#{1,6}\s+(.+)$/mu);
+  return match ? match[1].replace(/#+\s*$/u, "").trim() : "";
+}
+
+function getRoleCardInputSource(input) {
+  const raw = input && typeof input === "object" ? input : {};
+  if (
+    raw.data &&
+    typeof raw.data === "object" &&
+    (safeText(raw.spec).toLowerCase().includes("chara_card") || raw.data.first_mes || raw.data.character_book)
+  ) {
+    const embeddedTimeTavernCard = raw.data.extensions?.time_tavern_role_card ||
+      raw.data.extensions?.timeTavernRoleCard;
+    if (embeddedTimeTavernCard && typeof embeddedTimeTavernCard === "object") {
+      return {
+        ...raw.data,
+        ...embeddedTimeTavernCard,
+        coverImage: safeText(embeddedTimeTavernCard.coverImage || raw.data.avatar)
+      };
+    }
+    return raw.data;
+  }
+  return raw;
+}
+
+function getRoleCardLorebookInput(raw = {}) {
+  return raw.lorebooks ||
+    raw.lorebook ||
+    raw.characterBook?.entries ||
+    raw.character_book?.entries ||
+    [];
+}
+
+function normalizeRoleCardOpeningDialogueEntry(input, index = 0) {
+  const source = typeof input === "string"
+    ? { content: input }
+    : input && typeof input === "object"
+      ? input
+      : {};
+  return {
+    id: safeText(source.id) || newId("opening"),
+    name: safeText(source.name || source.title || source.label) || `開場 ${index + 1}`,
+    content: safeText(
+      source.content ??
+      source.text ??
+      source.value ??
+      source.openingDialogue ??
+      source.first_mes ??
+      ""
+    ),
+    createdAt: safeText(source.createdAt) || nowIso(),
+    updatedAt: safeText(source.updatedAt) || nowIso()
+  };
+}
+
+function normalizeRoleCardOpeningDialogues(input = [], fallbackOpening = "") {
+  const entries = (Array.isArray(input) ? input : [])
+    .map((item, index) => normalizeRoleCardOpeningDialogueEntry(item, index))
+    .filter((item) => item.content);
+  const fallback = safeText(fallbackOpening);
+  if (fallback && !entries.some((item) => item.content === fallback)) {
+    entries.unshift(normalizeRoleCardOpeningDialogueEntry({
+      id: "opening_primary",
+      name: "開場 1",
+      content: fallback
+    }, 0));
+  }
+  return entries.map((entry, index) => ({
+    ...entry,
+    name: entry.name || `開場 ${index + 1}`
+  }));
+}
+
+function resolveActiveOpeningDialogue(openingDialogues = [], activeOpeningDialogueId = "", fallbackOpening = "") {
+  const entries = Array.isArray(openingDialogues) ? openingDialogues : [];
+  const activeId = safeText(activeOpeningDialogueId);
+  return entries.find((entry) => safeText(entry.id) === activeId)?.content ||
+    entries[0]?.content ||
+    safeText(fallbackOpening);
+}
+
 function normalizeRoleCardLorebookEntry(input) {
   const source = input && typeof input === "object" ? input : {};
-  const key = safeText(source.key || source.title || source.name || source.標題 || source.名稱);
   const content = safeText(source.content || source.text || source.內容);
-  const keywords = splitLorebookKeywords(
-    source.keywords ?? source.keyword ?? source.關鍵字 ?? source["关键词"]
+  const keywords = splitLorebookKeywords(source.keywords ?? source.keyword ?? source.keys ?? source.關鍵字 ?? source["关键词"]);
+  const secondaryKeywords = splitLorebookKeywords(
+    source.secondaryKeywords ?? source.secondaryKeyword ?? source.secondary_keys ?? source.secondaryKeys ?? source["第二關鍵字"] ?? source["第二关键词"]
+  );
+  const permanent = Boolean(
+    source.permanent ??
+    source.constant ??
+    source.alwaysActive ??
+    source.always_active ??
+    source.activation?.permanent
+  );
+  const probability = normalizeLorebookProbability(
+    source.probability ?? source.activation?.probability ?? source.extensions?.probability,
+    100
+  );
+  const key = safeText(
+    source.key ||
+    source.title ||
+    source.name ||
+    source.comment ||
+    source.標題 ||
+    source.名稱 ||
+    getFirstMarkdownHeading(content) ||
+    keywords[0]
   );
   return {
     id: safeText(source.id) || newId("lore"),
     key,
     keywords,
+    secondaryKeywords,
     content,
     enabled: source.enabled !== false,
+    permanent,
+    probability,
     activation: {
       activeTurns: 0,
       onCloseActivate: []
@@ -1721,7 +1880,7 @@ function normalizeRoleCardLorebooks(input) {
   return items
     .map((item) => normalizeRoleCardLorebookEntry(item))
     .filter((item) => {
-      return item.key && item.content && item.keywords.length > 0;
+      return item.key && item.content && (item.permanent || item.keywords.length > 0);
     });
 }
 
@@ -1731,6 +1890,7 @@ function normalizeRoleCardCustomSection(input) {
     id: safeText(raw.id) || newId("section"),
     name: safeText(raw.name || raw.title || raw.key || raw.label),
     content: safeText(raw.content || raw.text || raw.value),
+    enabled: raw.enabled !== false,
     createdAt: safeText(raw.createdAt) || nowIso(),
     updatedAt: safeText(raw.updatedAt) || nowIso()
   };
@@ -1739,10 +1899,13 @@ function normalizeRoleCardCustomSection(input) {
 function buildLegacyRoleCardCustomSections(raw = {}) {
   return [
     { name: "性格", content: safeText(raw.personality) },
-    { name: "場景", content: safeText(raw.scene) },
-    { name: "系統指令", content: safeText(raw.systemInstruction) },
+    { name: "場景", content: safeText(raw.scene || raw.scenario) },
+    { name: "系統指令", content: safeText(raw.systemInstruction || raw.system_prompt) },
     { name: "詳細描述", content: safeText(raw.description) },
-    { name: "人物關係（純文字）", content: normalizeRoleCardRelationships(raw.relationships) }
+    { name: "人物關係（純文字）", content: normalizeRoleCardRelationships(raw.relationships) },
+    { name: "後續指示", content: safeText(raw.post_history_instructions) },
+    { name: "範例對話", content: safeText(raw.mes_example) },
+    { name: "創作者備註", content: safeText(raw.creator_notes) }
   ]
     .filter((item) => item.content)
     .map((item) => normalizeRoleCardCustomSection(item));
@@ -1758,17 +1921,25 @@ function normalizeRoleCardCustomSections(input, raw = {}) {
 function getRoleCardCustomSectionValue(roleCard, names = []) {
   const normalizedNames = new Set((Array.isArray(names) ? names : [names]).map((item) => safeText(item)));
   return normalizeRoleCardCustomSections(roleCard?.customSections, roleCard)
-    .find((section) => normalizedNames.has(section.name))?.content || "";
+    .find((section) => section.enabled !== false && normalizedNames.has(section.name))?.content || "";
 }
 
 function normalizeRoleCard(input) {
-  const raw = input && typeof input === "object" ? input : {};
+  const raw = getRoleCardInputSource(input);
   const customSections = normalizeRoleCardCustomSections(raw.customSections, raw);
+  const fallbackOpeningDialogue = safeText(raw.openingDialogue || raw.first_mes);
+  const openingDialogues = normalizeRoleCardOpeningDialogues(
+    raw.openingDialogues || raw.opening_dialogues || raw.alternateGreetings || raw.alternate_greetings,
+    fallbackOpeningDialogue
+  );
+  const activeOpeningDialogueId = safeText(raw.activeOpeningDialogueId || raw.active_opening_dialogue_id) ||
+    openingDialogues[0]?.id ||
+    "";
   return {
     id: safeText(raw.id) || newId("card"),
     name: safeText(raw.name),
     mode: normalizeRoleCardMode(raw.mode),
-    coverImage: safeText(raw.coverImage),
+    coverImage: safeText(raw.coverImage || raw.avatar),
     coverPosition: normalizeCoverPosition(raw.coverPosition),
     customSections,
     personality: getRoleCardCustomSectionValue({ customSections }, "性格"),
@@ -1776,8 +1947,10 @@ function normalizeRoleCard(input) {
     systemInstruction: getRoleCardCustomSectionValue({ customSections }, "系統指令"),
     description: getRoleCardCustomSectionValue({ customSections }, "詳細描述"),
     relationships: getRoleCardCustomSectionValue({ customSections }, "人物關係（純文字）"),
-    openingDialogue: safeText(raw.openingDialogue),
-    lorebooks: normalizeRoleCardLorebooks(raw.lorebooks),
+    openingDialogue: resolveActiveOpeningDialogue(openingDialogues, activeOpeningDialogueId, fallbackOpeningDialogue),
+    openingDialogues,
+    activeOpeningDialogueId,
+    lorebooks: normalizeRoleCardLorebooks(getRoleCardLorebookInput(raw)),
     createdAt: safeText(raw.createdAt) || nowIso(),
     updatedAt: safeText(raw.updatedAt) || nowIso()
   };
@@ -1834,7 +2007,7 @@ function normalizeRoleCardMode(value) {
   if (normalized === "no_role" || normalized === "norole" || normalized === "none") {
     return "no_role";
   }
-  return normalized || "single";
+  return normalized || DEFAULT_ROLE_CARD_MODE;
 }
 
 function normalizeCompressionProfileId(value = "") {
@@ -1879,11 +2052,28 @@ function normalizeKeywordTriggerSource(value = "") {
   return "both";
 }
 
+function normalizeCompressionContextScope(value = "") {
+  const normalized = safeText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (
+    normalized === COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT ||
+    normalized === "role_text" ||
+    normalized === "role_card" ||
+    normalized === "character_card" ||
+    normalized === "card_and_text" ||
+    normalized === "角色卡_正文" ||
+    normalized === "角色卡+正文"
+  ) {
+    return COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT;
+  }
+  return COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY;
+}
+
 function normalizeCompressionTriggerConfig(input = {}, options = {}) {
   const source = input && typeof input === "object" ? input : {};
   const legacyKeywords = source.keywords ?? source.keyword ?? source.triggerKeywords;
   const legacyTurns = source.turns ?? source.scheduledTurns ?? source.rounds;
   return {
+    everyTurn: Boolean(source.everyTurn ?? source.eachTurn ?? source.everyRound ?? source.onEveryTurn),
     roundLimit: Boolean(source.roundLimit ?? source.onRoundLimit ?? options.defaultRoundLimit),
     keywords: parseKeywordList(legacyKeywords),
     keywordSource: normalizeKeywordTriggerSource(source.keywordSource || source.source),
@@ -1903,6 +2093,34 @@ function normalizeModelTriggerAction(value = "") {
     return MODEL_TRIGGER_ACTION_COPY_USER_INPUT;
   }
   return MODEL_TRIGGER_ACTION_CALL_API;
+}
+
+function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) {
+  const raw = safeText(value);
+  const normalized = raw.toLowerCase().replace(/[-\s]+/g, "_");
+  if (
+    normalized === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL ||
+    normalized === "stop" ||
+    normalized === "stop_reasoner" ||
+    normalized === "skip_reasoner" ||
+    normalized === "no_reasoner" ||
+    raw === "停下" ||
+    raw === "不call正文" ||
+    raw === "只輸出完成訊息"
+  ) {
+    return KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
+  }
+  if (
+    normalized === KEYWORD_FOLLOWUP_CONTINUE_REASONER ||
+    normalized === "continue" ||
+    normalized === "continue_chat" ||
+    normalized === "call_reasoner" ||
+    raw === "繼續" ||
+    raw === "繼續觸發正文"
+  ) {
+    return KEYWORD_FOLLOWUP_CONTINUE_REASONER;
+  }
+  return legacySkipReasoner ? KEYWORD_FOLLOWUP_STOP_AFTER_MODEL : KEYWORD_FOLLOWUP_CONTINUE_REASONER;
 }
 
 function normalizeModelAppendTermConfig(input = {}, index = 0) {
@@ -1936,13 +2154,23 @@ function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options 
     { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
   );
   const action = normalizeModelTriggerAction(source.action || source.processingAction || source.afterTriggerAction);
+  const legacySkipReasoner = Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat);
+  const keywordFollowupAction = normalizeKeywordFollowupAction(
+    source.keywordFollowupAction ||
+      source.keywordFollowup ||
+      source.afterKeywordAction ||
+      source.keywordAfterAction ||
+      source["觸發關鍵字後續動作"],
+    legacySkipReasoner
+  );
   return {
     id: safeText(source.id || source.key) || `trigger_action_${index + 1}`,
     name: safeText(source.name || source.title || source.label) || `觸發組合 ${index + 1}`,
     enabled: source.enabled !== false,
     action,
+    keywordFollowupAction,
     skipReasoner: action === MODEL_TRIGGER_ACTION_CALL_API &&
-      Boolean(source.skipReasoner || source.skipResponse || source.noReasoner || source.skipChat),
+      keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL,
     triggers
   };
 }
@@ -1965,6 +2193,7 @@ function normalizeCompressionTriggerActionsConfig(input = {}, options = {}) {
     name: options.defaultName || "標準觸發",
     enabled: true,
     action: MODEL_TRIGGER_ACTION_CALL_API,
+    keywordFollowupAction: KEYWORD_FOLLOWUP_CONTINUE_REASONER,
     skipReasoner: false,
     triggers: Object.keys(legacyTriggers).length > 0
       ? legacyTriggers
@@ -2105,6 +2334,7 @@ function createStandardCompressionProfile(contextCompression) {
     name: getDefaultCompressionProfileName(STANDARD_COMPRESSION_PROFILE_ID),
     enabled: true,
     locked: true,
+    contextScope: COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY,
     triggers: normalizeCompressionTriggerConfig({ roundLimit: true }, { defaultRoundLimit: true }),
     triggerActions: normalizeCompressionTriggerActionsConfig([], {
       defaultRoundLimit: true,
@@ -2137,6 +2367,9 @@ function normalizeCompressionProfileConfig(input = {}, index = 0, fallbackContex
     name: safeText(source.name || source.title || source.displayName) || getDefaultCompressionProfileName(id),
     enabled: isStandard ? true : source.enabled !== false,
     locked: isStandard || Boolean(source.locked),
+    contextScope: normalizeCompressionContextScope(
+      source.contextScope || source.contextSource || source.readingScope || source.scope
+    ),
     triggers: triggerActions[0]?.triggers || normalizeCompressionTriggerConfig(
       source.triggers || source.trigger || {},
       { defaultRoundLimit: isStandard }
@@ -2362,10 +2595,19 @@ function renderRoleCardWithUser(card, userDisplayName) {
     description: injectUserPlaceholder(card.description, userDisplayName),
     relationships: injectUserPlaceholder(card.relationships, userDisplayName),
     openingDialogue: injectUserPlaceholder(card.openingDialogue, userDisplayName),
+    openingDialogues: normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue).map((entry) => ({
+      ...entry,
+      name: injectUserPlaceholder(entry.name, userDisplayName),
+      content: injectUserPlaceholder(entry.content, userDisplayName)
+    })),
     lorebooks: normalizeRoleCardLorebooks(card.lorebooks).map((entry) => ({
       ...entry,
       key: injectUserPlaceholder(entry.key, userDisplayName),
       keywords: splitLorebookKeywords(entry.keywords.map((keyword) => injectUserPlaceholder(keyword, userDisplayName))),
+      secondaryKeywords: splitLorebookKeywords(
+        (Array.isArray(entry.secondaryKeywords) ? entry.secondaryKeywords : [])
+          .map((keyword) => injectUserPlaceholder(keyword, userDisplayName))
+      ),
       content: injectUserPlaceholder(entry.content, userDisplayName)
     }))
   };
@@ -2388,6 +2630,60 @@ function getLorebookContextSource(state, runtimeUserName = "", purpose = "reason
 
 function getLorebookEntryIdentity(entry) {
   return safeText(entry?.id) || safeText(entry?.key);
+}
+
+function hashStringToPercent(value = "") {
+  const text = safeText(value);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0) % 100;
+}
+
+function getLorebookProbabilitySeed(currentState = state, entry = {}) {
+  const latestUser = getLatestUserMessage(currentState);
+  return [
+    getLorebookEntryIdentity(entry),
+    getMessageTurnNumber(latestUser),
+    latestUser?.id,
+    safeText(latestUser?.content).slice(0, 120)
+  ].filter(Boolean).join("|");
+}
+
+function passesLorebookProbability(entry = {}, currentState = state) {
+  const probability = normalizeLorebookProbability(entry.probability, 100);
+  if (probability >= 100) {
+    return true;
+  }
+  if (probability <= 0) {
+    return false;
+  }
+  return hashStringToPercent(getLorebookProbabilitySeed(currentState, entry)) < probability;
+}
+
+function doesLorebookKeywordGroupMatch(sourceText = "", keywords = []) {
+  const text = safeText(sourceText).toLowerCase();
+  return (Array.isArray(keywords) ? keywords : [])
+    .map((keyword) => safeText(keyword).toLowerCase())
+    .filter(Boolean)
+    .some((keyword) => text.includes(keyword));
+}
+
+function doesLorebookEntryMatchSource(entry = {}, sourceText = "") {
+  if (!doesLorebookKeywordGroupMatch(sourceText, entry.keywords)) {
+    return false;
+  }
+  const secondaryKeywords = splitLorebookKeywords(entry.secondaryKeywords);
+  if (secondaryKeywords.length === 0) {
+    return true;
+  }
+  return doesLorebookKeywordGroupMatch(sourceText, secondaryKeywords);
+}
+
+function isPermanentLorebookEntry(entry = {}) {
+  return Boolean(entry.permanent || entry.constant || entry.alwaysActive || entry.always_active);
 }
 
 function getEffectiveLorebookDedupTurnThreshold(currentState = state) {
@@ -2470,11 +2766,36 @@ function resolveTriggeredLorebookEntries(state, activeRoleCard, runtimeUserName 
     if (entry.enabled === false) {
       return false;
     }
+    if (isPermanentLorebookEntry(entry)) {
+      return false;
+    }
     if (alreadyAttachedEntryIds.has(getLorebookEntryIdentity(entry))) {
       return false;
     }
-    return entry.keywords.some((keyword) => sourceText.includes(safeText(keyword).toLowerCase()));
+    if (!doesLorebookEntryMatchSource(entry, sourceText)) {
+      return false;
+    }
+    return passesLorebookProbability(entry, state);
   });
+}
+
+function getPermanentRoleCardLorebookEntries(state, activeRoleCard, runtimeUserName = "", purpose = "reasoner") {
+  if (purpose !== "reasoner") {
+    return [];
+  }
+  const activeCard = activeRoleCard || getActiveRoleCard(state);
+  if (!activeCard?.id) {
+    return [];
+  }
+  const resolvedUserName = resolveUserDisplayName(state?.userProfile, runtimeUserName);
+  const roleCard = renderRoleCardWithUser(activeCard, resolvedUserName);
+  return normalizeRoleCardLorebooks(roleCard?.lorebooks)
+    .filter((entry) =>
+      entry.enabled !== false &&
+      isPermanentLorebookEntry(entry) &&
+      safeText(entry.content) &&
+      passesLorebookProbability(entry, state)
+    );
 }
 
 function getTriggeredRoleCardLorebooks(state, activeRoleCard, runtimeUserName = "", purpose = "reasoner") {
@@ -2502,6 +2823,9 @@ function formatLorebookEntriesForPrompt(entries = []) {
 
 function formatRoleCardForPrompt(roleCard, options = {}) {
   const includeOpeningDialogue = options.includeOpeningDialogue !== false;
+  const permanentLorebookEntries = Array.isArray(options.permanentLorebookEntries)
+    ? options.permanentLorebookEntries
+    : [];
   if (!roleCard) {
     return "";
   }
@@ -2509,8 +2833,11 @@ function formatRoleCardForPrompt(roleCard, options = {}) {
   const lines = [
     roleCard.name ? `名字:${roleCard.name}` : "",
     ...normalizeRoleCardCustomSections(roleCard.customSections, roleCard)
-      .filter((section) => section.name || section.content)
-      .map((section) => `${section.name || "自定義內容"}:${section.content}`)
+      .filter((section) => section.enabled !== false && (section.name || section.content))
+      .map((section) => `${section.name || "自定義內容"}:${section.content}`),
+    ...permanentLorebookEntries
+      .filter((entry) => safeText(entry.key) || safeText(entry.content))
+      .map((entry) => `世界書-${entry.key || "永久啟用"}:${entry.content}`)
   ].filter(Boolean);
 
   if (includeOpeningDialogue && roleCard.openingDialogue) {
@@ -2520,7 +2847,7 @@ function formatRoleCardForPrompt(roleCard, options = {}) {
   return lines.join("\n");
 }
 
-function formatRoleCardsForPrompt(roleCards, userDisplayName = "") {
+function formatRoleCardsForPrompt(roleCards, userDisplayName = "", options = {}) {
   const cards = Array.isArray(roleCards) ? roleCards.filter(Boolean) : [roleCards].filter(Boolean);
   if (cards.length === 0) {
     return "未設定";
@@ -2529,7 +2856,10 @@ function formatRoleCardsForPrompt(roleCards, userDisplayName = "") {
   return cards
     .map((card, index) => {
       const renderedCard = resolvedUserName ? renderRoleCardWithUser(card, resolvedUserName) : card;
-      const cardContent = formatRoleCardForPrompt(renderedCard, { includeOpeningDialogue: false });
+      const cardContent = formatRoleCardForPrompt(renderedCard, {
+        includeOpeningDialogue: false,
+        permanentLorebookEntries: options.permanentLorebookEntries || []
+      });
       return [`#${index + 1}`, cardContent].filter(Boolean).join("\n");
     })
     .join("\n\n");
@@ -2627,15 +2957,36 @@ function isTimeTrackingConnectorBlocked(text = "", connectorRange = null, config
     );
 }
 
+function isTimeTrackingRangeBlockedByNoChange(text = "", range = null, config = DEFAULT_TIME_TRACKING_CONFIG) {
+  if (!range) {
+    return false;
+  }
+  return getTimeTrackingNoChangeOccurrences(text, config)
+    .some((blockedRange) =>
+      getTimeTrackingRangeGap(blockedRange, range) <= TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS
+    );
+}
+
 function isNearTimeTrackingConnector(text = "", range = null, config = DEFAULT_TIME_TRACKING_CONFIG) {
   if (!range) {
     return false;
   }
   return getTimeTrackingConnectorOccurrences(text, config)
     .some((connectorRange) =>
+      connectorRange.end <= range.start &&
       getTimeTrackingRangeGap(connectorRange, range) <= TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS &&
       !isTimeTrackingConnectorBlocked(text, connectorRange, config)
     );
+}
+
+function shouldApplyTimeTrackingRange(text = "", range = null, config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
+  if (!range || isTimeTrackingRangeBlockedByNoChange(text, range, config)) {
+    return false;
+  }
+  if (options.allowBareTimeExpressions) {
+    return true;
+  }
+  return isNearTimeTrackingConnector(text, range, config);
 }
 
 function parseChineseSmallNumber(value = "") {
@@ -2702,7 +3053,7 @@ function parseChineseDigitYear(value = "") {
   return Number.isFinite(parsed) && parsed >= 1 && parsed <= 9999 ? parsed : null;
 }
 
-function findExplicitYear(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+function findExplicitYear(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
   const normalizedText = normalizeTimeMatchText(text);
   const matches = [...normalizedText.matchAll(/(\d{3,4}|[零一二三四五六七八九〇○Ｏ]{3,4})\s*年/gu)];
   const candidates = matches
@@ -2712,7 +3063,7 @@ function findExplicitYear(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
         start: match.index,
         end: match.index + match[0].length
       };
-      return year && isNearTimeTrackingConnector(normalizedText, range, config)
+      return year && shouldApplyTimeTrackingRange(normalizedText, range, config, options)
         ? { year, index: match.index }
         : null;
     })
@@ -2721,7 +3072,7 @@ function findExplicitYear(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
   return candidates[0]?.year || null;
 }
 
-function findExplicitDayNumber(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+function findExplicitDayNumber(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
   const normalizedText = normalizeTimeMatchText(text);
   const matches = [...normalizedText.matchAll(/第\s*(\d{1,4})\s*天/gu)];
   const candidates = matches
@@ -2733,7 +3084,7 @@ function findExplicitDayNumber(text = "", config = DEFAULT_TIME_TRACKING_CONFIG)
       };
       return Number.isFinite(dayNumber) &&
         dayNumber > 0 &&
-        isNearTimeTrackingConnector(normalizedText, range, config)
+        shouldApplyTimeTrackingRange(normalizedText, range, config, options)
         ? { dayNumber, index: match.index }
         : null;
     })
@@ -2742,27 +3093,27 @@ function findExplicitDayNumber(text = "", config = DEFAULT_TIME_TRACKING_CONFIG)
   return candidates[0]?.dayNumber || null;
 }
 
-function findDayAfterIncrement(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+function findDayAfterIncrement(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
   const normalizedText = normalizeTimeMatchText(text);
   const matches = [...normalizedText.matchAll(/([0-9]+|[一二三四五六七八九十百兩两]+)\s*天\s*[後后]/gu)];
   const values = matches
-    .filter((match) => isNearTimeTrackingConnector(normalizedText, {
+    .filter((match) => shouldApplyTimeTrackingRange(normalizedText, {
       start: match.index,
       end: match.index + match[0].length
-    }, config))
+    }, config, options))
     .map((match) => parseChineseSmallNumber(match[1]))
     .filter((value) => Number.isFinite(value) && value > 0);
   return values.length > 0 ? Math.max(...values) : 0;
 }
 
-function findNextDayIncrement(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+function findNextDayIncrement(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
   const normalizedText = normalizeTimeMatchText(text);
   return (Array.isArray(config.nextDayWords) ? config.nextDayWords : [])
     .flatMap((word) => findTimeTrackingWordOccurrences(normalizedText, word))
-    .some((range) => isNearTimeTrackingConnector(normalizedText, range, config));
+    .some((range) => shouldApplyTimeTrackingRange(normalizedText, range, config, options));
 }
 
-function findExplicitMonthDate(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, fallbackYear = getCurrentCalendarYear()) {
+function findExplicitMonthDate(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, fallbackYear = getCurrentCalendarYear(), options = {}) {
   const normalizedText = normalizeTimeMatchText(text);
   const matches = [...normalizedText.matchAll(/(?:(\d{3,4}|[零一二三四五六七八九〇○Ｏ]{3,4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|號|号)/gu)];
   const candidates = [];
@@ -2771,7 +3122,7 @@ function findExplicitMonthDate(text = "", config = DEFAULT_TIME_TRACKING_CONFIG,
       start: match.index,
       end: match.index + match[0].length
     };
-    if (!isNearTimeTrackingConnector(normalizedText, range, config)) {
+    if (!shouldApplyTimeTrackingRange(normalizedText, range, config, options)) {
       continue;
     }
     const year = match[1]
@@ -2856,7 +3207,72 @@ function setTimeTrackingDayNumber(timeTracking, dayNumber) {
   };
 }
 
-function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONFIG) {
+function getNextTimePeriod(period = TIME_PERIOD_MORNING) {
+  const normalized = normalizeTimePeriod(period);
+  if (normalized === TIME_PERIOD_MORNING) {
+    return TIME_PERIOD_NOON;
+  }
+  if (normalized === TIME_PERIOD_NOON) {
+    return TIME_PERIOD_EVENING;
+  }
+  return TIME_PERIOD_MORNING;
+}
+
+function getTimePeriodTransitionLabel(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const currentLabel = TIME_PERIOD_LABELS[normalized.currentPeriod] || TIME_PERIOD_LABELS[TIME_PERIOD_MORNING];
+  const nextLabel = TIME_PERIOD_LABELS[getNextTimePeriod(normalized.currentPeriod)] || TIME_PERIOD_LABELS[TIME_PERIOD_NOON];
+  return `${currentLabel}->${nextLabel}`;
+}
+
+function resetAutoTimePeriodCounter(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  return {
+    ...normalized,
+    autoPeriod: {
+      ...normalized.autoPeriod,
+      turnsSinceChange: 0
+    }
+  };
+}
+
+function advanceTimeTrackingPeriod(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const nextPeriod = getNextTimePeriod(normalized.currentPeriod);
+  const base = normalized.currentPeriod === TIME_PERIOD_EVENING
+    ? advanceTimeTrackingDays(normalized, 1)
+    : normalized;
+  return {
+    ...base,
+    currentPeriod: nextPeriod,
+    autoPeriod: {
+      ...normalized.autoPeriod,
+      turnsSinceChange: 0
+    },
+    updatedAt: nowIso()
+  };
+}
+
+function shouldWarnBeforeAutoTimePeriodSwitch(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const autoPeriod = normalizeTimeTrackingAutoPeriodConfig(normalized.autoPeriod);
+  if (!normalized.enabled || !autoPeriod.enabled) {
+    return false;
+  }
+  return autoPeriod.turnsSinceChange >= Math.max(0, autoPeriod.roundsPerPeriod - 1);
+}
+
+function hasKeepTimeDirective(text = "") {
+  KEEP_TIME_DIRECTIVE_PATTERN.lastIndex = 0;
+  return KEEP_TIME_DIRECTIVE_PATTERN.test(safeText(text));
+}
+
+function stripKeepTimeDirective(text = "") {
+  KEEP_TIME_DIRECTIVE_PATTERN.lastIndex = 0;
+  return safeText(text).replace(KEEP_TIME_DIRECTIVE_PATTERN, "").trim();
+}
+
+function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
   const normalizedText = normalizeTimeMatchText(text);
   if (!normalizedText) {
     return "";
@@ -2870,7 +3286,7 @@ function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONF
       .map((word) => {
         const normalizedWord = normalizeTimeMatchText(word);
         return findTimeTrackingWordOccurrences(normalizedText, normalizedWord)
-          .filter((range) => isNearTimeTrackingConnector(normalizedText, range, config))
+          .filter((range) => shouldApplyTimeTrackingRange(normalizedText, range, config, options))
           .map((range) => ({ period, index: range.start }));
       })
       .flat()
@@ -2880,24 +3296,28 @@ function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONF
   return candidates[0]?.period || "";
 }
 
-function updateTimeTrackingFromText(currentState, text = "") {
+function updateTimeTrackingFromText(currentState, text = "", options = {}) {
   if (!currentState || typeof currentState !== "object") {
-    return;
+    return { changed: false };
   }
   let timeTracking = normalizeTimeTrackingState(currentState.timeTracking);
+  const beforeTimeTracking = timeTracking;
   if (!timeTracking.enabled) {
     currentState.timeTracking = timeTracking;
-    return;
+    return { changed: false };
   }
   const content = safeText(text);
   if (!content) {
     currentState.timeTracking = timeTracking;
-    return;
+    return { changed: false };
   }
   const config = normalizeTimeTrackingConfig(timeTracking.config);
+  const matchOptions = {
+    allowBareTimeExpressions: Boolean(options.allowBareTimeExpressions)
+  };
   let dayChangedByText = false;
 
-  const explicitDate = findExplicitMonthDate(content, config, timeTracking.currentYear);
+  const explicitDate = findExplicitMonthDate(content, config, timeTracking.currentYear, matchOptions);
   if (explicitDate) {
     timeTracking = {
       ...timeTracking,
@@ -2907,7 +3327,7 @@ function updateTimeTrackingFromText(currentState, text = "") {
       updatedAt: nowIso()
     };
   } else {
-    const explicitYear = findExplicitYear(content, config);
+    const explicitYear = findExplicitYear(content, config, matchOptions);
     if (explicitYear) {
       timeTracking = {
         ...timeTracking,
@@ -2917,22 +3337,22 @@ function updateTimeTrackingFromText(currentState, text = "") {
     }
   }
 
-  const explicitDayNumber = findExplicitDayNumber(content, config);
+  const explicitDayNumber = findExplicitDayNumber(content, config, matchOptions);
   if (explicitDayNumber) {
     timeTracking = setTimeTrackingDayNumber(timeTracking, explicitDayNumber);
     dayChangedByText = true;
   } else {
-    const dayAfterIncrement = findDayAfterIncrement(content, config);
+    const dayAfterIncrement = findDayAfterIncrement(content, config, matchOptions);
     if (dayAfterIncrement > 0) {
       timeTracking = advanceTimeTrackingDays(timeTracking, dayAfterIncrement);
       dayChangedByText = true;
-    } else if (findNextDayIncrement(content, config)) {
+    } else if (findNextDayIncrement(content, config, matchOptions)) {
       timeTracking = advanceTimeTrackingDays(timeTracking, 1);
       dayChangedByText = true;
     }
   }
 
-  const detectedPeriod = detectTimePeriodFromText(content, config);
+  const detectedPeriod = detectTimePeriodFromText(content, config, matchOptions);
   if (detectedPeriod) {
     if (!dayChangedByText && timeTracking.currentPeriod === TIME_PERIOD_EVENING && detectedPeriod === TIME_PERIOD_MORNING) {
       timeTracking = advanceTimeTrackingDays(timeTracking, 1);
@@ -2944,19 +3364,68 @@ function updateTimeTrackingFromText(currentState, text = "") {
     };
   }
 
-  currentState.timeTracking = normalizeTimeTrackingState(timeTracking);
+  const normalizedAfter = normalizeTimeTrackingState(timeTracking);
+  const changed = beforeTimeTracking.currentDayNumber !== normalizedAfter.currentDayNumber ||
+    beforeTimeTracking.currentPeriod !== normalizedAfter.currentPeriod ||
+    beforeTimeTracking.currentYear !== normalizedAfter.currentYear ||
+    beforeTimeTracking.currentMonth !== normalizedAfter.currentMonth ||
+    beforeTimeTracking.currentDate !== normalizedAfter.currentDate;
+  currentState.timeTracking = changed
+    ? resetAutoTimePeriodCounter(normalizedAfter)
+    : normalizedAfter;
+  return { changed };
 }
 
 function updateTimeTrackingFromMessage(currentState, message = {}) {
   if (!message || typeof message !== "object") {
     return;
   }
+  const isOpeningOrAnyUserTimeSource = message.role === "user" || message.source === "opening";
   updateTimeTrackingFromText(currentState, message.role === "user"
     ? safeText(message.content || message.baseModelContent || message.extra?.baseModelContent)
-    : safeText(message.content));
+    : safeText(message.content), {
+      allowBareTimeExpressions: isOpeningOrAnyUserTimeSource
+    });
 }
 
-function formatTimeTrackingPromptBlock(currentState = state) {
+function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", userInput = "") {
+  const textUpdate = updateTimeTrackingFromText(currentState, assistantText);
+  let timeTracking = normalizeTimeTrackingState(currentState?.timeTracking);
+  const autoPeriod = normalizeTimeTrackingAutoPeriodConfig(timeTracking.autoPeriod);
+  const keepTime = hasKeepTimeDirective(userInput);
+  if (!timeTracking.enabled || !autoPeriod.enabled || textUpdate.changed) {
+    currentState.timeTracking = timeTracking;
+    return;
+  }
+  if (keepTime) {
+    currentState.timeTracking = normalizeTimeTrackingState({
+      ...timeTracking,
+      autoPeriod: {
+        ...autoPeriod,
+        turnsSinceChange: 0
+      },
+      updatedAt: nowIso()
+    });
+    return;
+  }
+
+  const nextCount = autoPeriod.turnsSinceChange + 1;
+  if (nextCount >= autoPeriod.roundsPerPeriod) {
+    currentState.timeTracking = normalizeTimeTrackingState(advanceTimeTrackingPeriod(timeTracking));
+    return;
+  }
+
+  currentState.timeTracking = normalizeTimeTrackingState({
+    ...timeTracking,
+    autoPeriod: {
+      ...autoPeriod,
+      turnsSinceChange: nextCount
+    },
+    updatedAt: nowIso()
+  });
+}
+
+function formatTimeTrackingPromptBlock(currentState = state, options = {}) {
   if (isCharacterCardCreationAssistantActive(currentState)) {
     return "";
   }
@@ -2966,8 +3435,11 @@ function formatTimeTrackingPromptBlock(currentState = state) {
   }
   const periodLabel = TIME_PERIOD_LABELS[timeTracking.currentPeriod] || TIME_PERIOD_LABELS[TIME_PERIOD_MORNING];
   return [
-    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentYear}年${timeTracking.currentMonth}月${timeTracking.currentDate}日`
-  ].join("\n");
+    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentYear}年${timeTracking.currentMonth}月${timeTracking.currentDate}日`,
+    !options.suppressAutoWarning && shouldWarnBeforeAutoTimePeriodSwitch(timeTracking)
+      ? `代碼即將自動切換時間 ${getTimePeriodTransitionLabel(timeTracking)}，如果不想切換在對話中加入 {保持時間} 或 ｛保持時間｝，會延後 ${timeTracking.autoPeriod.roundsPerPeriod} 回合`
+      : ""
+  ].filter(Boolean).join("\n");
 }
 
 function appendUserIdentityTextToContent(content = "", currentState = state) {
@@ -2992,8 +3464,8 @@ function appendTriggeredLorebooksToUserContent(content = "", currentState = stat
   return [base, lorebooksBlock].filter(Boolean).join("\n\n");
 }
 
-function appendTimeTrackingTextToContent(content = "", currentState = state) {
-  return [safeText(content), formatTimeTrackingPromptBlock(currentState)].filter(Boolean).join("\n\n");
+function appendTimeTrackingTextToContent(content = "", currentState = state, options = {}) {
+  return [safeText(content), formatTimeTrackingPromptBlock(currentState, options)].filter(Boolean).join("\n\n");
 }
 
 function getUserMessageDiscordPlayerSlot(message = {}) {
@@ -3072,7 +3544,9 @@ function getCurrentUserModelContent(message, currentState = state, runtimeUserNa
   }
   return appendUserIdentityTextToContent(
     appendTriggeredLorebooksToUserContent(
-      appendTimeTrackingTextToContent(getUserBaseModelContent(message), currentState),
+      appendTimeTrackingTextToContent(getUserBaseModelContent(message), currentState, {
+        suppressAutoWarning: Boolean(message?.keepTimeDirective || message?.extra?.keepTimeDirective)
+      }),
       currentState,
       runtimeUserName
     ),
@@ -3102,7 +3576,9 @@ function attachTriggeredLorebooksToUserMessage(message, currentState = state, ru
     [
       prependDiscordPlayerSlotToUserContent(baseModelContent, playerSlot),
       modelAppendTerms,
-      formatTimeTrackingPromptBlock(currentState),
+      formatTimeTrackingPromptBlock(currentState, {
+        suppressAutoWarning: Boolean(message.keepTimeDirective || message.extra?.keepTimeDirective)
+      }),
       formatLorebookEntriesForPrompt(triggeredLorebooks)
     ].filter(Boolean).join("\n\n"),
     currentState
@@ -3540,6 +4016,7 @@ function formatModularRoleContext(state, activeRoleCard, resolvedUserName = "", 
   const includeLorebooks = options.includeLorebooks !== false;
   const runtimeUserName = options.runtimeUserName || resolvedUserName;
   const purpose = options.purpose || "reasoner";
+  const permanentLorebookEntries = getPermanentRoleCardLorebookEntries(state, activeRoleCard, runtimeUserName, purpose);
   const lorebooksBlock = includeLorebooks
     ? formatTriggeredLorebooksForPrompt(state, activeRoleCard, runtimeUserName, purpose)
     : "";
@@ -3547,7 +4024,7 @@ function formatModularRoleContext(state, activeRoleCard, resolvedUserName = "", 
     const roleCard = renderRoleCardWithUser(activeRoleCard, resolvedUserName);
     return [
       "【無角色卡自定義內容】",
-      formatRoleCardForPrompt(roleCard, { includeOpeningDialogue: false }) || [
+      formatRoleCardForPrompt(roleCard, { includeOpeningDialogue: false, permanentLorebookEntries }) || [
         "【世界觀設定】",
         formatNoRoleWorldSetting(roleCard),
         "【場景設定】",
@@ -3562,7 +4039,7 @@ function formatModularRoleContext(state, activeRoleCard, resolvedUserName = "", 
   if (isMultiRoleCard(activeRoleCard)) {
     return [
       "【多角色卡列表】",
-      formatRoleCardsForPrompt(activeRoleCard, resolvedUserName),
+      formatRoleCardsForPrompt(activeRoleCard, resolvedUserName, { permanentLorebookEntries }),
       lorebooksBlock
     ].join("\n");
   }
@@ -3574,7 +4051,7 @@ function formatModularRoleContext(state, activeRoleCard, resolvedUserName = "", 
     "【原始角色卡】",
     formatRoleCardForPrompt(originalRoleCard, { includeOpeningDialogue: false }),
     "【目前角色卡】",
-    formatRoleCardForPrompt(roleCard, { includeOpeningDialogue: false }),
+    formatRoleCardForPrompt(roleCard, { includeOpeningDialogue: false, permanentLorebookEntries }),
     lorebooksBlock
   ].join("\n");
 }
@@ -3970,6 +4447,21 @@ function formatCompressionContextBlock(messages = []) {
   return ["【上下文】", content || "無"].join("\n");
 }
 
+function buildCompressionRoleCardContextMessage(currentState = state, runtimeUserName = "") {
+  const resolvedUserName = resolveUserDisplayName(currentState.userProfile, runtimeUserName);
+  const activeRoleCard = getActiveRoleCard(currentState);
+  const roleContext = formatModularRoleContext(currentState, activeRoleCard, resolvedUserName, {
+    includeLorebooks: false,
+    runtimeUserName,
+    purpose: "compression"
+  });
+  return ["【角色卡資料】", roleContext].filter(Boolean).join("\n");
+}
+
+function shouldCompressionProfileReadRoleCard(profile = {}) {
+  return normalizeCompressionContextScope(profile.contextScope) === COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT;
+}
+
 function normalizeKeywordSearchText(text = "") {
   return safeText(text).normalize("NFKC").toLowerCase();
 }
@@ -4198,6 +4690,14 @@ function shouldTriggerCompressionProfile({
     triggeredBy.push("達到正文上限輪數");
   }
 
+  if (
+    triggers.everyTurn &&
+    currentTurnNumber > 0 &&
+    Number(profileState.compressedThroughTurnNumber || 0) < currentTurnNumber
+  ) {
+    triggeredBy.push("每回合觸發");
+  }
+
   if (triggers.turns.includes(0)) {
     const alreadyStarted = safeText(profileState.summary) ||
       Number(profileState.compressedThroughTurnNumber || 0) > 0;
@@ -4319,8 +4819,15 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         ? getCompressionKeywordTriggerMatch(currentState, latestUser, triggers)
         : { matchedAssistant: false };
       const includeLatestAssistant = Boolean(keywordMatch.matchedAssistant);
+      const triggeredEveryTurn = triggeredBy.includes("每回合觸發");
+      const skipReasonerAfterKeyword = phase === "before_reasoner" &&
+        triggeredByKeyword &&
+        triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
+        normalizeKeywordFollowupAction(triggerAction.keywordFollowupAction, triggerAction.skipReasoner) ===
+          KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
       const includeLatestUser = includeLatestAssistant ||
         triggeredBy.includes("開始觸發") ||
+        triggeredEveryTurn ||
         (triggeredByKeyword && triggers.keywordSource !== "assistant");
       const messagesToCompress = buildMessagesToCompressForProfile({
         currentState,
@@ -4348,7 +4855,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         actionId: triggerAction.id,
         actionName: getModelTriggerCompletionName(profile, triggerAction),
         action: triggerAction.action,
-        skipReasoner: phase === "before_reasoner" && Boolean(triggerAction.skipReasoner),
+        skipReasoner: skipReasonerAfterKeyword,
         triggeredBy
       };
 
@@ -4377,6 +4884,9 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         }
       );
       options.onStatus?.("compression");
+      const roleCardContextMessage = shouldCompressionProfileReadRoleCard(profile)
+        ? buildCompressionRoleCardContextMessage(currentState, runtimeUserName)
+        : "";
       const completion = await callChatApiCompletionRaw({
         messages: [
           {
@@ -4389,6 +4899,12 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
               buildContextCompressionInstructionPrompt(currentState, profile)
             ].join("\n")
           },
+          ...(roleCardContextMessage
+            ? [{
+                role: "user",
+                content: roleCardContextMessage
+              }]
+            : []),
           {
             role: "user",
             content: formatCompressionContextBlock(messagesToCompress)
@@ -4614,7 +5130,9 @@ function isContinueDirectiveToken(input) {
 
 function parseRoleplayInput(rawInput, currentState) {
   const raw = safeText(rawInput);
-  const wrappedContinueMatch = raw.match(/^[（(]\s*([^()（）]+?)\s*[）)]$/);
+  const modelRaw = stripKeepTimeDirective(raw);
+  const modelVisibleInput = modelRaw || "【場外指令】保持時間\n【要求】本輪不要因自動機制切換早中晚，其他內容照常承接上一輪。";
+  const wrappedContinueMatch = modelRaw.match(/^[（(]\s*([^()（）]+?)\s*[）)]$/);
   const continueToken = safeText(wrappedContinueMatch?.[1]);
   const latestAssistant = getLatestAssistantContent(currentState).slice(-600);
 
@@ -4636,7 +5154,7 @@ function parseRoleplayInput(rawInput, currentState) {
   return {
     inputKind: "dialogue",
     rawInput: raw,
-    modelContent: raw
+    modelContent: modelVisibleInput
   };
 }
 
@@ -6266,6 +6784,7 @@ async function runConversationTurnStreaming({
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
+        keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         stateBeforeTurnSnapshot
       }
     });
@@ -6331,7 +6850,7 @@ async function runConversationTurnStreaming({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingFromText(state, assistantText);
+    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6637,7 +7156,7 @@ async function regenerateLatestAssistantReply({
       userInput: latestUser?.content
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingFromText(state, assistantText);
+    updateTimeTrackingAfterAssistantTurn(state, assistantText, latestUser?.content);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6714,6 +7233,7 @@ async function replayConversationFromMessageNumber({
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
+        keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         replayFromMessageNumber: normalizedMessageNumber,
         stateBeforeTurnSnapshot
       }
@@ -6740,7 +7260,7 @@ async function replayConversationFromMessageNumber({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingFromText(state, assistantText);
+    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6819,6 +7339,7 @@ async function replayConversationFromDiscordMessageId({
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
+        keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         discordMessageId: normalizedMessageId,
         replayFromDiscordEdit: true,
         stateBeforeTurnSnapshot
@@ -6845,7 +7366,7 @@ async function replayConversationFromDiscordMessageId({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingFromText(state, assistantText);
+    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6897,6 +7418,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
+        keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         stateBeforeTurnSnapshot
       }
     });
@@ -6918,7 +7440,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingFromText(state, assistantText);
+    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -7299,19 +7821,29 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/role-cards" && method === "POST") {
       const body = await readBody(req);
-      const name = safeText(body.name);
-      const mode = normalizeRoleCardMode(body.mode);
-      const coverImage = safeText(body.coverImage);
-      const coverPosition = normalizeCoverPosition(body.coverPosition);
-      const customSections = normalizeRoleCardCustomSections(body.customSections, body);
-      const openingDialogue = safeText(body.openingDialogue);
-      const lorebooks = normalizeRoleCardLorebooks(body.lorebooks);
+      const source = getRoleCardInputSource(body);
+      const name = safeText(source.name);
+      const mode = normalizeRoleCardMode(source.mode);
+      const coverImage = safeText(source.coverImage || source.avatar);
+      const coverPosition = normalizeCoverPosition(source.coverPosition);
+      const customSections = normalizeRoleCardCustomSections(source.customSections, source);
+      const fallbackOpeningDialogue = safeText(source.openingDialogue || source.first_mes);
+      const openingDialogues = normalizeRoleCardOpeningDialogues(
+        source.openingDialogues || source.opening_dialogues || source.alternateGreetings || source.alternate_greetings,
+        fallbackOpeningDialogue
+      );
+      const activeOpeningDialogueId = safeText(source.activeOpeningDialogueId || source.active_opening_dialogue_id) ||
+        openingDialogues[0]?.id ||
+        "";
+      const openingDialogue = resolveActiveOpeningDialogue(openingDialogues, activeOpeningDialogueId, fallbackOpeningDialogue);
+      const lorebooks = normalizeRoleCardLorebooks(getRoleCardLorebookInput(source));
       const corruptedFields = findRoleCardCorruptedFields({
         name,
         coverImage,
         coverPosition,
         customSections: JSON.stringify(customSections),
         openingDialogue,
+        openingDialogues: JSON.stringify(openingDialogues),
         lorebooks: JSON.stringify(lorebooks)
       });
 
@@ -7336,6 +7868,8 @@ const server = http.createServer(async (req, res) => {
         description: getRoleCardCustomSectionValue({ customSections }, "詳細描述"),
         relationships: getRoleCardCustomSectionValue({ customSections }, "人物關係（純文字）"),
         openingDialogue,
+        openingDialogues,
+        activeOpeningDialogueId,
         lorebooks,
         createdAt: now,
         updatedAt: now
@@ -7349,6 +7883,7 @@ const server = http.createServer(async (req, res) => {
         coverPosition,
         customSections: JSON.stringify(customSections),
         openingDialogue,
+        openingDialogues: JSON.stringify(openingDialogues),
         lorebooks: JSON.stringify(lorebooks)
       });
       if (!persistedCheck.ok) {
@@ -7363,6 +7898,7 @@ const server = http.createServer(async (req, res) => {
     if (roleUpdateMatch && method === "PUT") {
       const cardId = roleUpdateMatch[1];
       const body = await readBody(req);
+      const source = getRoleCardInputSource(body);
       const card = state.roleCards.find((item) => item.id === cardId);
 
       if (!card) {
@@ -7370,20 +7906,42 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const name = safeText(body.name);
-      const mode = normalizeRoleCardMode(body.mode);
-      const coverImage = safeText(body.coverImage);
-      const coverPosition = normalizeCoverPosition(body.coverPosition);
-      const customSections = normalizeRoleCardCustomSections(body.customSections, body);
-      const openingDialogue = safeText(body.openingDialogue);
-      const lorebooks = normalizeRoleCardLorebooks(body.lorebooks);
+      const hasSourceField = (field) => Object.prototype.hasOwnProperty.call(source, field);
+      const hasOpeningDialogueField = hasSourceField("openingDialogue") || hasSourceField("first_mes");
+      const hasOpeningDialoguesField = hasSourceField("openingDialogues") ||
+        hasSourceField("opening_dialogues") ||
+        hasSourceField("alternateGreetings") ||
+        hasSourceField("alternate_greetings");
+      const name = safeText(source.name);
+      const mode = normalizeRoleCardMode(source.mode);
+      const coverImage = safeText(source.coverImage || source.avatar);
+      const coverPosition = normalizeCoverPosition(source.coverPosition);
+      const customSections = normalizeRoleCardCustomSections(source.customSections, source);
+      const fallbackOpeningDialogue = hasOpeningDialogueField
+        ? safeText(source.openingDialogue || source.first_mes)
+        : safeText(card.openingDialogue);
+      const openingDialogues = hasOpeningDialoguesField || hasOpeningDialogueField
+        ? normalizeRoleCardOpeningDialogues(
+            source.openingDialogues || source.opening_dialogues || source.alternateGreetings || source.alternate_greetings,
+            fallbackOpeningDialogue
+          )
+        : normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue);
+      const activeOpeningDialogueId = safeText(source.activeOpeningDialogueId || source.active_opening_dialogue_id) ||
+        card.activeOpeningDialogueId ||
+        openingDialogues[0]?.id ||
+        "";
+      const openingDialogue = resolveActiveOpeningDialogue(openingDialogues, activeOpeningDialogueId, fallbackOpeningDialogue);
+      const lorebooks = normalizeRoleCardLorebooks(getRoleCardLorebookInput(source));
       const corruptedFields = findRoleCardCorruptedFields({
-        ...(Object.prototype.hasOwnProperty.call(body, "name") ? { name } : {}),
-        ...(Object.prototype.hasOwnProperty.call(body, "coverImage") ? { coverImage } : {}),
-        ...(Object.prototype.hasOwnProperty.call(body, "coverPosition") ? { coverPosition } : {}),
-        ...(Object.prototype.hasOwnProperty.call(body, "customSections") ? { customSections: JSON.stringify(customSections) } : {}),
-        ...(Object.prototype.hasOwnProperty.call(body, "openingDialogue") ? { openingDialogue } : {}),
-        ...(Object.prototype.hasOwnProperty.call(body, "lorebooks") ? { lorebooks: JSON.stringify(lorebooks) } : {})
+        ...(hasSourceField("name") ? { name } : {}),
+        ...(hasSourceField("coverImage") || hasSourceField("avatar") ? { coverImage } : {}),
+        ...(hasSourceField("coverPosition") ? { coverPosition } : {}),
+        ...(hasSourceField("customSections") ? { customSections: JSON.stringify(customSections) } : {}),
+        ...(hasOpeningDialogueField ? { openingDialogue } : {}),
+        ...(hasOpeningDialoguesField ? { openingDialogues: JSON.stringify(openingDialogues) } : {}),
+        ...(hasSourceField("lorebooks") || hasSourceField("lorebook") || hasSourceField("characterBook") || hasSourceField("character_book")
+          ? { lorebooks: JSON.stringify(lorebooks) }
+          : {})
       });
 
       if (corruptedFields.length > 0) {
@@ -7392,19 +7950,19 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "name")) {
+      if (hasSourceField("name")) {
         card.name = name;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "mode")) {
+      if (hasSourceField("mode")) {
         card.mode = mode;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "coverImage")) {
+      if (hasSourceField("coverImage") || hasSourceField("avatar")) {
         card.coverImage = coverImage;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "coverPosition")) {
+      if (hasSourceField("coverPosition")) {
         card.coverPosition = coverPosition;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "customSections")) {
+      if (hasSourceField("customSections")) {
         card.customSections = customSections;
         card.personality = getRoleCardCustomSectionValue({ customSections }, "性格");
         card.scene = getRoleCardCustomSectionValue({ customSections }, "場景");
@@ -7412,10 +7970,12 @@ const server = http.createServer(async (req, res) => {
         card.description = getRoleCardCustomSectionValue({ customSections }, "詳細描述");
         card.relationships = getRoleCardCustomSectionValue({ customSections }, "人物關係（純文字）");
       }
-      if (typeof body.openingDialogue === "string") {
+      if (hasOpeningDialogueField || hasOpeningDialoguesField || hasSourceField("activeOpeningDialogueId") || hasSourceField("active_opening_dialogue_id")) {
         card.openingDialogue = openingDialogue;
+        card.openingDialogues = openingDialogues;
+        card.activeOpeningDialogueId = activeOpeningDialogueId;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "lorebooks")) {
+      if (hasSourceField("lorebooks") || hasSourceField("lorebook") || hasSourceField("characterBook") || hasSourceField("character_book")) {
         card.lorebooks = lorebooks;
       }
       card.updatedAt = nowIso();
@@ -7427,6 +7987,7 @@ const server = http.createServer(async (req, res) => {
         coverPosition: card.coverPosition,
         customSections: JSON.stringify(normalizeRoleCardCustomSections(card.customSections, card)),
         openingDialogue: card.openingDialogue,
+        openingDialogues: JSON.stringify(normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue)),
         lorebooks: JSON.stringify(normalizeRoleCardLorebooks(card.lorebooks))
       });
       if (!persistedCheck.ok) {
@@ -7862,7 +8423,9 @@ async function consumePendingOpening(channelId, fallbackUserName = "") {
     if (!safeText(state.discordPlayers?.channelId)) {
       resetDiscordPlayerAssignments(state, channelId);
     }
-    updateTimeTrackingFromText(state, openingDialogue);
+    updateTimeTrackingFromText(state, openingDialogue, {
+      allowBareTimeExpressions: true
+    });
     appendConversationMessage(
       createMessageRecord({
         role: "assistant",
@@ -7910,7 +8473,9 @@ async function startSessionFromDiscord(channelId, userInfo) {
 
     const resolvedUserName = resolveUserDisplayName(state.userProfile, userInfo.userName);
     const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName);
-    updateTimeTrackingFromText(state, openingDialogue);
+    updateTimeTrackingFromText(state, openingDialogue, {
+      allowBareTimeExpressions: true
+    });
     appendConversationMessage(
       createMessageRecord({
         role: "assistant",

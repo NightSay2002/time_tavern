@@ -430,6 +430,90 @@ button {
   gap: 10px;
 }
 
+.opening-dialogue-editor h4 {
+  margin: 0;
+}
+
+.opening-dialogue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.opening-dialogue-header button {
+  width: auto;
+  min-width: 48px;
+  padding-inline: 14px;
+}
+
+.opening-dialogue-tabs {
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  min-height: 44px;
+  padding: 2px 2px 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.opening-dialogue-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom-color: transparent;
+  border-radius: 8px 8px 0 0;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.opening-dialogue-tab.active {
+  background: rgba(255, 209, 246, 0.14);
+  border-color: rgba(255, 209, 246, 0.38);
+  border-bottom-color: transparent;
+}
+
+.opening-dialogue-tab-label,
+.opening-dialogue-tab-close {
+  width: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+.opening-dialogue-tab-label:hover,
+.opening-dialogue-tab-close:hover {
+  transform: none;
+  filter: none;
+}
+
+.opening-dialogue-tab-label {
+  max-width: 170px;
+  min-width: 78px;
+  padding: 9px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.opening-dialogue-tab-close {
+  min-width: 34px;
+  padding: 9px 10px 9px 0;
+  color: var(--muted);
+}
+
+.opening-dialogue-tab-close:hover {
+  color: #ffbadf;
+}
+
 .mode-editor-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content max-content;
