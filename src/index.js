@@ -3329,6 +3329,15 @@ function shouldWarnBeforeAutoTimePeriodSwitch(timeTracking = {}) {
   return autoPeriod.turnsSinceChange >= Math.max(0, autoPeriod.roundsPerPeriod - 1);
 }
 
+function formatAutoTimePeriodWarning(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const autoPeriod = normalizeTimeTrackingAutoPeriodConfig(normalized.autoPeriod);
+  if (!normalized.enabled || !autoPeriod.enabled || !shouldWarnBeforeAutoTimePeriodSwitch(normalized)) {
+    return "";
+  }
+  return `代碼即將自動切換時間 ${getTimePeriodTransitionLabel(normalized)}，如果不想切換，請在對話中加入 {保持時間}，會延後 ${autoPeriod.roundsPerPeriod} 回合`;
+}
+
 function hasKeepTimeDirective(text = "") {
   KEEP_TIME_DIRECTIVE_PATTERN.lastIndex = 0;
   return KEEP_TIME_DIRECTIVE_PATTERN.test(safeText(text));
@@ -3462,7 +3471,7 @@ function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", 
   const keepTime = hasKeepTimeDirective(userInput);
   if (!timeTracking.enabled || !autoPeriod.enabled || textUpdate.changed) {
     currentState.timeTracking = timeTracking;
-    return;
+    return { autoTimeWarning: "" };
   }
   if (keepTime) {
     currentState.timeTracking = normalizeTimeTrackingState({
@@ -3473,13 +3482,13 @@ function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", 
       },
       updatedAt: nowIso()
     });
-    return;
+    return { autoTimeWarning: "" };
   }
 
   const nextCount = autoPeriod.turnsSinceChange + 1;
   if (nextCount >= autoPeriod.roundsPerPeriod) {
     currentState.timeTracking = normalizeTimeTrackingState(advanceTimeTrackingPeriod(timeTracking));
-    return;
+    return { autoTimeWarning: "" };
   }
 
   currentState.timeTracking = normalizeTimeTrackingState({
@@ -3490,6 +3499,9 @@ function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", 
     },
     updatedAt: nowIso()
   });
+  return {
+    autoTimeWarning: formatAutoTimePeriodWarning(currentState.timeTracking)
+  };
 }
 
 function formatTimeTrackingPromptBlock(currentState = state, options = {}) {
@@ -3502,10 +3514,7 @@ function formatTimeTrackingPromptBlock(currentState = state, options = {}) {
   }
   const periodLabel = TIME_PERIOD_LABELS[timeTracking.currentPeriod] || TIME_PERIOD_LABELS[TIME_PERIOD_MORNING];
   return [
-    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentYear}年${timeTracking.currentMonth}月${timeTracking.currentDate}日`,
-    !options.suppressAutoWarning && shouldWarnBeforeAutoTimePeriodSwitch(timeTracking)
-      ? `代碼即將自動切換時間 ${getTimePeriodTransitionLabel(timeTracking)}，如果不想切換在對話中加入 {保持時間} 或 ｛保持時間｝，會延後 ${timeTracking.autoPeriod.roundsPerPeriod} 回合`
-      : ""
+    `當前時間 | 數值: 第${timeTracking.currentDayNumber}天${periodLabel}${timeTracking.currentYear}年${timeTracking.currentMonth}月${timeTracking.currentDate}日`
   ].filter(Boolean).join("\n");
 }
 
@@ -5781,15 +5790,20 @@ function shouldDisplayCompressionNotice(message) {
   return Boolean(message?.extra?.compressionNotice || message?.compressionNotice);
 }
 
+function getAssistantAutoTimeWarning(message) {
+  return safeText(message?.extra?.autoTimeWarning || message?.autoTimeWarning);
+}
+
 function formatAssistantMessageForUserDisplay(message) {
-  const content = safeText(message?.content);
+  let content = safeText(message?.content);
   if (!shouldDisplayCompressionNotice(message)) {
-    return content;
+    return [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n");
   }
   if (content.startsWith(COMPRESSION_USER_NOTICE_TEXT)) {
-    return content;
+    return [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n");
   }
-  return [COMPRESSION_USER_NOTICE_TEXT, content].filter(Boolean).join("\n\n");
+  content = [COMPRESSION_USER_NOTICE_TEXT, content].filter(Boolean).join("\n\n");
+  return [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n");
 }
 
 function hasUsageTokens(usage) {
@@ -6927,7 +6941,7 @@ async function runConversationTurnStreaming({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
+    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -6938,6 +6952,7 @@ async function runConversationTurnStreaming({
         ...turnExtra,
         reasoningContent: fullReasoning,
         compressionNotice,
+        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
         stateAfterTurnSnapshot
       }
     });
@@ -7233,7 +7248,7 @@ async function regenerateLatestAssistantReply({
       userInput: latestUser?.content
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingAfterAssistantTurn(state, assistantText, latestUser?.content);
+    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, latestUser?.content);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -7246,6 +7261,7 @@ async function regenerateLatestAssistantReply({
         regenerated: true,
         reloadFeedback: safeText(reloadFeedback),
         compressionNotice,
+        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
         stateAfterTurnSnapshot
       }
     });
@@ -7337,7 +7353,7 @@ async function replayConversationFromMessageNumber({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
+    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -7349,6 +7365,7 @@ async function replayConversationFromMessageNumber({
         replayFromMessageNumber: normalizedMessageNumber,
         replayGenerated: true,
         compressionNotice,
+        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
         stateAfterTurnSnapshot
       }
     });
@@ -7443,7 +7460,7 @@ async function replayConversationFromDiscordMessageId({
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
+    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -7455,6 +7472,7 @@ async function replayConversationFromDiscordMessageId({
         discordMessageId: normalizedMessageId,
         replayFromDiscordEdit: true,
         compressionNotice,
+        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
         stateAfterTurnSnapshot
       }
     });
@@ -7517,7 +7535,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
       userInput: storedUserContent
     });
     assistantText = finalizedAssistantOutput.content;
-    updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
+    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
     const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
 
     const assistantMessage = createMessageRecord({
@@ -7527,6 +7545,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
       extra: {
         ...turnExtra,
         compressionNotice,
+        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
         stateAfterTurnSnapshot
       }
     });

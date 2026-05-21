@@ -3104,9 +3104,15 @@ function renderMessages(state) {
 
     const preview = document.createElement("div");
     preview.className = "message-preview";
+    const autoTimeWarning = typeof message.autoTimeWarning === "string"
+      ? message.autoTimeWarning.trim()
+      : typeof message.extra?.autoTimeWarning === "string"
+        ? message.extra.autoTimeWarning.trim()
+        : "";
+    const displayText = [message.content, autoTimeWarning].filter(Boolean).join("\n\n");
     preview.textContent = message.streaming
       ? truncateText(message.content || "正在生成...", 90) || "正在生成..."
-      : truncateText(message.content, 90) || "（空白）";
+      : truncateText(displayText, 90) || "（空白）";
 
     const reasoning = typeof message.reasoningContent === "string" ? message.reasoningContent : "";
 
@@ -3120,13 +3126,19 @@ function renderMessages(state) {
     const fullContentBody = document.createElement("div");
     fullContentBody.className = "markdown-body";
     fullContentBody.innerHTML = renderMarkdownToHtml(fullContent);
-    if (message.role === "assistant" && message.extra?.compressionNotice) {
+    if (message.role === "assistant" && (message.compressionNotice || message.extra?.compressionNotice)) {
       const compressionNotice = document.createElement("div");
       compressionNotice.className = "compression-notice";
       compressionNotice.textContent = "【( •̀ ω •́ )✧模型內容已更新】";
       content.appendChild(compressionNotice);
     }
     content.appendChild(fullContentBody);
+    if (message.role === "assistant" && autoTimeWarning) {
+      const timeWarningNotice = document.createElement("div");
+      timeWarningNotice.className = "auto-time-warning-notice";
+      timeWarningNotice.textContent = autoTimeWarning;
+      content.appendChild(timeWarningNotice);
+    }
 
     summary.append(meta, preview);
 

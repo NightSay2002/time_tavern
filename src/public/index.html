@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260520-ui-language-font2" />
+    <link rel="stylesheet" href="/styles.css?v=20260521-auto-time-warning" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -334,7 +334,7 @@
               <input id="timeTrackingAutoPeriodRounds" type="number" min="1" step="1" value="3" />
             </label>
           </div>
-          <p class="form-hint">自動切換會按早上→中午→晚上→早上前進，晚上→早上會自動 +1 天。切換前一個回合會提示，可在對話加入 {保持時間} 或 ｛保持時間｝，延後目前設定的回合數。</p>
+          <p class="form-hint">自動切換會按早上→中午→晚上→早上前進，晚上→早上會自動 +1 天。切換前一個回合會在正文最後提示；可在對話加入 {保持時間}，延後目前設定的回合數。</p>
         </section>
         <div class="dialog-actions">
           <button type="submit">保存統計判斷</button>
@@ -489,6 +489,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260513-chat-input" defer></script>
-    <script type="module" src="/app.js?v=20260520-template-vars"></script>
+    <script type="module" src="/app.js?v=20260521-auto-time-warning"></script>
   </body>
 </html>
