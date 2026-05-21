@@ -13,9 +13,11 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 3234);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
+const DEFAULTS_DIR = path.join(__dirname, "..", "defaults");
 const PROMPTS_DIR = path.join(__dirname, "..", "prompts");
 const MODULAR_PROMPTS_DIR = path.join(PROMPTS_DIR, "modular");
 const ENV_FILE = path.join(__dirname, "..", ".env");
+const APP_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
@@ -175,7 +177,7 @@ function envTextOrFile(key, fallback, options = {}) {
 
 function renderPromptTemplate(template, variables) {
   return Object.entries(variables).reduce((output, [key, value]) => {
-    const pattern = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    const pattern = new RegExp(`{{\\s*${key}\\s*}}`, "gi");
     return output.replace(pattern, String(value ?? ""));
   }, template);
 }
@@ -262,7 +264,7 @@ function getDiscordAuthorizeUrl() {
   return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}`;
 }
 
-function hasUnresolvedTemplatePlaceholder(line, preservedKeys = ["user"]) {
+function hasUnresolvedTemplatePlaceholder(line, preservedKeys = ["user", "chur"]) {
   const matches = String(line).match(/{{\s*([^}]+?)\s*}}/g);
   if (!matches) {
     return false;
@@ -530,13 +532,30 @@ function createDefaultTimeTrackingState() {
   };
 }
 
+function loadAppDefaults() {
+  if (!fs.existsSync(APP_DEFAULTS_FILE)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(APP_DEFAULTS_FILE, "utf8"));
+    return {
+      userProfile: normalizeUserProfile(parsed.userProfile),
+      roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
+      updatedAt: safeText(parsed.updatedAt)
+    };
+  } catch {
+    return null;
+  }
+}
+
 function createDefaultState() {
+  const appDefaults = loadAppDefaults();
   return {
-    userProfile: {
+    userProfile: appDefaults?.userProfile || {
       identityText: "",
       displayName: ""
     },
-    roleCards: [],
+    roleCards: appDefaults?.roleCards || [],
     roleCardRuntimeState: {},
     activeRoleCardId: null,
     activeAssistantMode: null,
@@ -919,6 +938,34 @@ function persistCardState(currentState) {
   ensureDataFile();
   const payload = extractCardState(currentState);
   fs.writeFileSync(CARD_STATE_FILE, JSON.stringify(payload, null, 2), "utf8");
+}
+
+function saveDefaultAppSettings(currentState) {
+  if (!fs.existsSync(DEFAULTS_DIR)) {
+    fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
+  }
+  const payload = {
+    version: 1,
+    userProfile: normalizeUserProfile(currentState?.userProfile),
+    roleCards: Array.isArray(currentState?.roleCards)
+      ? currentState.roleCards.map((card) => normalizeRoleCard(card))
+      : [],
+    updatedAt: nowIso()
+  };
+  fs.writeFileSync(APP_DEFAULTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+
+  const modularPromptConfigs = getModularPromptConfigsPayload();
+  Object.entries(modularPromptConfigs).forEach(([mode, config]) => {
+    saveModularPromptConfig(mode, config);
+  });
+
+  return {
+    defaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
+    userProfile: payload.userProfile,
+    roleCardCount: payload.roleCards.length,
+    modularPromptCount: Object.keys(modularPromptConfigs).length,
+    updatedAt: payload.updatedAt
+  };
 }
 
 function readPersistedStateFile() {
@@ -2573,42 +2620,62 @@ function resolveUserDisplayName(userProfile, fallbackName = "") {
   return "你";
 }
 
-function injectUserPlaceholder(text, userDisplayName) {
+function resolveRoleCardDisplayName(roleCard, fallbackName = "") {
+  return safeText(roleCard?.name) || safeText(fallbackName);
+}
+
+function createTemplateVariables(currentState = state, runtimeUserName = "", roleCard = null) {
+  const activeRoleCard = roleCard || getActiveRoleCard(currentState);
+  return {
+    user: resolveUserDisplayName(currentState?.userProfile, runtimeUserName),
+    chur: resolveRoleCardDisplayName(activeRoleCard)
+  };
+}
+
+function injectTemplatePlaceholders(text, variables = {}) {
   const source = typeof text === "string" ? text : "";
-  return source.replace(/\{\{\s*user\s*\}\}/gi, userDisplayName);
+  return renderPromptTemplate(source, variables);
+}
+
+function injectUserPlaceholder(text, userDisplayName, roleCardName = "") {
+  return injectTemplatePlaceholders(text, {
+    user: userDisplayName,
+    chur: roleCardName
+  });
 }
 
 function renderRoleCardWithUser(card, userDisplayName) {
   if (!card) {
     return null;
   }
+  const roleCardName = resolveRoleCardDisplayName(card);
   return {
     ...card,
     customSections: normalizeRoleCardCustomSections(card.customSections, card).map((section) => ({
       ...section,
-      name: injectUserPlaceholder(section.name, userDisplayName),
-      content: injectUserPlaceholder(section.content, userDisplayName)
+      name: injectUserPlaceholder(section.name, userDisplayName, roleCardName),
+      content: injectUserPlaceholder(section.content, userDisplayName, roleCardName)
     })),
-    personality: injectUserPlaceholder(card.personality, userDisplayName),
-    scene: injectUserPlaceholder(card.scene, userDisplayName),
-    systemInstruction: injectUserPlaceholder(card.systemInstruction, userDisplayName),
-    description: injectUserPlaceholder(card.description, userDisplayName),
-    relationships: injectUserPlaceholder(card.relationships, userDisplayName),
-    openingDialogue: injectUserPlaceholder(card.openingDialogue, userDisplayName),
+    personality: injectUserPlaceholder(card.personality, userDisplayName, roleCardName),
+    scene: injectUserPlaceholder(card.scene, userDisplayName, roleCardName),
+    systemInstruction: injectUserPlaceholder(card.systemInstruction, userDisplayName, roleCardName),
+    description: injectUserPlaceholder(card.description, userDisplayName, roleCardName),
+    relationships: injectUserPlaceholder(card.relationships, userDisplayName, roleCardName),
+    openingDialogue: injectUserPlaceholder(card.openingDialogue, userDisplayName, roleCardName),
     openingDialogues: normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue).map((entry) => ({
       ...entry,
-      name: injectUserPlaceholder(entry.name, userDisplayName),
-      content: injectUserPlaceholder(entry.content, userDisplayName)
+      name: injectUserPlaceholder(entry.name, userDisplayName, roleCardName),
+      content: injectUserPlaceholder(entry.content, userDisplayName, roleCardName)
     })),
     lorebooks: normalizeRoleCardLorebooks(card.lorebooks).map((entry) => ({
       ...entry,
-      key: injectUserPlaceholder(entry.key, userDisplayName),
-      keywords: splitLorebookKeywords(entry.keywords.map((keyword) => injectUserPlaceholder(keyword, userDisplayName))),
+      key: injectUserPlaceholder(entry.key, userDisplayName, roleCardName),
+      keywords: splitLorebookKeywords(entry.keywords.map((keyword) => injectUserPlaceholder(keyword, userDisplayName, roleCardName))),
       secondaryKeywords: splitLorebookKeywords(
         (Array.isArray(entry.secondaryKeywords) ? entry.secondaryKeywords : [])
-          .map((keyword) => injectUserPlaceholder(keyword, userDisplayName))
+          .map((keyword) => injectUserPlaceholder(keyword, userDisplayName, roleCardName))
       ),
-      content: injectUserPlaceholder(entry.content, userDisplayName)
+      content: injectUserPlaceholder(entry.content, userDisplayName, roleCardName)
     }))
   };
 }
@@ -3442,10 +3509,12 @@ function formatTimeTrackingPromptBlock(currentState = state, options = {}) {
   ].filter(Boolean).join("\n");
 }
 
-function appendUserIdentityTextToContent(content = "", currentState = state) {
+function appendUserIdentityTextToContent(content = "", currentState = state, runtimeUserName = "") {
   const base = safeText(content);
-  const userDisplayName = resolveUserDisplayName(currentState?.userProfile);
-  const identityText = injectUserPlaceholder(currentState?.userProfile?.identityText, userDisplayName);
+  const identityText = injectTemplatePlaceholders(
+    currentState?.userProfile?.identityText,
+    createTemplateVariables(currentState, runtimeUserName)
+  );
   if (!identityText) {
     return base;
   }
@@ -3489,18 +3558,19 @@ function doesModelAppendTermMatchPlayer(term = {}, playerSlot = "") {
   return normalizedTerm.player === normalizedPlayerSlot;
 }
 
-function formatActiveModelAppendTermsForUser(currentState = state, playerSlot = "") {
+function formatActiveModelAppendTermsForUser(currentState = state, playerSlot = "", runtimeUserName = "") {
   const normalizedPlayerSlot = normalizeDiscordPlayerSlot(playerSlot);
   if (!normalizedPlayerSlot) {
     return "";
   }
 
   const compressionState = normalizeContextCompressionState(currentState.contextCompression);
+  const templateVariables = createTemplateVariables(currentState, runtimeUserName);
   return getEnabledCompressionProfiles(currentState)
     .filter((profile) => isCompressionProfileStateActivated(getCompressionProfileState(compressionState, profile.id)))
     .flatMap((profile) => normalizeModelAppendTermsConfig(profile.appendTerms || []))
     .filter((term) => doesModelAppendTermMatchPlayer(term, normalizedPlayerSlot))
-    .map((term) => term.content)
+    .map((term) => injectTemplatePlaceholders(term.content, templateVariables))
     .filter(Boolean)
     .join("\n\n");
 }
@@ -3550,7 +3620,8 @@ function getCurrentUserModelContent(message, currentState = state, runtimeUserNa
       currentState,
       runtimeUserName
     ),
-    currentState
+    currentState,
+    runtimeUserName
   );
 }
 
@@ -3567,7 +3638,7 @@ function attachTriggeredLorebooksToUserMessage(message, currentState = state, ru
   const resolvedUserName = resolveUserDisplayName(currentState?.userProfile, runtimeUserName);
   const triggeredLorebooks = getTriggeredRoleCardLorebooks(currentState, activeRoleCard, resolvedUserName, "reasoner");
   const playerSlot = getUserMessageDiscordPlayerSlot(message);
-  const modelAppendTerms = formatActiveModelAppendTermsForUser(currentState, playerSlot);
+  const modelAppendTerms = formatActiveModelAppendTermsForUser(currentState, playerSlot, runtimeUserName);
   message.baseModelContent = baseModelContent;
   message.lorebookTriggeredEntryIds = triggeredLorebooks
     .map((entry) => getLorebookEntryIdentity(entry))
@@ -3581,7 +3652,8 @@ function attachTriggeredLorebooksToUserMessage(message, currentState = state, ru
       }),
       formatLorebookEntriesForPrompt(triggeredLorebooks)
     ].filter(Boolean).join("\n\n"),
-    currentState
+    currentState,
+    runtimeUserName
   );
   message.preparedModelContent = true;
   return message;
@@ -4001,10 +4073,10 @@ function getDialogueContextRounds(currentState = null) {
 }
 
 function buildCharacterCardCreationAssistantSystemPrompt(state, runtimeUserName = "") {
-	  const resolvedUserName = resolveUserDisplayName(state.userProfile, runtimeUserName);
-	  return finalizePromptTemplate(getCharacterCardCreationAssistantPrompt(), {
-	    user: resolvedUserName
-	  }).trim();
+  return finalizePromptTemplate(
+    getCharacterCardCreationAssistantPrompt(),
+    createTemplateVariables(state, runtimeUserName)
+  ).trim();
 }
 
 function getActiveModularPromptConfig(currentState = null) {
@@ -4150,11 +4222,15 @@ function resolveContextCompressionPromptConfig(currentState = state, config = nu
 
 function buildContextCompressionInstructionPrompt(currentState = state, config = null) {
   const compressionConfig = resolveContextCompressionPromptConfig(currentState, config);
+  const templateVariables = createTemplateVariables(currentState);
   const isCustomProfileConfig = config &&
     typeof config === "object" &&
     config.contextCompression &&
     normalizeCompressionProfileId(config.id) !== STANDARD_COMPRESSION_PROFILE_ID;
-  const mainRules = compressionConfig.mainRules || (isCustomProfileConfig ? "" : getContextCompressionPrompt());
+  const mainRules = finalizePromptTemplate(
+    compressionConfig.mainRules || (isCustomProfileConfig ? "" : getContextCompressionPrompt()),
+    templateVariables
+  );
   if (compressionConfig.models.length === 0) {
     return [
       "【模型主要規則】",
@@ -4169,9 +4245,9 @@ function buildContextCompressionInstructionPrompt(currentState = state, config =
     `【模塊 ${index + 1}: ${model.name || model.id}】`,
     `id:${model.id}`,
     "新增模塊規則:",
-    model.addRules || "無",
+    finalizePromptTemplate(model.addRules || "", templateVariables) || "無",
     "刪除模塊規則:",
-    model.deleteRules || "無",
+    finalizePromptTemplate(model.deleteRules || "", templateVariables) || "無",
     `輸出欄位:model.${model.id}`,
     `刪除欄位:delete.${model.id}`
   ].join("\n")).join("\n\n");
@@ -4963,12 +5039,13 @@ async function updateCompressionAfterAssistantMessage(currentState, runtimeUserN
 }
 
 function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUserName = "", config = null) {
-  const resolvedUserName = resolveUserDisplayName(currentState.userProfile, runtimeUserName);
   const activeRoleCard = getActiveRoleCard(currentState);
+  const resolvedUserName = resolveUserDisplayName(currentState.userProfile, runtimeUserName);
+  const templateVariables = createTemplateVariables(currentState, runtimeUserName, activeRoleCard);
   const activeConfig = config || getActiveModularPromptConfig(currentState);
   return [
     "【主要規則】",
-    finalizePromptTemplate(activeConfig.reasonerHistory.mainRules, { user: resolvedUserName }),
+    finalizePromptTemplate(activeConfig.reasonerHistory.mainRules, templateVariables),
     formatModularRoleContext(currentState, activeRoleCard, resolvedUserName, {
       includeIdentityHeader: false,
       includeIdentityContent: false,
@@ -4977,7 +5054,7 @@ function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUs
       purpose: "reasoner"
     }),
     "【輸出規則】",
-    finalizePromptTemplate(activeConfig.reasonerHistory.contextRules, { user: resolvedUserName }),
+    finalizePromptTemplate(activeConfig.reasonerHistory.contextRules, templateVariables),
     "【處理要求】",
     "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、統計時間、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
   ].filter(Boolean).join("\n");
@@ -7793,6 +7870,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/defaults/save" && method === "POST") {
+      const defaults = saveDefaultAppSettings(state);
+      sendJson(res, 200, {
+        defaults,
+        state: statePayload(state)
+      });
+      return;
+    }
+
     if (pathname === "/api/role-cards" && method === "GET") {
       sendJson(res, 200, { roleCards: state.roleCards, activeRoleCardId: state.activeRoleCardId });
       return;
@@ -8417,7 +8503,7 @@ async function consumePendingOpening(channelId, fallbackUserName = "") {
     }
 
     const resolvedUserName = resolveUserDisplayName(state.userProfile, fallbackUserName);
-    const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName);
+    const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName, card.name);
     state.pendingOpeningBroadcast = false;
     state.lastDiscordChannelId = channelId;
     if (!safeText(state.discordPlayers?.channelId)) {
@@ -8472,7 +8558,7 @@ async function startSessionFromDiscord(channelId, userInfo) {
     }
 
     const resolvedUserName = resolveUserDisplayName(state.userProfile, userInfo.userName);
-    const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName);
+    const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName, card.name);
     updateTimeTrackingFromText(state, openingDialogue, {
       allowBareTimeExpressions: true
     });

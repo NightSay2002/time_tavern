@@ -45,7 +45,9 @@
       "name": "標準壓縮模型",
       "enabled": true,
       "locked": true,
+      "contextScope": "text_only",
       "triggers": {
+        "everyTurn": false,
         "roundLimit": true,
         "keywords": [],
         "keywordSource": "both",
@@ -57,8 +59,10 @@
           "name": "標準壓縮",
           "enabled": true,
           "action": "call_api",
+          "keywordFollowupAction": "continue_reasoner",
           "skipReasoner": false,
           "triggers": {
+            "everyTurn": false,
             "roundLimit": true,
             "keywords": [],
             "keywordSource": "both",

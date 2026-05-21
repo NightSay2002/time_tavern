@@ -21,6 +21,8 @@
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
   timeTrackingSettingsBtn: document.getElementById("timeTrackingSettingsBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
+  saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
+  uiLanguageToggleBtn: document.getElementById("uiLanguageToggleBtn"),
   mobilePageChatBtn: document.getElementById("mobilePageChatBtn"),
   mobilePageControlsBtn: document.getElementById("mobilePageControlsBtn"),
 
@@ -128,6 +130,9 @@
   modularPromptDialogueContextRounds: document.getElementById("modularPromptDialogueContextRounds"),
   addModularPromptModeBtn: document.getElementById("addModularPromptModeBtn"),
   deleteModularPromptModeBtn: document.getElementById("deleteModularPromptModeBtn"),
+  exportModularPromptModeBtn: document.getElementById("exportModularPromptModeBtn"),
+  importModularPromptModeBtn: document.getElementById("importModularPromptModeBtn"),
+  modularPromptImportFile: document.getElementById("modularPromptImportFile"),
   compressionProfileSelect: document.getElementById("compressionProfileSelect"),
   editCompressionProfileBtn: document.getElementById("editCompressionProfileBtn"),
   addCompressionProfileBtn: document.getElementById("addCompressionProfileBtn"),
@@ -184,6 +189,211 @@ const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
+const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
+const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
+const UI_LANGUAGE_STORAGE_KEY = "time_tavern_ui_language";
+const UI_LANGUAGE_TEXT_ATTRS = ["placeholder", "title", "aria-label", "alt", "value"];
+const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
+  "script",
+  "style",
+  "template",
+  "input",
+  "textarea",
+  "pre",
+  "code",
+  ".markdown-body",
+  ".message-preview",
+  ".message-reasoning-content",
+  ".ai-log-block",
+  "[data-ui-language-skip]"
+].join(",");
+const UI_LANGUAGE_SKIP_ATTR_SELECTOR = [
+  "script",
+  "style",
+  "template",
+  "pre",
+  "code",
+  ".markdown-body",
+  ".message-preview",
+  ".message-reasoning-content",
+  ".ai-log-block",
+  "[data-ui-language-skip]"
+].join(",");
+const UI_T2S_PHRASES = [
+  ["伺服器", "服务器"],
+  ["本地服务器", "本地服务器"],
+  ["滑鼠", "鼠标"],
+  ["介面", "界面"],
+  ["網頁", "网页"],
+  ["資料", "资料"],
+  ["訊息", "讯息"],
+  ["角色卡建立助手", "角色卡建立助手"],
+  ["簡繁轉換", "简繁转换"],
+  ["繁體", "繁体"],
+  ["簡體", "简体"]
+];
+const UI_T2S_CHARS = {
+  並: "并",
+  併: "并",
+  來: "来",
+  係: "系",
+  個: "个",
+  們: "们",
+  偵: "侦",
+  儲: "储",
+  備: "备",
+  傳: "传",
+  傷: "伤",
+  內: "内",
+  關: "关",
+  刪: "删",
+  則: "则",
+  創: "创",
+  劇: "剧",
+  動: "动",
+  務: "务",
+  匯: "汇",
+  區: "区",
+  協: "协",
+  參: "参",
+  啟: "启",
+  單: "单",
+  嗎: "吗",
+  圍: "围",
+  圖: "图",
+  團: "团",
+  場: "场",
+  塊: "块",
+  壓: "压",
+  壞: "坏",
+  學: "学",
+  寫: "写",
+  實: "实",
+  專: "专",
+  對: "对",
+  導: "导",
+  張: "张",
+  後: "后",
+  從: "从",
+  復: "复",
+  應: "应",
+  態: "态",
+  憶: "忆",
+  戶: "户",
+  換: "换",
+  損: "损",
+  擇: "择",
+  攔: "拦",
+  敗: "败",
+  數: "数",
+  斷: "断",
+  時: "时",
+  暫: "暂",
+  書: "书",
+  會: "会",
+  機: "机",
+  檔: "档",
+  欄: "栏",
+  權: "权",
+  歡: "欢",
+  沒: "没",
+  測: "测",
+  準: "准",
+  溫: "温",
+  為: "为",
+  無: "无",
+  產: "产",
+  現: "现",
+  環: "环",
+  當: "当",
+  發: "发",
+  確: "确",
+  稱: "称",
+  範: "范",
+  簡: "简",
+  紀: "纪",
+  紅: "红",
+  純: "纯",
+  細: "细",
+  終: "终",
+  組: "组",
+  結: "结",
+  給: "给",
+  統: "统",
+  經: "经",
+  網: "网",
+  綴: "缀",
+  線: "线",
+  編: "编",
+  縮: "缩",
+  總: "总",
+  繼: "继",
+  續: "续",
+  義: "义",
+  與: "与",
+  舊: "旧",
+  蓋: "盖",
+  蘋: "苹",
+  處: "处",
+  製: "制",
+  複: "复",
+  覆: "复",
+  見: "见",
+  規: "规",
+  視: "视",
+  覽: "览",
+  觸: "触",
+  訂: "订",
+  計: "计",
+  訊: "讯",
+  記: "记",
+  設: "设",
+  註: "注",
+  詞: "词",
+  試: "试",
+  話: "话",
+  該: "该",
+  詳: "详",
+  誤: "误",
+  調: "调",
+  請: "请",
+  議: "议",
+  讀: "读",
+  變: "变",
+  貼: "贴",
+  資: "资",
+  載: "载",
+  輪: "轮",
+  輯: "辑",
+  輸: "输",
+  轉: "转",
+  這: "这",
+  連: "连",
+  進: "进",
+  過: "过",
+  達: "达",
+  選: "选",
+  還: "还",
+  鈕: "钮",
+  錄: "录",
+  錯: "错",
+  鍵: "键",
+  鐘: "钟",
+  門: "门",
+  閉: "闭",
+  開: "开",
+  間: "间",
+  頁: "页",
+  項: "项",
+  順: "顺",
+  須: "须",
+  預: "预",
+  題: "题",
+  顯: "显",
+  體: "体",
+  麼: "么",
+  點: "点"
+};
 const TIME_PERIOD_LABELS = {
   morning: "早上",
   noon: "中午",
@@ -344,6 +554,196 @@ const ENV_DROPPED_KEYS = new Set([
   "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT",
   "CONTEXT_COMPRESSION_PROMPT"
 ]);
+let uiLanguage = readStoredUiLanguage();
+let uiLanguageObserver = null;
+const uiLanguageTextOriginals = new WeakMap();
+const uiLanguageAttrOriginals = new WeakMap();
+
+function normalizeUiLanguage(value = "") {
+  return value === UI_LANGUAGE_SIMPLIFIED ? UI_LANGUAGE_SIMPLIFIED : UI_LANGUAGE_TRADITIONAL;
+}
+
+function readStoredUiLanguage() {
+  try {
+    return normalizeUiLanguage(window.localStorage?.getItem(UI_LANGUAGE_STORAGE_KEY));
+  } catch {
+    return UI_LANGUAGE_TRADITIONAL;
+  }
+}
+
+function saveUiLanguagePreference() {
+  try {
+    window.localStorage?.setItem(UI_LANGUAGE_STORAGE_KEY, uiLanguage);
+  } catch {
+    // The UI language still works for this page even if storage is unavailable.
+  }
+}
+
+function toSimplifiedUiText(value = "") {
+  let output = String(value || "");
+  UI_T2S_PHRASES.forEach(([traditional, simplified]) => {
+    output = output.split(traditional).join(simplified);
+  });
+  return Array.from(output, (char) => UI_T2S_CHARS[char] || char).join("");
+}
+
+function getUiLanguageText(traditionalText = "") {
+  return uiLanguage === UI_LANGUAGE_SIMPLIFIED ? toSimplifiedUiText(traditionalText) : traditionalText;
+}
+
+function shouldSkipUiLanguageTextNode(node) {
+  const parent = node?.parentElement;
+  return !parent || !node.nodeValue.trim() || Boolean(parent.closest(UI_LANGUAGE_SKIP_TEXT_SELECTOR));
+}
+
+function shouldSkipUiLanguageAttributes(element) {
+  return !element || Boolean(element.closest(UI_LANGUAGE_SKIP_ATTR_SELECTOR));
+}
+
+function shouldTranslateUiValueAttribute(element) {
+  if (element?.tagName !== "INPUT") {
+    return false;
+  }
+  return ["button", "submit", "reset"].includes(String(element.type || "").toLowerCase());
+}
+
+function translateUiTextNode(node, options = {}) {
+  if (shouldSkipUiLanguageTextNode(node)) {
+    return;
+  }
+  if (options.captureOriginal || !uiLanguageTextOriginals.has(node)) {
+    uiLanguageTextOriginals.set(node, node.nodeValue);
+  }
+  const original = uiLanguageTextOriginals.get(node) || "";
+  node.nodeValue = uiLanguage === UI_LANGUAGE_SIMPLIFIED ? toSimplifiedUiText(original) : original;
+}
+
+function translateUiElementAttributes(element, options = {}) {
+  if (!(element instanceof Element) || shouldSkipUiLanguageAttributes(element)) {
+    return;
+  }
+  let originals = uiLanguageAttrOriginals.get(element);
+  if (!originals) {
+    originals = {};
+    uiLanguageAttrOriginals.set(element, originals);
+  }
+  UI_LANGUAGE_TEXT_ATTRS.forEach((attr) => {
+    if (!element.hasAttribute(attr)) {
+      return;
+    }
+    if (attr === "value" && !shouldTranslateUiValueAttribute(element)) {
+      return;
+    }
+    if (options.captureOriginal || originals[attr] === undefined) {
+      originals[attr] = element.getAttribute(attr) || "";
+    }
+    const original = originals[attr] || "";
+    element.setAttribute(attr, uiLanguage === UI_LANGUAGE_SIMPLIFIED ? toSimplifiedUiText(original) : original);
+  });
+}
+
+function translateUiLanguageWithin(root, options = {}) {
+  if (!root) {
+    return;
+  }
+  if (root.nodeType === Node.TEXT_NODE) {
+    translateUiTextNode(root, options);
+    return;
+  }
+  if (!(root instanceof Element) && root.nodeType !== Node.DOCUMENT_NODE) {
+    return;
+  }
+
+  const rootElement = root instanceof Element ? root : null;
+  if (rootElement) {
+    translateUiElementAttributes(rootElement, options);
+  }
+
+  const elementWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let elementNode = elementWalker.nextNode();
+  while (elementNode) {
+    translateUiElementAttributes(elementNode, options);
+    elementNode = elementWalker.nextNode();
+  }
+
+  const textWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let textNode = textWalker.nextNode();
+  while (textNode) {
+    translateUiTextNode(textNode, options);
+    textNode = textWalker.nextNode();
+  }
+}
+
+function observeUiLanguageMutations() {
+  if (!uiLanguageObserver) {
+    return;
+  }
+  uiLanguageObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: UI_LANGUAGE_TEXT_ATTRS
+  });
+}
+
+function withUiLanguageObserverPaused(callback) {
+  uiLanguageObserver?.disconnect();
+  callback();
+  observeUiLanguageMutations();
+}
+
+function updateUiLanguageToggleButton() {
+  if (!el.uiLanguageToggleBtn) {
+    return;
+  }
+  const label = uiLanguage === UI_LANGUAGE_SIMPLIFIED ? "简繁转换：简体" : "簡繁轉換：繁體";
+  el.uiLanguageToggleBtn.textContent = label;
+  el.uiLanguageToggleBtn.setAttribute("aria-pressed", uiLanguage === UI_LANGUAGE_SIMPLIFIED ? "true" : "false");
+  el.uiLanguageToggleBtn.setAttribute("title", getUiLanguageText("點擊切換簡體 / 繁體 UI"));
+}
+
+function applyUiLanguage() {
+  document.documentElement.lang = uiLanguage;
+  withUiLanguageObserverPaused(() => {
+    translateUiLanguageWithin(document.documentElement);
+    updateUiLanguageToggleButton();
+  });
+}
+
+function handleUiLanguageMutations(mutations = []) {
+  withUiLanguageObserverPaused(() => {
+    mutations.forEach((mutation) => {
+      if (mutation.type === "characterData") {
+        translateUiTextNode(mutation.target, { captureOriginal: true });
+        return;
+      }
+      if (mutation.type === "attributes") {
+        translateUiElementAttributes(mutation.target, { captureOriginal: true });
+        return;
+      }
+      mutation.addedNodes.forEach((node) => {
+        translateUiLanguageWithin(node, { captureOriginal: true });
+      });
+    });
+    updateUiLanguageToggleButton();
+  });
+}
+
+function initUiLanguageToggle() {
+  if ("MutationObserver" in window) {
+    uiLanguageObserver = new MutationObserver(handleUiLanguageMutations);
+  }
+  if (el.uiLanguageToggleBtn) {
+    el.uiLanguageToggleBtn.addEventListener("click", () => {
+      uiLanguage = uiLanguage === UI_LANGUAGE_SIMPLIFIED ? UI_LANGUAGE_TRADITIONAL : UI_LANGUAGE_SIMPLIFIED;
+      saveUiLanguagePreference();
+      applyUiLanguage();
+      showToast(uiLanguage === UI_LANGUAGE_SIMPLIFIED ? "已切換為簡體 UI" : "已切換為繁體 UI");
+    });
+  }
+  applyUiLanguage();
+}
 
 function isChatApiProcessingKeyName(key = "") {
   const match = String(key || "").trim().match(/^CHAT_API_KEY([2-9]\d*)$/u);
@@ -3684,6 +4084,165 @@ function collectModularPromptConfig() {
   };
 }
 
+function getModularPromptImportSource(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return source.config ||
+    source.promptMode ||
+    source.modularPromptConfig ||
+    source.timeTavernPromptMode ||
+    source.extensions?.time_tavern_prompt_mode ||
+    source;
+}
+
+function normalizeImportedModularPromptConfig(payload = {}, fallbackMode = "") {
+  const source = getModularPromptImportSource(payload);
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error("這不是有效的 Prompt 模式 JSON。");
+  }
+  const hasPromptFields = [
+    "mode",
+    "name",
+    "title",
+    "displayName",
+    "dialogueContextRounds",
+    "contextCompression",
+    "contextCompressionPrompt",
+    "compressionProfiles",
+    "reasonerHistory",
+    "reasonerMainRules",
+    "reasonerContextRules"
+  ].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  if (!hasPromptFields) {
+    throw new Error("JSON 中找不到可匯入的 Prompt 模式資料。");
+  }
+
+  const mode = normalizeRoleCardMode(source.mode || source.id || fallbackMode || "single");
+  const contextCompressionInput = source.contextCompression ||
+    source.compression ||
+    {
+      mainRules: source.contextCompressionPrompt || source.compressionPrompt || "",
+      models: source.models || source.compressionModels || []
+    };
+  const compressionProfiles = normalizeCompressionProfilesConfig({
+    ...source,
+    contextCompression: contextCompressionInput,
+    contextCompressionPrompt: source.contextCompressionPrompt || contextCompressionInput?.mainRules || ""
+  });
+  const standardProfile = compressionProfiles.find((profile) => profile.id === STANDARD_COMPRESSION_PROFILE_ID) ||
+    createStandardCompressionProfile(normalizeContextCompressionConfig(contextCompressionInput, appState?.contextCompressionPrompt || ""));
+  const contextCompression = standardProfile.contextCompression;
+  const reasonerHistory = source.reasonerHistory || source.reasoner || {};
+
+  return {
+    version: 2,
+    mode,
+    name: String(source.name || source.title || source.displayName || getDefaultPromptModeDisplayName(mode)).trim(),
+    dialogueContextRounds: normalizeDialogueContextRounds(source.dialogueContextRounds || source.contextRounds || 20),
+    contextCompression,
+    contextCompressionPrompt: contextCompression.mainRules,
+    compressionProfiles,
+    reasonerHistory: {
+      mainRules: String(reasonerHistory.mainRules ?? source.reasonerMainRules ?? source.reasonerHistoryPrompt ?? "").trim(),
+      contextRules: String(reasonerHistory.contextRules ?? source.reasonerContextRules ?? source.reasonerContextPrompt ?? "").trim()
+    }
+  };
+}
+
+function normalizePromptModeIdCandidate(value = "", fallback = "imported_prompt") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
+}
+
+function createUniqueImportedPromptModeId(config = {}) {
+  const existingModes = new Set([
+    ...BUILTIN_PROMPT_MODES,
+    ...Object.keys(appState?.modularPromptConfigs || {})
+  ].map((mode) => normalizeRoleCardMode(mode)));
+  const base = normalizePromptModeIdCandidate(config.mode || config.name || "imported_prompt");
+  if (!existingModes.has(base)) {
+    return base;
+  }
+  const importedBase = `${base}_import`;
+  if (!existingModes.has(importedBase)) {
+    return importedBase;
+  }
+  let index = 2;
+  let candidate = `${importedBase}_${index}`;
+  while (existingModes.has(candidate)) {
+    index += 1;
+    candidate = `${importedBase}_${index}`;
+  }
+  return candidate;
+}
+
+function buildModularPromptModeExportPayload(config = collectModularPromptConfig()) {
+  return {
+    type: "time_tavern_prompt_mode",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    config: cloneSerializable(config)
+  };
+}
+
+function exportCurrentModularPromptMode() {
+  try {
+    const config = collectModularPromptConfig();
+    const payload = buildModularPromptModeExportPayload(config);
+    const fileName = `${sanitizeDownloadFileName(`prompt_${config.mode}_${config.name || getDefaultPromptModeDisplayName(config.mode)}`)}.json`;
+    triggerBlobDownload(
+      new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" }),
+      fileName
+    );
+    showToast("已匯出 Prompt 模式");
+  } catch (error) {
+    showToast(error.message || "Prompt 匯出失敗", "error");
+  }
+}
+
+async function importModularPromptModeFromFile(file) {
+  if (!file) {
+    return;
+  }
+  try {
+    const ok = window.confirm("匯入會建立一個新的 Prompt 模式並立即保存，不會覆蓋目前模式。要繼續嗎？");
+    if (!ok) {
+      return;
+    }
+    const text = await file.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error("Prompt 匯入失敗：JSON 格式不正確。");
+    }
+    const importedConfig = normalizeImportedModularPromptConfig(payload, "imported_prompt");
+    const mode = createUniqueImportedPromptModeId(importedConfig);
+    const config = {
+      ...importedConfig,
+      mode,
+      name: importedConfig.name || getDefaultPromptModeDisplayName(mode)
+    };
+    const response = await request(`/api/modular-prompts/${mode}`, {
+      method: "PUT",
+      body: JSON.stringify({ config })
+    });
+    appState = response?.state || appState;
+    renderAllPromptModeSelects(config.mode);
+    renderModularPromptEditor(config.mode);
+    showToast(`Prompt 模式「${config.name}」已匯入並保存`);
+  } catch (error) {
+    showToast(error.message || "Prompt 匯入失敗", "error");
+  } finally {
+    if (el.modularPromptImportFile) {
+      el.modularPromptImportFile.value = "";
+    }
+  }
+}
+
 function collectRoleCardCustomSectionsFromEditor(options = {}) {
   if (!el.roleCardCustomSectionList) {
     return [];
@@ -4460,6 +5019,29 @@ async function saveModularPromptConfig() {
   }
 }
 
+async function saveDefaults() {
+  if (!window.confirm("要把目前的使用者設定、角色卡與 Prompt 設定儲存成 GitHub 預設嗎？這不會保存目前對話紀錄。")) {
+    return;
+  }
+  try {
+    if (el.saveDefaultsBtn) {
+      el.saveDefaultsBtn.disabled = true;
+      el.saveDefaultsBtn.textContent = "儲存中...";
+    }
+    const payload = await request("/api/defaults/save", { method: "POST" });
+    appState = payload?.state || appState;
+    const defaults = payload?.defaults || {};
+    showToast(`預設已保存：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個`);
+  } catch (error) {
+    showToast(error.message || "預設保存失敗", "error");
+  } finally {
+    if (el.saveDefaultsBtn) {
+      el.saveDefaultsBtn.disabled = false;
+      el.saveDefaultsBtn.textContent = "儲存預設";
+    }
+  }
+}
+
 function createCustomPromptMode() {
   const configs = appState?.modularPromptConfigs || {};
   let index = Object.keys(configs).length + 1;
@@ -4983,6 +5565,10 @@ function bindEvents() {
     });
   }
 
+  if (el.saveDefaultsBtn) {
+    el.saveDefaultsBtn.addEventListener("click", saveDefaults);
+  }
+
   if (el.addEnvExtraBtn) {
     el.addEnvExtraBtn.addEventListener("click", () => {
       el.envSettingsExtraList?.appendChild(createEnvExtraRow());
@@ -5105,6 +5691,17 @@ function bindEvents() {
     });
   }
 
+  if (el.exportModularPromptModeBtn) {
+    el.exportModularPromptModeBtn.addEventListener("click", exportCurrentModularPromptMode);
+  }
+
+  if (el.importModularPromptModeBtn && el.modularPromptImportFile) {
+    el.importModularPromptModeBtn.addEventListener("click", () => el.modularPromptImportFile.click());
+    el.modularPromptImportFile.addEventListener("change", async () => {
+      await importModularPromptModeFromFile(el.modularPromptImportFile.files?.[0]);
+    });
+  }
+
   if (el.compressionProfileSelect) {
     el.compressionProfileSelect.addEventListener("change", () => {
       syncSelectedCompressionProfileFromEditor();
@@ -5224,6 +5821,7 @@ function bindEvents() {
 }
 
 async function boot() {
+  initUiLanguageToggle();
   bindEvents();
   try {
     await refresh();

@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260513-chat-height" />
+    <link rel="stylesheet" href="/styles.css?v=20260520-ui-language-font2" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -41,6 +41,7 @@
             自訂補充
             <textarea id="identityText" rows="3" placeholder="會附加到每次使用者發言最後"></textarea>
           </label>
+          <p class="form-hint">可使用 {{user}} 代表稱呼，{{chur}} 代表目前角色卡名字。</p>
           <button type="submit">保存使用者設定</button>
         </form>
 
@@ -74,6 +75,8 @@
           <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
           <button id="timeTrackingSettingsBtn" type="button" class="secondary">統計判斷編輯</button>
           <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
+          <button id="saveDefaultsBtn" type="button" class="secondary">儲存預設</button>
+          <button id="uiLanguageToggleBtn" type="button" class="secondary" aria-pressed="false">簡繁轉換</button>
         </div>
       </section>
 
@@ -125,7 +128,7 @@
         </div>
         <section class="stack">
           <h4>自定義內容</h4>
-          <p class="form-hint">可自由建立「名字 + 內容」欄位，例如：性格、場景、系統指令、詳細描述、人物關係。</p>
+          <p class="form-hint">可自由建立「名字 + 內容」欄位，例如：性格、場景、系統指令、詳細描述、人物關係。支援 {{user}} 與 {{chur}}。</p>
           <div id="roleCardCustomSectionList" class="custom-section-list"></div>
           <button id="addRoleCardCustomSectionBtn" type="button" class="secondary">＋ 新增自定義內容</button>
         </section>
@@ -385,6 +388,11 @@
           <button id="addModularPromptModeBtn" type="button" class="secondary">＋ 新增模式</button>
           <button id="deleteModularPromptModeBtn" type="button" class="muted">刪除模式</button>
         </div>
+        <div class="prompt-mode-transfer-row inline-actions">
+          <button id="exportModularPromptModeBtn" type="button" class="secondary">匯出</button>
+          <button id="importModularPromptModeBtn" type="button" class="secondary">匯入</button>
+          <input id="modularPromptImportFile" type="file" class="hidden" accept=".json,application/json" />
+        </div>
         <label>
           模式名字
           <input id="modularPromptModeName" type="text" placeholder="例如：單角色" />
@@ -458,7 +466,7 @@
         <div class="prompt-toolbar">
           <div>
             <strong>最終 Prompt 預覽</strong>
-            <p class="form-hint">會套用 `{{user}}` 稱呼替換。</p>
+            <p class="form-hint">會套用 `{{user}}` 稱呼與 `{{chur}}` 角色卡名字替換。</p>
           </div>
           <button id="previewModularPromptBtn" type="button" class="secondary">更新預覽</button>
         </div>
@@ -481,6 +489,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260513-chat-input" defer></script>
-    <script type="module" src="/app.js?v=20260513-chat-input"></script>
+    <script type="module" src="/app.js?v=20260520-template-vars"></script>
   </body>
 </html>

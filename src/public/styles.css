@@ -14,6 +14,14 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Xiaolai Mono";
+  src: url("/assets/fonts/XiaolaiMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #02030b;
   --bg-soft: #111b3d;
@@ -83,6 +91,31 @@ body {
   background: #02030b;
   cursor: var(--cursor);
   overflow-x: hidden;
+}
+
+html[lang="zh-Hans"] .hero h1,
+html[lang="zh-Hans"] h2,
+html[lang="zh-Hans"] .role-card h3,
+html[lang="zh-Hans"] .role-picker-cover,
+html[lang="zh-Hans"] .role-picker-card h4,
+html[lang="zh-Hans"] .session-picker-card h4,
+html[lang="zh-Hans"] .markdown-body h1,
+html[lang="zh-Hans"] .markdown-body h2,
+html[lang="zh-Hans"] .markdown-body h3,
+html[lang="zh-Hans"] .markdown-body h4,
+html[lang="zh-Hans"] .markdown-body h5,
+html[lang="zh-Hans"] .markdown-body h6 {
+  font-family: "Xiaolai Mono", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+html[lang="zh-Hans"] body,
+html[lang="zh-Hans"] input,
+html[lang="zh-Hans"] textarea,
+html[lang="zh-Hans"] select,
+html[lang="zh-Hans"] button,
+html[lang="zh-Hans"] label,
+html[lang="zh-Hans"] summary {
+  font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 }
 
 body::before {
@@ -524,6 +557,12 @@ button {
 .mode-editor-row button {
   width: auto;
   min-width: 112px;
+}
+
+.prompt-mode-transfer-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .compression-profile-panel {
