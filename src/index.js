@@ -54,6 +54,16 @@ const TIME_PERIOD_LABELS = {
 };
 const DEFAULT_AUTO_TIME_PERIOD_ROUNDS = 3;
 const KEEP_TIME_DIRECTIVE_PATTERN = /[｛{]\s*保持時間\s*[｝}]/gu;
+const ASSISTANT_FEEDBACK_LIKE = "like";
+const ASSISTANT_FEEDBACK_DISLIKE = "dislike";
+const ASSISTANT_FEEDBACK_EMOJIS = {
+  [ASSISTANT_FEEDBACK_LIKE]: "👍",
+  [ASSISTANT_FEEDBACK_DISLIKE]: "👎"
+};
+const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
+  [ASSISTANT_FEEDBACK_LIKE]: "【user 喜歡你這次的正文輸出】",
+  [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
+};
 const DEFAULT_TIME_TRACKING_CONFIG = {
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
   connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
@@ -2642,6 +2652,28 @@ function injectUserPlaceholder(text, userDisplayName, roleCardName = "") {
     user: userDisplayName,
     chur: roleCardName
   });
+}
+
+function getWebChatDisplayConfig(currentState = state) {
+  const activeRoleCard = getActiveRoleCard(currentState);
+  const templateVariables = createTemplateVariables(currentState, "", activeRoleCard);
+  const userNameTemplate = envFirstText(["WEB_USER_NAME_TEMPLATE", "CHAT_USER_NAME_TEMPLATE"], "{{user}}");
+  const aiNameTemplate = envFirstText(["WEB_AI_NAME_TEMPLATE", "CHAT_AI_NAME_TEMPLATE"], "{{chur}}");
+  const userName = injectTemplatePlaceholders(userNameTemplate, templateVariables) ||
+    templateVariables.user ||
+    "User";
+  const aiName = injectTemplatePlaceholders(aiNameTemplate, templateVariables) ||
+    templateVariables.chur ||
+    "AI";
+  const userAvatar = envFirstText(["WEB_USER_AVATAR_IMAGE", "WEB_USER_AVATAR_URL", "CHAT_USER_AVATAR_URL"], "");
+  const aiAvatar = envFirstText(["WEB_AI_AVATAR_IMAGE", "WEB_AI_AVATAR_URL", "CHAT_AI_AVATAR_URL"], "") ||
+    safeText(activeRoleCard?.coverImage);
+  return {
+    userName,
+    aiName,
+    userAvatar,
+    aiAvatar
+  };
 }
 
 function renderRoleCardWithUser(card, userDisplayName) {
@@ -6859,7 +6891,11 @@ async function runConversationTurnStreaming({
 
     const parsedInput = parseRoleplayInput(content, state);
     const storedUserContent = parsedInput.rawInput || safeText(content);
-    const modelUserContent = parsedInput.modelContent || storedUserContent;
+    let modelUserContent = parsedInput.modelContent || storedUserContent;
+    const pendingAssistantFeedback = getPendingAssistantFeedbackForNextUser(state);
+    if (pendingAssistantFeedback) {
+      modelUserContent = prependAssistantFeedbackPrompt(modelUserContent, pendingAssistantFeedback.feedback);
+    }
     const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
     const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
     if (!storedUserContent || !modelUserContent) {
@@ -6875,11 +6911,15 @@ async function runConversationTurnStreaming({
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
+        assistantOutputFeedback: pendingAssistantFeedback?.feedback || "",
+        assistantOutputFeedbackPrompt: pendingAssistantFeedback?.promptPrefix || "",
+        assistantOutputFeedbackFromMessageId: pendingAssistantFeedback?.assistantMessage?.id || "",
         keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         stateBeforeTurnSnapshot
       }
     });
     appendConversationMessage(userMessage);
+    markPendingAssistantFeedbackApplied(pendingAssistantFeedback, userMessage);
     updateTimeTrackingFromMessage(state, userMessage);
 
     const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
@@ -6989,6 +7029,7 @@ function statePayload(state) {
     modularPromptConfigs: getModularPromptConfigsPayload(),
     contextCompressionPrompt: getContextCompressionPrompt(),
     characterCardCreationAssistantPrompt: getCharacterCardCreationAssistantPrompt(),
+    webDisplay: getWebChatDisplayConfig(state),
     savedSessionsMeta: listSavedSessionSummaries(state),
     uiActions: createUiActions(state),
     chatApi: {
@@ -7123,6 +7164,169 @@ function createMessageRecord({ role, content, source, extra = {} }) {
     updatedAt: nowIso(),
     ...extra
   };
+}
+
+function normalizeAssistantFeedbackType(value = "") {
+  const normalized = safeText(value).toLowerCase().replace(/\s+/g, "");
+  if (normalized === ASSISTANT_FEEDBACK_LIKE || normalized === "liked" || normalized === "up" || normalized === "thumbsup" || normalized === "👍") {
+    return ASSISTANT_FEEDBACK_LIKE;
+  }
+  if (normalized === ASSISTANT_FEEDBACK_DISLIKE || normalized === "down" || normalized === "thumbsdown" || normalized === "👎") {
+    return ASSISTANT_FEEDBACK_DISLIKE;
+  }
+  return "";
+}
+
+function getAssistantFeedbackPromptPrefix(feedbackType = "") {
+  return ASSISTANT_FEEDBACK_PROMPT_PREFIXES[normalizeAssistantFeedbackType(feedbackType)] || "";
+}
+
+function stripAssistantFeedbackPromptPrefixes(content = "") {
+  const prefixes = Object.values(ASSISTANT_FEEDBACK_PROMPT_PREFIXES)
+    .map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  if (!prefixes) {
+    return safeText(content);
+  }
+  const pattern = new RegExp(`^(?:\\s*(?:${prefixes})\\s*)+`, "u");
+  return safeText(content).replace(pattern, "").trimStart();
+}
+
+function prependAssistantFeedbackPrompt(content = "", feedbackType = "") {
+  const prefix = getAssistantFeedbackPromptPrefix(feedbackType);
+  const base = stripAssistantFeedbackPromptPrefixes(content);
+  return [prefix, base].filter(Boolean).join("\n");
+}
+
+function findNextUserMessageForAssistantFeedback(currentState, assistantMessage) {
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  const assistantIndex = conversation.findIndex((item) => item?.id === assistantMessage?.id);
+  if (assistantIndex < 0) {
+    return null;
+  }
+  for (let index = assistantIndex + 1; index < conversation.length; index += 1) {
+    if (conversation[index]?.role === "user") {
+      return conversation[index];
+    }
+  }
+  return null;
+}
+
+function applyFeedbackPrefixToUserMessage(userMessage, feedbackType = "") {
+  if (!userMessage || userMessage.role !== "user") {
+    return null;
+  }
+  const normalizedFeedback = normalizeAssistantFeedbackType(feedbackType);
+  const promptPrefix = getAssistantFeedbackPromptPrefix(normalizedFeedback);
+  if (!promptPrefix) {
+    return null;
+  }
+
+  const fallbackBase = getUserBaseModelContent(userMessage) || safeText(userMessage.content);
+  userMessage.baseModelContent = prependAssistantFeedbackPrompt(
+    safeText(userMessage.baseModelContent) || fallbackBase,
+    normalizedFeedback
+  );
+  userMessage.modelContent = prependAssistantFeedbackPrompt(
+    safeText(userMessage.modelContent || userMessage.extra?.modelContent) || userMessage.baseModelContent,
+    normalizedFeedback
+  );
+  userMessage.assistantOutputFeedback = normalizedFeedback;
+  userMessage.assistantOutputFeedbackPrompt = promptPrefix;
+  userMessage.feedbackUpdatedAt = nowIso();
+
+  if (userMessage.extra && typeof userMessage.extra === "object") {
+    userMessage.extra.baseModelContent = userMessage.baseModelContent;
+    userMessage.extra.modelContent = userMessage.modelContent;
+    userMessage.extra.assistantOutputFeedback = normalizedFeedback;
+    userMessage.extra.assistantOutputFeedbackPrompt = promptPrefix;
+    userMessage.extra.feedbackUpdatedAt = userMessage.feedbackUpdatedAt;
+  }
+
+  return userMessage;
+}
+
+function getPendingAssistantFeedbackForNextUser(currentState) {
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    const message = conversation[index];
+    if (!message || message.role === "user") {
+      break;
+    }
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const feedback = normalizeAssistantFeedbackType(message.feedback);
+    if (feedback && message.feedbackPendingForNextUser !== false && !safeText(message.feedbackAppliedToUserMessageId)) {
+      return {
+        assistantMessage: message,
+        feedback,
+        promptPrefix: getAssistantFeedbackPromptPrefix(feedback)
+      };
+    }
+  }
+  return null;
+}
+
+function markPendingAssistantFeedbackApplied(pendingFeedback = null, userMessage = null) {
+  const assistantMessage = pendingFeedback?.assistantMessage;
+  if (!assistantMessage || !userMessage) {
+    return;
+  }
+  assistantMessage.feedbackPendingForNextUser = false;
+  assistantMessage.feedbackAppliedToUserMessageId = userMessage.id;
+  assistantMessage.feedbackAppliedAt = nowIso();
+  assistantMessage.updatedAt = assistantMessage.feedbackAppliedAt;
+}
+
+function applyAssistantFeedbackToConversation(currentState, { assistantMessageId = "", feedback = "", source = "", userId = "", userName = "" } = {}) {
+  const normalizedFeedback = normalizeAssistantFeedbackType(feedback);
+  if (!normalizedFeedback) {
+    return { ok: false, status: 400, error: "未知的回饋類型。" };
+  }
+
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  const assistantMessage = conversation.find((item) => item?.id === assistantMessageId);
+  if (!assistantMessage) {
+    return { ok: false, status: 404, error: "訊息不存在" };
+  }
+  if (assistantMessage.role !== "assistant") {
+    return { ok: false, status: 400, error: "僅允許標記 AI 正文輸出" };
+  }
+
+  const promptPrefix = getAssistantFeedbackPromptPrefix(normalizedFeedback);
+  const nextUserMessage = findNextUserMessageForAssistantFeedback(currentState, assistantMessage);
+  if (nextUserMessage) {
+    applyFeedbackPrefixToUserMessage(nextUserMessage, normalizedFeedback);
+  }
+  assistantMessage.feedback = normalizedFeedback;
+  assistantMessage.feedbackPrompt = promptPrefix;
+  assistantMessage.feedbackSource = safeText(source);
+  assistantMessage.feedbackUserId = safeText(userId);
+  assistantMessage.feedbackUserName = safeText(userName);
+  assistantMessage.feedbackPendingForNextUser = !nextUserMessage;
+  assistantMessage.feedbackAppliedToUserMessageId = nextUserMessage?.id || "";
+  assistantMessage.feedbackUpdatedAt = nowIso();
+  assistantMessage.updatedAt = assistantMessage.feedbackUpdatedAt;
+
+  saveState(currentState);
+  return {
+    ok: true,
+    assistantMessage,
+    userMessage: nextUserMessage,
+    feedback: normalizedFeedback,
+    promptPrefix,
+    pendingForNextUser: !nextUserMessage
+  };
+}
+
+function findAssistantMessageByDiscordReplyId(currentState, discordReplyMessageId = "") {
+  const normalizedId = safeText(discordReplyMessageId);
+  if (!normalizedId) {
+    return null;
+  }
+  return (Array.isArray(currentState?.conversation) ? currentState.conversation : [])
+    .find((item) => item?.role === "assistant" && getDiscordReplyMessageIds(item).includes(normalizedId)) || null;
 }
 
 function normalizeAiLog(entry) {
@@ -7408,6 +7612,9 @@ async function replayConversationFromDiscordMessageId({
     if (targetIndex < 0) {
       throw new Error("找不到對應的原始 Discord 使用者訊息，無法從該訊息重新開始。");
     }
+    const removedDiscordReplyMessageIds = state.conversation
+      .slice(targetIndex + 1)
+      .flatMap((item) => item?.role === "assistant" ? getDiscordReplyMessageIds(item) : []);
 
     createSavedSessionFromCurrentState(
       state,
@@ -7484,6 +7691,7 @@ async function replayConversationFromDiscordMessageId({
 
     return {
       assistantMessage,
+      removedDiscordReplyMessageIds,
       backupSession: state.savedSessions[state.savedSessions.length - 1] || null
     };
   });
@@ -7497,7 +7705,11 @@ async function runConversationTurn({ content, source, extra = {} }) {
 
     const parsedInput = parseRoleplayInput(content, state);
     const storedUserContent = parsedInput.rawInput || safeText(content);
-    const modelUserContent = parsedInput.modelContent || storedUserContent;
+    let modelUserContent = parsedInput.modelContent || storedUserContent;
+    const pendingAssistantFeedback = getPendingAssistantFeedbackForNextUser(state);
+    if (pendingAssistantFeedback) {
+      modelUserContent = prependAssistantFeedbackPrompt(modelUserContent, pendingAssistantFeedback.feedback);
+    }
     const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
     const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
     if (!storedUserContent || !modelUserContent) {
@@ -7513,11 +7725,15 @@ async function runConversationTurn({ content, source, extra = {} }) {
         inputKind: parsedInput.inputKind,
         baseModelContent: modelUserContent,
         modelContent: modelUserContent,
+        assistantOutputFeedback: pendingAssistantFeedback?.feedback || "",
+        assistantOutputFeedbackPrompt: pendingAssistantFeedback?.promptPrefix || "",
+        assistantOutputFeedbackFromMessageId: pendingAssistantFeedback?.assistantMessage?.id || "",
         keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         stateBeforeTurnSnapshot
       }
     });
     appendConversationMessage(userMessage);
+    markPendingAssistantFeedbackApplied(pendingAssistantFeedback, userMessage);
     updateTimeTrackingFromMessage(state, userMessage);
 
     const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
@@ -8149,6 +8365,28 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const messageFeedbackMatch = pathname.match(/^\/api\/messages\/([^/]+)\/feedback$/);
+    if (messageFeedbackMatch && method === "POST") {
+      const body = await readBody(req);
+      const result = applyAssistantFeedbackToConversation(state, {
+        assistantMessageId: messageFeedbackMatch[1],
+        feedback: body.feedback || body.type || body.value,
+        source: "web"
+      });
+      if (!result.ok) {
+        sendJson(res, result.status || 400, { error: result.error || "回饋標記失敗" });
+        return;
+      }
+      sendJson(res, 200, {
+        message: result.assistantMessage,
+        userMessage: result.userMessage,
+        feedback: result.feedback,
+        pendingForNextUser: result.pendingForNextUser,
+        state: statePayload(state)
+      });
+      return;
+    }
+
     const messageEditMatch = pathname.match(/^\/api\/messages\/([^/]+)$/);
     if (messageEditMatch && method === "PUT") {
       const messageId = messageEditMatch[1];
@@ -8417,27 +8655,136 @@ async function buildDiscordInputWithTextAttachments(baseContent = "", attachment
 async function sendDiscordLongMessage(message, text) {
   const chunks = splitForDiscord(text, 1800);
   let first = true;
+  const sentMessages = [];
 
   for (const chunk of chunks) {
     const content = chunk || " ";
     if (first) {
-      await message.reply(content);
+      const sent = await message.reply(content);
+      if (sent) {
+        sentMessages.push(sent);
+      }
       first = false;
       continue;
     }
-    await message.channel.send(content);
+    const sent = await message.channel.send(content);
+    if (sent) {
+      sentMessages.push(sent);
+    }
+  }
+  return sentMessages;
+}
+
+function getDiscordReplyMessageIds(record = {}) {
+  const source = record && typeof record === "object" ? record : {};
+  const value = source.discordReplyMessageIds || source.extra?.discordReplyMessageIds;
+  return (Array.isArray(value) ? value : [])
+    .map((item) => safeText(item))
+    .filter(Boolean);
+}
+
+function rememberDiscordReplyMessageIds(assistantMessage = null, sentMessages = []) {
+  if (!assistantMessage || assistantMessage.role !== "assistant") {
+    return;
+  }
+  const ids = (Array.isArray(sentMessages) ? sentMessages : [])
+    .map((item) => safeText(item?.id || item))
+    .filter(Boolean);
+  if (ids.length === 0) {
+    return;
+  }
+  assistantMessage.discordReplyMessageIds = ids;
+  assistantMessage.updatedAt = nowIso();
+  const stored = state.conversation.find((item) => item?.id === assistantMessage.id);
+  if (stored) {
+    stored.discordReplyMessageIds = ids;
+    stored.updatedAt = assistantMessage.updatedAt;
+    saveState(state);
+  }
+}
+
+async function addDiscordFeedbackReactions(sentMessages = []) {
+  const uniqueMessages = Array.from(new Set(
+    (Array.isArray(sentMessages) ? sentMessages : [])
+      .filter(Boolean)
+  ));
+  for (const sentMessage of uniqueMessages) {
+    for (const emoji of Object.values(ASSISTANT_FEEDBACK_EMOJIS)) {
+      try {
+        await sentMessage.react(emoji);
+      } catch {
+        // Missing reaction permissions should not block the正文 itself.
+      }
+    }
+  }
+}
+
+async function rememberDiscordReplyAndFeedback(assistantMessage = null, sentMessages = []) {
+  rememberDiscordReplyMessageIds(assistantMessage, sentMessages);
+  await addDiscordFeedbackReactions(sentMessages);
+}
+
+async function applyDiscordReactionFeedback(reaction, user) {
+  const feedback = normalizeAssistantFeedbackType(reaction?.emoji?.name || reaction?.emoji?.toString?.() || "");
+  if (!feedback || user?.bot) {
+    return null;
+  }
+
+  const discordMessageId = safeText(reaction?.message?.id);
+  const assistantMessage = findAssistantMessageByDiscordReplyId(state, discordMessageId);
+  if (!assistantMessage) {
+    return null;
+  }
+
+  return applyAssistantFeedbackToConversation(state, {
+    assistantMessageId: assistantMessage.id,
+    feedback,
+    source: "discord",
+    userId: user?.id,
+    userName: user?.username || user?.globalName || ""
+  });
+}
+
+async function deleteDiscordMessagesByIds(channel, messageIds = []) {
+  const uniqueIds = Array.from(new Set((Array.isArray(messageIds) ? messageIds : []).map((id) => safeText(id)).filter(Boolean)));
+  const deleted = [];
+  for (const messageId of uniqueIds) {
+    try {
+      const target = await channel.messages.fetch(messageId);
+      await target.delete();
+      deleted.push(messageId);
+    } catch {
+      // Missing permissions, already-deleted messages, or old unknown messages should not block replay.
+    }
+  }
+  return deleted;
+}
+
+function getDiscordUserAvatarUrl(user) {
+  try {
+    return safeText(user?.displayAvatarURL?.({ extension: "png", size: 128 }));
+  } catch {
+    return "";
   }
 }
 
 async function sendInteractionLongReply(interaction, text) {
   const chunks = splitForDiscord(text, 1800);
+  const sentMessages = [];
   if (!interaction.deferred && !interaction.replied) {
     await interaction.deferReply();
   }
-  await interaction.editReply(chunks[0] || " ");
-  for (let i = 1; i < chunks.length; i += 1) {
-    await interaction.followUp(chunks[i] || " ");
+  const firstMessage = await interaction.editReply(chunks[0] || " ");
+  if (firstMessage) {
+    sentMessages.push(firstMessage);
   }
+  for (let i = 1; i < chunks.length; i += 1) {
+    const sent = await interaction.followUp(chunks[i] || " ");
+    if (sent) {
+      sentMessages.push(sent);
+    }
+  }
+  return sentMessages;
 }
 
 function isUnknownInteractionError(error) {
@@ -8748,6 +9095,7 @@ async function processDiscordChatTurn({
   guildId = "",
   userId,
   userName,
+  userAvatarUrl = "",
   discordMessageId,
   userContent
 }) {
@@ -8766,13 +9114,15 @@ async function processDiscordChatTurn({
         discordGuildId: guildId,
         discordUserId: userId,
         discordUserName: userName,
+        discordUserAvatarUrl: userAvatarUrl,
         discordMessageId
       }
     });
 
     return {
       pendingOpening,
-      replyText: formatAssistantMessageForUserDisplay(result.assistantMessage)
+      replyText: formatAssistantMessageForUserDisplay(result.assistantMessage),
+      assistantMessage: result.assistantMessage
     };
   } finally {
     stopTyping();
@@ -8796,6 +9146,7 @@ async function handleDiscordChat(message, userContent) {
     guildId: message.guildId,
     userId: message.author.id,
     userName: message.author.username,
+    userAvatarUrl: getDiscordUserAvatarUrl(message.author),
     discordMessageId: message.id,
     userContent: finalUserContent
   });
@@ -8804,7 +9155,8 @@ async function handleDiscordChat(message, userContent) {
   if (pendingOpening) {
     await sendDiscordLongMessage(message, pendingOpening);
   }
-  await sendDiscordLongMessage(message, turn.replyText);
+  const sentMessages = await sendDiscordLongMessage(message, turn.replyText);
+  await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
 }
 
 async function runSessionTextCommand(message, command, args) {
@@ -8881,7 +9233,8 @@ async function runReloadTextCommand(message, args) {
       },
       reloadFeedback: feedback
     });
-    await sendDiscordLongMessage(message, formatAssistantMessageForUserDisplay(result.assistantMessage));
+    const sentMessages = await sendDiscordLongMessage(message, formatAssistantMessageForUserDisplay(result.assistantMessage));
+    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
   } finally {
     stopTyping();
   }
@@ -8904,7 +9257,7 @@ async function runReplayTextCommand(message, args) {
         discordUserName: message.author.username
       }
     });
-    await sendDiscordLongMessage(
+    const sentMessages = await sendDiscordLongMessage(
       message,
       [
         result.backupSession
@@ -8913,6 +9266,7 @@ async function runReplayTextCommand(message, args) {
         formatAssistantMessageForUserDisplay(result.assistantMessage)
       ].filter(Boolean).join("\n\n")
     );
+    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
   } finally {
     stopTyping();
   }
@@ -9113,7 +9467,8 @@ async function handleSlashCommand(interaction) {
       },
       reloadFeedback: feedback
     });
-    await sendInteractionLongReply(interaction, formatAssistantMessageForUserDisplay(result.assistantMessage));
+    const sentMessages = await sendInteractionLongReply(interaction, formatAssistantMessageForUserDisplay(result.assistantMessage));
+    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
     return;
   }
 
@@ -9144,7 +9499,7 @@ async function handleSlashCommand(interaction) {
         discordUserName: interaction.user.username
       }
     });
-    await sendInteractionLongReply(
+    const sentMessages = await sendInteractionLongReply(
       interaction,
       [
         result.backupSession
@@ -9153,6 +9508,7 @@ async function handleSlashCommand(interaction) {
         formatAssistantMessageForUserDisplay(result.assistantMessage)
       ].filter(Boolean).join("\n\n")
     );
+    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
     return;
   }
 
@@ -9285,7 +9641,8 @@ async function handleSlashCommand(interaction) {
     const combinedReply = turn.pendingOpening
       ? `${turn.pendingOpening}\n\n${turn.replyText}`
       : turn.replyText;
-    await sendInteractionLongReply(interaction, combinedReply);
+    const sentMessages = await sendInteractionLongReply(interaction, combinedReply);
+    await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
   }
 }
 
@@ -9299,10 +9656,12 @@ function setupDiscordBot() {
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.GuildMessageReactions,
       GatewayIntentBits.MessageContent,
-      GatewayIntentBits.DirectMessages
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.DirectMessageReactions
     ],
-    partials: [Partials.Channel, Partials.Message]
+    partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User]
   });
   activeDiscordClient = discordClient;
 
@@ -9455,11 +9814,13 @@ function setupDiscordBot() {
             discordChannelId: message.channelId,
             discordGuildId: message.guildId,
             discordUserId: message.author.id,
-            discordUserName: message.author.username
+            discordUserName: message.author.username,
+            discordUserAvatarUrl: getDiscordUserAvatarUrl(message.author)
           }
         });
 
-        await sendDiscordLongMessage(
+        await deleteDiscordMessagesByIds(message.channel, result.removedDiscordReplyMessageIds || []);
+        const sentMessages = await sendDiscordLongMessage(
           message,
           [
             [
@@ -9473,6 +9834,7 @@ function setupDiscordBot() {
             formatAssistantMessageForUserDisplay(result.assistantMessage)
           ].filter(Boolean).join("\n\n")
         );
+        await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
       } finally {
         stopTyping();
       }
@@ -9482,6 +9844,19 @@ function setupDiscordBot() {
         return;
       }
       await message.reply(`編輯後重算失敗：${error.message || "未知錯誤"}`);
+    }
+  });
+
+  discordClient.on("messageReactionAdd", async (reaction, user) => {
+    try {
+      const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+      const fullUser = user?.partial ? await user.fetch() : user;
+      if (fullUser?.bot) {
+        return;
+      }
+      await applyDiscordReactionFeedback(fullReaction, fullUser);
+    } catch (error) {
+      console.warn(`Discord 回饋反應處理失敗：${error.message || error}`);
     }
   });
 

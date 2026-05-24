@@ -110,6 +110,10 @@ http://localhost:3234
 | `CHAT_API_KEY2` / `CHAT_API_KEY3` / ... | 否 | 空 | 大模型內容壓縮用 key。依目前啟用的大模型順序使用；例如 4 個大模型但只有 key2、key3、key4 時，第 4 個大模型沿用 key4。全空時使用 `CHAT_API_KEY`。 |
 | `CHAT_API_MODEL_TOKEN_CAP` | 否 | 依模型 | 手動覆蓋模型 token cap；未設定時 `deepseek-chat` 為 `8192`，其他模型為 `64000`。 |
 | `AI_MIN_REPLY_CHARS` | 否 | `600` | 回覆可見字數低於此值時，會嘗試補寫。 |
+| `WEB_USER_NAME_TEMPLATE` | 否 | `{{user}}` | 網頁聊天面板顯示的使用者名字，可用 `{{user}}` / `{{chur}}`。 |
+| `WEB_AI_NAME_TEMPLATE` | 否 | `{{chur}}` | 網頁聊天面板顯示的 AI 名字；預設使用目前角色卡名字。 |
+| `WEB_USER_AVATAR_IMAGE` | 否 | 空 | 網頁聊天面板使用者頭像；環境設定可直接上傳圖片並保存成 data URL。 |
+| `WEB_AI_AVATAR_IMAGE` | 否 | 角色卡封面 | 網頁聊天面板 AI 頭像；環境設定可直接上傳圖片，留空使用角色卡封面。 |
 | `DISCORD_BOT_TOKEN` | 否 | 空 | Discord Bot token。空白時不登入 Discord。 |
 | `DISCORD_CLIENT_ID` | 否 | 從 token 推斷 | 產生 Discord Bot 邀請連結用。 |
 | `DISCORD_GUILD_ID` | 否 | 空 | 指定 guild 註冊 Slash 指令；空白時只註冊全域指令。 |

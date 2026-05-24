@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260521-auto-time-warning" />
+    <link rel="stylesheet" href="/styles.css?v=20260524-hidden-scrollbar" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -82,13 +82,26 @@
 
       <section class="panel chat-panel">
         <section class="chat-primary mobile-chat-page">
+          <header class="discord-chat-header">
+            <div class="discord-chat-identity">
+              <div id="chatHeaderAvatar" class="chat-header-avatar" aria-hidden="true"></div>
+              <div class="chat-header-text">
+                <h2 id="chatHeaderTitle">時分居酒屋</h2>
+                <p id="chatHeaderSubtitle">選擇角色卡後開始對話</p>
+              </div>
+            </div>
+            <div class="discord-chat-tools" aria-label="對話工具">
+              <button id="stopChatBtn" type="button" class="icon-button" title="停止正在生成的回覆">■</button>
+              <button id="discordBotLinkBtn" type="button" class="icon-button" title="Discord Bot 連結">✦</button>
+            </div>
+          </header>
           <div id="messages" class="messages"></div>
 
           <form id="chatForm" class="chat-input">
+            <button type="button" class="chat-plus-button" aria-label="附加功能">＋</button>
             <textarea id="chatInput" rows="2" placeholder="輸入對話內容"></textarea>
             <div class="chat-actions">
               <button id="sendBtn" type="submit">送出</button>
-              <button id="discordBotLinkBtn" type="button" class="secondary">Discord Bot 連結</button>
             </div>
           </form>
         </section>
@@ -489,6 +502,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260513-chat-input" defer></script>
-    <script type="module" src="/app.js?v=20260521-auto-time-warning"></script>
+    <script type="module" src="/app.js?v=20260524-feedback"></script>
   </body>
 </html>

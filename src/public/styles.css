@@ -35,6 +35,8 @@
   --ok: #22c55e;
   --cursor: url("/assets/mini.cur") 0 0, auto;
   --cursor-pointer: url("/assets/mini.cur") 0 0, pointer;
+  --app-mobile-viewport-height: 100dvh;
+  --chat-input-height: 76px;
 }
 
 * {
@@ -42,40 +44,21 @@
 }
 
 * {
-  scrollbar-width: thin;
-  scrollbar-color: #ff5adf rgba(126, 167, 255, 0.42);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 *::-webkit-scrollbar {
-  width: 14px;
-  height: 14px;
+  width: 0;
+  height: 0;
 }
 
 *::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(172, 206, 255, 0.86), rgba(122, 77, 196, 0.82));
-  box-shadow:
-    inset 0 0 0 5px rgba(18, 27, 54, 0.2),
-    0 0 14px rgba(77, 141, 255, 0.22);
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  min-height: 42px;
-  border: 4px solid transparent;
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, #ff5bf1, #ff72c8) padding-box,
-    linear-gradient(180deg, rgba(202, 224, 255, 0.95), rgba(122, 77, 196, 0.82)) border-box;
-  box-shadow:
-    0 0 10px rgba(255, 79, 200, 0.72),
-    0 0 22px rgba(77, 141, 255, 0.28);
-}
-
-*::-webkit-scrollbar-thumb:hover {
-  background:
-    linear-gradient(180deg, #ff8af6, #ff4fc8) padding-box,
-    linear-gradient(180deg, rgba(225, 238, 255, 1), rgba(145, 96, 220, 0.92)) border-box;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-corner {
@@ -308,12 +291,14 @@ html.is-mac-desktop .panel {
 }
 
 .chat-panel {
-  padding: 16px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   min-height: calc(100dvh - 40px);
-  overflow: visible;
+  overflow: hidden;
+  background: rgba(7, 5, 18, 0.88);
+  border-color: rgba(108, 98, 150, 0.35);
 }
 
 .chat-primary,
@@ -325,7 +310,8 @@ html.is-mac-desktop .panel {
 .chat-primary {
   height: min(136dvh, 1520px);
   min-height: 0;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
 }
 
 h2 {
@@ -488,7 +474,7 @@ button {
   padding: 2px 2px 0;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
   border-bottom: 1px solid rgba(255, 255, 255, 0.16);
 }
 
@@ -1013,16 +999,110 @@ button {
   flex: 1;
 }
 
+.discord-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 76px;
+  padding: 12px 24px;
+  border-bottom: 1px solid rgba(158, 148, 205, 0.18);
+  background: rgba(5, 3, 14, 0.92);
+}
+
+.discord-chat-identity {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 14px;
+}
+
+.chat-header-avatar .discord-avatar {
+  width: 46px;
+  height: 46px;
+}
+
+.chat-header-text {
+  min-width: 0;
+}
+
+.chat-header-text h2 {
+  margin: 0;
+  max-width: 44vw;
+  color: #ebe8ff;
+  font-size: 26px;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-header-text p {
+  margin: 4px 0 0;
+  color: #a9a3c8;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.discord-chat-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 42px;
+  height: 42px;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #c9c4e8;
+  font-size: 20px;
+}
+
+.icon-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .messages {
   flex: 1;
   min-height: 0;
   max-height: 100%;
   overflow: auto;
   overscroll-behavior: contain;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 12px;
-  background: rgba(0, 0, 0, 0.25);
+  border: 0;
+  border-radius: 0;
+  padding: 14px 0 22px;
+  background: rgba(7, 5, 18, 0.72);
+}
+
+.discord-empty {
+  margin: 28px;
+  color: #9f98c2;
+  font-size: 20px;
+}
+
+.discord-date-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 28px 16px;
+  color: #b9b3d8;
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.discord-date-divider::before,
+.discord-date-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: rgba(174, 165, 214, 0.24);
 }
 
 .compression-notice {
@@ -1053,56 +1133,187 @@ button {
 }
 
 .message {
-  margin-bottom: 10px;
-  border-radius: 10px;
+  position: relative;
+}
+
+.discord-message {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 4px 18px 12px 24px;
+  border-radius: 0;
+}
+
+.discord-message:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.discord-avatar {
+  width: 48px;
+  height: 48px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
   overflow: hidden;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.28), transparent 38%),
+    linear-gradient(145deg, rgba(88, 101, 242, 0.9), rgba(255, 122, 201, 0.72));
+  color: #fff;
+  font-weight: 900;
+  font-size: 18px;
 }
 
-.message.user {
-  background: rgba(46, 196, 182, 0.12);
-  border: 1px solid rgba(46, 196, 182, 0.4);
+.discord-avatar img {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
-.message.assistant {
-  background: rgba(255, 159, 26, 0.12);
-  border: 1px solid rgba(255, 159, 26, 0.35);
+.discord-avatar.has-image img {
+  display: block;
 }
 
-.message .meta {
-  font-size: 17px;
-  color: var(--muted);
-}
-
-.message-summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 10px 12px;
-}
-
-.message-summary::-webkit-details-marker {
+.discord-avatar.has-image span {
   display: none;
 }
 
-.message-preview {
-  margin-top: 6px;
-  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-  font-size: 23px;
-  color: #dfe8ff;
-  line-height: 1.5;
-  word-break: break-word;
+.discord-message-body {
+  min-width: 0;
 }
 
-.message[open] > .message-summary .message-preview {
-  display: none;
+.discord-message-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 28px;
+  flex-wrap: wrap;
+}
+
+.discord-message-author {
+  color: #eeeaff;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.discord-message-badge {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(150, 145, 174, 0.32);
+  color: #e8e5ff;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.discord-message-time,
+.discord-message-edited {
+  color: #aaa4c7;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .message-content {
-  padding: 0 12px 12px;
+  padding: 0;
   font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
   font-size: 24px;
   line-height: 1.55;
   word-break: break-word;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 0;
+}
+
+.message-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  margin-top: 6px;
+}
+
+.message-feedback-button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(187, 180, 220, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #eeeaff;
+  font-size: 18px;
+}
+
+.message-feedback-button:hover,
+.message-feedback-button.active {
+  border-color: rgba(255, 122, 201, 0.56);
+  background: rgba(255, 122, 201, 0.16);
+}
+
+.message-feedback-state {
+  color: #b9b3d8;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.discord-message-menu {
+  position: relative;
+  align-self: start;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.discord-message:hover .discord-message-menu,
+.discord-message-menu[open] {
+  opacity: 1;
+}
+
+.discord-message-menu > summary {
+  width: 42px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  list-style: none;
+  cursor: pointer;
+  border-radius: 9px;
+  color: #d6d2ef;
+  background: rgba(47, 42, 64, 0.9);
+  font-size: 24px;
+}
+
+.discord-message-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.discord-message-menu-list {
+  position: absolute;
+  right: 0;
+  top: 40px;
+  z-index: 5;
+  width: 180px;
+  padding: 8px;
+  border: 1px solid rgba(187, 180, 220, 0.18);
+  border-radius: 10px;
+  background: #292638;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.38);
+}
+
+.discord-message-menu-list button {
+  width: 100%;
+  min-height: 36px;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: #eeeaff;
+  font-size: 16px;
+  text-align: left;
+}
+
+.discord-message-menu-list button:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .markdown-body {
@@ -1191,6 +1402,61 @@ button {
   color: #86c6ff;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.65em 0;
+  border-radius: 8px;
+}
+
+.markdown-body table {
+  width: 100%;
+  margin: 0.75em 0;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 0.45em 0.6em;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  vertical-align: top;
+}
+
+.markdown-body th {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffd6f2;
+}
+
+.markdown-body hr {
+  margin: 0.85em 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.markdown-body details {
+  margin: 0.7em 0;
+  padding: 0.55em 0.75em;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.markdown-body summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.markdown-body div,
+.markdown-body section,
+.markdown-body article,
+.markdown-body aside,
+.markdown-body figure {
+  max-width: 100%;
 }
 
 .message-reasoning {
@@ -1331,32 +1597,52 @@ button {
 }
 
 .chat-input {
-  margin-top: 6px;
+  margin: 0 18px 18px;
+  padding: 10px 12px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
-  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  border: 1px solid rgba(134, 124, 194, 0.2);
+  border-radius: 14px;
+  background: #181331;
 }
 
 .chat-input textarea {
-  height: 72px;
-  min-height: 72px;
-  max-height: 72px;
+  height: 48px;
+  min-height: 48px;
+  max-height: 128px;
+  padding: 9px 4px;
+  border: 0;
+  background: transparent;
+  color: #eeeaff;
   resize: none;
-  line-height: 1.35;
+  line-height: 1.45;
+  box-shadow: none;
 }
 
 .chat-actions {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 8px;
-  min-width: 190px;
+  min-width: 0;
 }
 
 .chat-input button {
   width: auto;
-  min-width: 190px;
-  min-height: 48px;
+  min-width: 0;
+  min-height: 44px;
   padding: 0 16px;
+}
+
+.chat-plus-button {
+  width: 44px;
+  padding: 0;
+  border-radius: 12px;
+  color: #d7d1f5;
+  background: transparent;
+  font-size: 32px;
+  line-height: 1;
 }
 
 .dialog {
@@ -1414,6 +1700,51 @@ button {
 
 .env-field-wide {
   grid-column: 1 / -1;
+}
+
+.env-image-field {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.env-image-field .env-field-title,
+.env-image-field .env-field-key,
+.env-image-field .env-field-help {
+  grid-column: 1 / -1;
+}
+
+.env-image-preview {
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+.env-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.env-image-actions {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+  justify-items: start;
+}
+
+.env-image-actions button {
+  width: auto;
+  min-width: 118px;
 }
 
 .env-field-title {
@@ -1590,12 +1921,40 @@ button {
 }
 
 @media (max-width: 980px) {
+  html,
+  body {
+    min-height: var(--app-mobile-viewport-height, 100dvh);
+  }
+
+  body[data-mobile-page="chat"] {
+    height: var(--app-mobile-viewport-height, 100dvh);
+    overflow: hidden;
+  }
+
+  body[data-mobile-page="controls"] {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .env-grid,
   .env-extra-row {
     grid-template-columns: 1fr;
   }
 
   .env-extra-row button {
+    width: 100%;
+  }
+
+  .env-image-field {
+    grid-template-columns: 1fr;
+  }
+
+  .env-image-actions {
+    justify-items: stretch;
+  }
+
+  .env-image-actions button {
     width: 100%;
   }
 
@@ -1668,6 +2027,10 @@ button {
     box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
   }
 
+  .discord-chat-header {
+    padding-left: 64px;
+  }
+
   body[data-mobile-page="chat"] .mobile-controls-page {
     display: none;
   }
@@ -1677,7 +2040,7 @@ button {
   }
 
   .chat-panel {
-    min-height: 100dvh;
+    min-height: var(--app-mobile-viewport-height, 100dvh);
     order: -1;
     padding: 0;
     background: transparent;
@@ -1686,15 +2049,21 @@ button {
     backdrop-filter: none;
   }
 
+  body[data-mobile-page="chat"] .chat-panel {
+    height: var(--app-mobile-viewport-height, 100dvh);
+    max-height: var(--app-mobile-viewport-height, 100dvh);
+  }
+
   body[data-mobile-page="controls"] .chat-panel {
     min-height: auto;
     order: -2;
   }
 
   .chat-primary {
-    height: 100%;
+    height: var(--app-mobile-viewport-height, 100dvh);
+    max-height: var(--app-mobile-viewport-height, 100dvh);
     min-height: 0;
-    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0;
   }
 
@@ -1805,12 +2174,46 @@ button {
   }
 
   .messages {
+    flex: 1 1 auto;
     min-height: 0;
-    max-height: 100%;
-    padding: 10px 0 12px;
+    max-height: none;
+    padding: 10px 0 calc(var(--chat-input-height, 76px) + env(safe-area-inset-bottom, 0px) + 12px);
     border: 0;
     border-radius: 0;
-    background: #0f1a2b;
+    background: #070512;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .discord-chat-header {
+    flex: 0 0 auto;
+    min-height: 64px;
+    padding: 10px 14px 10px 64px;
+  }
+
+  .chat-header-text h2 {
+    max-width: 52vw;
+    font-size: 22px;
+  }
+
+  .discord-message {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 4px 8px 12px 12px;
+  }
+
+  .discord-avatar {
+    width: 42px;
+    height: 42px;
+    font-size: 16px;
+  }
+
+  .discord-message-author {
+    font-size: 20px;
+  }
+
+  .message-content {
+    font-size: 21px;
   }
 
   .message {
@@ -1856,7 +2259,14 @@ button {
   }
 
   .chat-primary {
-    gap: 10px;
+    height: var(--app-mobile-viewport-height, 100dvh);
+    max-height: var(--app-mobile-viewport-height, 100dvh);
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    gap: 0;
+    overflow: hidden;
   }
 
   .ai-log-list {
@@ -1871,30 +2281,40 @@ button {
   }
 
   .chat-input {
-    position: sticky;
+    position: absolute;
+    left: 0;
+    right: 0;
     bottom: 0;
-    grid-template-columns: 1fr;
+    z-index: 7;
+    width: 100%;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
     justify-items: stretch;
     gap: 8px;
-    margin-top: 0;
-    padding: 8px 0 calc(env(safe-area-inset-bottom, 0px) + 8px);
+    margin: 0;
+    padding: 8px 10px calc(env(safe-area-inset-bottom, 0px) + 8px);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
-    background: #0f1a2b;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-radius: 0;
+    background: #15102d;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.24);
+    transform: translateZ(0);
   }
 
   .chat-input textarea {
     display: block;
-    width: calc(100% - 16px);
-    margin: 0 8px;
-    height: 72px;
-    min-height: 72px;
-    max-height: 72px;
+    width: 100%;
+    margin: 0;
+    height: 46px;
+    min-height: 46px;
+    max-height: 96px;
+    font-size: 19px;
   }
 
   .chat-actions {
-    width: calc(100% - 16px);
-    margin: 0 8px;
-    grid-template-columns: 1fr 1fr;
+    width: auto;
+    margin: 0;
     min-width: 0;
   }
 
@@ -1905,11 +2325,17 @@ button {
   }
 
   .chat-input button {
-    width: 100%;
-    min-width: 82px;
+    width: auto;
+    min-width: 58px;
     height: 46px;
-    padding: 0 16px;
-    border-radius: 0;
+    padding: 0 12px;
+    border-radius: 12px;
+  }
+
+  .chat-plus-button {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
   }
 
   .dialog {

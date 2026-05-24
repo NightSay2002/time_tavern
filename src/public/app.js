@@ -27,10 +27,14 @@
   mobilePageControlsBtn: document.getElementById("mobilePageControlsBtn"),
 
   messages: document.getElementById("messages"),
+  chatHeaderAvatar: document.getElementById("chatHeaderAvatar"),
+  chatHeaderTitle: document.getElementById("chatHeaderTitle"),
+  chatHeaderSubtitle: document.getElementById("chatHeaderSubtitle"),
   aiLogs: document.getElementById("aiLogs"),
   chatForm: document.getElementById("chatForm"),
   chatInput: document.getElementById("chatInput"),
   sendBtn: document.getElementById("sendBtn"),
+  stopChatBtn: document.getElementById("stopChatBtn"),
   discordBotLinkBtn: document.getElementById("discordBotLinkBtn"),
 
   roleCardDialog: document.getElementById("roleCardDialog"),
@@ -161,6 +165,8 @@ let appState = null;
 let pendingRoleCardStartId = "";
 let mobilePage = "chat";
 let mobileInfoOpen = false;
+let mobileViewportUpdateFrame = 0;
+let mobileMessageScrollFrame = 0;
 let roleCardLorebooksDraft = [];
 let roleCardCustomSectionsDraft = [];
 let roleCardOpeningDialoguesDraft = [];
@@ -174,6 +180,8 @@ let roleCardPickerPage = 1;
 let sessionPickerPage = 1;
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
+let coverCropConfirmHandler = null;
+let coverCropChangeImageHandler = null;
 let envExtraEntries = [];
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
@@ -193,6 +201,14 @@ const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
 const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
 const UI_LANGUAGE_STORAGE_KEY = "time_tavern_ui_language";
 const UI_LANGUAGE_TEXT_ATTRS = ["placeholder", "title", "aria-label", "alt", "value"];
+const ASSISTANT_FEEDBACK_LABELS = {
+  like: "喜歡",
+  dislike: "不喜歡"
+};
+const ASSISTANT_FEEDBACK_EMOJIS = {
+  like: "👍",
+  dislike: "👎"
+};
 const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
   "script",
   "style",
@@ -516,6 +532,38 @@ const ENV_FIELD_GROUPS = [
     ]
   },
   {
+    title: "網頁顯示",
+    description: "控制本地網頁對話面板的名字與頭像。名字可使用 {{user}} 與 {{chur}}。",
+    fields: [
+      {
+        key: "WEB_USER_NAME_TEMPLATE",
+        label: "使用者名字模板",
+        type: "text",
+        placeholder: "{{user}}",
+        help: "預設 {{user}}，會套用使用者設定的稱呼。"
+      },
+      {
+        key: "WEB_AI_NAME_TEMPLATE",
+        label: "AI 名字模板",
+        type: "text",
+        placeholder: "{{chur}}",
+        help: "預設 {{chur}}，會套用目前角色卡名字。"
+      },
+      {
+        key: "WEB_USER_AVATAR_IMAGE",
+        label: "使用者頭像",
+        type: "image",
+        help: "選擇本機圖片後會裁切並保存成頭像資料；留空時使用文字頭像。"
+      },
+      {
+        key: "WEB_AI_AVATAR_IMAGE",
+        label: "AI 頭像",
+        type: "image",
+        help: "選擇本機圖片後會裁切並保存成頭像資料；留空時使用角色卡封面。"
+      }
+    ]
+  },
+  {
     title: "回覆行為",
     fields: [
       {
@@ -536,7 +584,11 @@ const ENV_ALIAS_KEYS = {
   CHAT_API_REQUEST_TIMEOUT_MS: ["CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
   CHAT_API_MAX_TOKENS: ["CONVERSATION_API_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS"],
   CHAT_API_MAX_TOKENS_PARAM: ["CONVERSATION_API_MAX_TOKENS_PARAM"],
-  CHAT_API_TEMPERATURE: ["CONVERSATION_API_TEMPERATURE"]
+  CHAT_API_TEMPERATURE: ["CONVERSATION_API_TEMPERATURE"],
+  WEB_USER_NAME_TEMPLATE: ["CHAT_USER_NAME_TEMPLATE"],
+  WEB_AI_NAME_TEMPLATE: ["CHAT_AI_NAME_TEMPLATE"],
+  WEB_USER_AVATAR_IMAGE: ["WEB_USER_AVATAR_URL", "CHAT_USER_AVATAR_URL"],
+  WEB_AI_AVATAR_IMAGE: ["WEB_AI_AVATAR_URL", "CHAT_AI_AVATAR_URL"]
 };
 const ENV_KNOWN_KEYS = new Set(ENV_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key)));
 Object.values(ENV_ALIAS_KEYS).flat().forEach((key) => ENV_KNOWN_KEYS.add(key));
@@ -1304,6 +1356,149 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/'/g, "&#39;");
 }
 
+function decodeHtmlEntities(value = "") {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = String(value || "");
+  return textarea.value;
+}
+
+function decodeEscapedHtmlTags(html = "") {
+  return String(html || "").replace(/&lt;(\/?)([a-zA-Z][\w:-]*)([\s\S]*?)&gt;/g, (_, closingSlash, tagName, rawAttrs) => {
+    return `<${closingSlash}${tagName}${decodeHtmlEntities(rawAttrs)}>`;
+  });
+}
+
+const ALLOWED_MESSAGE_HTML_TAGS = new Set([
+  "a", "abbr", "article", "aside", "b", "blockquote", "br", "caption", "code", "del",
+  "details", "div", "em", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5",
+  "h6", "header", "hr", "i", "img", "kbd", "li", "main", "mark", "ol", "p", "pre", "s",
+  "section", "small", "span", "strong", "sub", "summary", "sup", "table", "tbody", "td",
+  "tfoot", "th", "thead", "tr", "u", "ul"
+]);
+
+const DROP_MESSAGE_HTML_TAGS = new Set(["script", "style", "iframe", "object", "embed", "form", "input", "button", "textarea", "select", "option", "meta", "link"]);
+const GLOBAL_MESSAGE_HTML_ATTRS = new Set(["class", "title", "aria-label", "role"]);
+const MESSAGE_HTML_ATTRS_BY_TAG = {
+  a: new Set(["href"]),
+  img: new Set(["src", "alt", "width", "height"]),
+  td: new Set(["colspan", "rowspan"]),
+  th: new Set(["colspan", "rowspan"]),
+  details: new Set(["open"])
+};
+const ALLOWED_MESSAGE_CSS_PROPS = new Set([
+  "background", "background-color", "border", "border-color", "border-radius", "border-style",
+  "border-width", "color", "display", "font-size", "font-style", "font-weight", "gap", "grid-template-columns",
+  "line-height", "margin", "margin-bottom", "margin-left", "margin-right", "margin-top", "max-width",
+  "min-width", "opacity", "padding", "padding-bottom", "padding-left", "padding-right", "padding-top",
+  "text-align", "text-decoration", "white-space", "width"
+]);
+
+function isSafeMessageHref(value = "") {
+  const href = String(value || "").trim();
+  return /^(https?:|mailto:|tel:)/iu.test(href) || href.startsWith("#");
+}
+
+function isSafeMessageImageSrc(value = "") {
+  const src = String(value || "").trim();
+  return /^(https?:|data:image\/(?:png|jpe?g|gif|webp);base64,)/iu.test(src);
+}
+
+function sanitizeMessageStyle(value = "") {
+  return String(value || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf(":");
+      if (separatorIndex <= 0) {
+        return "";
+      }
+      const prop = part.slice(0, separatorIndex).trim().toLowerCase();
+      const cssValue = part.slice(separatorIndex + 1).trim();
+      if (!ALLOWED_MESSAGE_CSS_PROPS.has(prop)) {
+        return "";
+      }
+      if (/url\s*\(|expression\s*\(|javascript:|vbscript:/iu.test(cssValue)) {
+        return "";
+      }
+      return `${prop}: ${cssValue}`;
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
+function sanitizeMessageHtml(html = "") {
+  const template = document.createElement("template");
+  template.innerHTML = String(html || "");
+
+  const cleanNode = (node) => {
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return;
+    }
+
+    const element = node;
+    const tag = element.tagName.toLowerCase();
+
+    if (DROP_MESSAGE_HTML_TAGS.has(tag)) {
+      element.remove();
+      return;
+    }
+
+    if (!ALLOWED_MESSAGE_HTML_TAGS.has(tag)) {
+      element.replaceWith(...Array.from(element.childNodes));
+      return;
+    }
+
+    Array.from(element.attributes).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value || "";
+      const allowedForTag = MESSAGE_HTML_ATTRS_BY_TAG[tag]?.has(name);
+      const allowedGlobal = GLOBAL_MESSAGE_HTML_ATTRS.has(name);
+
+      if (name.startsWith("on") || name === "srcdoc") {
+        element.removeAttribute(attr.name);
+        return;
+      }
+
+      if (name === "style") {
+        const cleanStyle = sanitizeMessageStyle(value);
+        if (cleanStyle) {
+          element.setAttribute("style", cleanStyle);
+        } else {
+          element.removeAttribute(attr.name);
+        }
+        return;
+      }
+
+      if (!allowedForTag && !allowedGlobal) {
+        element.removeAttribute(attr.name);
+        return;
+      }
+
+      if (tag === "a" && name === "href" && !isSafeMessageHref(value)) {
+        element.removeAttribute(attr.name);
+        return;
+      }
+
+      if (tag === "img" && name === "src" && !isSafeMessageImageSrc(value)) {
+        element.removeAttribute(attr.name);
+      }
+    });
+
+    if (tag === "a" && element.hasAttribute("href")) {
+      element.setAttribute("target", "_blank");
+      element.setAttribute("rel", "noopener noreferrer");
+    }
+
+    if (tag === "img") {
+      element.setAttribute("loading", "lazy");
+    }
+  };
+
+  Array.from(template.content.querySelectorAll("*")).forEach(cleanNode);
+  return template.innerHTML;
+}
+
 function renderInlineMarkdown(text = "") {
   let output = escapeHtml(text);
   const codeSpans = [];
@@ -1327,7 +1522,7 @@ function renderInlineMarkdown(text = "") {
   return output;
 }
 
-function renderMarkdownToHtml(markdown = "") {
+function renderMarkdownToHtml(markdown = "", options = {}) {
   const source = String(markdown || "");
   if (!source) {
     return "";
@@ -1414,7 +1609,11 @@ function renderMarkdownToHtml(markdown = "") {
 
   flushParagraph();
   closeList();
-  return html.join("\n");
+  const rendered = html.join("\n");
+  if (!options.allowHtml) {
+    return rendered;
+  }
+  return sanitizeMessageHtml(decodeEscapedHtmlTags(rendered));
 }
 
 function parseEnvValue(rawValue = "") {
@@ -1486,7 +1685,118 @@ function getEnvFieldValue(parsedEnv, key) {
   return "";
 }
 
+function renderEnvImagePreview(preview, value = "", emptyText = "未設定頭像") {
+  if (!preview) {
+    return;
+  }
+  const imageValue = String(value || "").trim();
+  preview.innerHTML = "";
+  preview.classList.toggle("has-image", Boolean(imageValue));
+  if (!imageValue) {
+    preview.textContent = emptyText;
+    return;
+  }
+  const image = document.createElement("img");
+  image.src = imageValue;
+  image.alt = "頭像預覽";
+  image.addEventListener("error", () => {
+    preview.classList.remove("has-image");
+    preview.textContent = "圖片無法顯示";
+  });
+  preview.appendChild(image);
+}
+
+function createEnvImageField(field, parsedEnv) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "env-field env-field-wide env-image-field";
+
+  const title = document.createElement("span");
+  title.className = "env-field-title";
+  title.textContent = field.label;
+
+  const keyLabel = document.createElement("code");
+  keyLabel.className = "env-field-key";
+  keyLabel.textContent = field.key;
+
+  const hiddenInput = document.createElement("input");
+  hiddenInput.type = "hidden";
+  hiddenInput.dataset.envKey = field.key;
+  hiddenInput.id = `envField_${field.key}`;
+  hiddenInput.name = field.key;
+  hiddenInput.value = getEnvFieldValue(parsedEnv, field.key);
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.className = "hidden";
+
+  const preview = document.createElement("div");
+  preview.className = "env-image-preview";
+  renderEnvImagePreview(preview, hiddenInput.value, "未設定頭像");
+
+  const actions = document.createElement("div");
+  actions.className = "env-image-actions";
+
+  const uploadBtn = document.createElement("button");
+  uploadBtn.type = "button";
+  uploadBtn.className = "secondary";
+  uploadBtn.textContent = hiddenInput.value ? "更換圖片" : "上傳圖片";
+  uploadBtn.addEventListener("click", () => fileInput.click());
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "muted";
+  removeBtn.textContent = "移除";
+  removeBtn.addEventListener("click", () => {
+    hiddenInput.value = "";
+    fileInput.value = "";
+    uploadBtn.textContent = "上傳圖片";
+    renderEnvImagePreview(preview, "", "未設定頭像");
+  });
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const dataUrl = await readImageFileAsDataUrl(file);
+      await openCoverCropDialog(dataUrl, {
+        onConfirm: (croppedDataUrl) => {
+          hiddenInput.value = croppedDataUrl;
+          uploadBtn.textContent = "更換圖片";
+          renderEnvImagePreview(preview, croppedDataUrl, "未設定頭像");
+        },
+        onChangeImage: () => {
+          fileInput.value = "";
+          fileInput.click();
+        }
+      });
+    } catch (error) {
+      showToast(error.message || "頭像讀取失敗", "error");
+    } finally {
+      fileInput.value = "";
+    }
+  });
+
+  actions.append(uploadBtn, removeBtn);
+  wrapper.append(title, keyLabel, hiddenInput, fileInput, preview, actions);
+
+  if (field.help) {
+    const help = document.createElement("span");
+    help.className = "env-field-help";
+    help.textContent = field.help;
+    wrapper.appendChild(help);
+  }
+
+  return wrapper;
+}
+
 function createEnvField(field, parsedEnv) {
+  if (field.type === "image") {
+    return createEnvImageField(field, parsedEnv);
+  }
+
   const wrapper = document.createElement("label");
   wrapper.className = `env-field env-field-${field.type === "textarea" ? "wide" : "normal"}`;
 
@@ -2216,7 +2526,7 @@ function readImageFileAsDataUrl(file) {
     }
 
     if (!file.type.startsWith("image/")) {
-      reject(new Error("請選擇圖片檔案作為封面。"));
+      reject(new Error("請選擇圖片檔案。"));
       return;
     }
 
@@ -2490,8 +2800,10 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-async function openCoverCropDialog(dataUrl) {
+async function openCoverCropDialog(dataUrl, options = {}) {
   const image = await loadImage(dataUrl);
+  coverCropConfirmHandler = typeof options.onConfirm === "function" ? options.onConfirm : null;
+  coverCropChangeImageHandler = typeof options.onChangeImage === "function" ? options.onChangeImage : null;
   coverCropState = {
     source: dataUrl,
     image,
@@ -2504,6 +2816,12 @@ async function openCoverCropDialog(dataUrl) {
   el.coverCropDialog.showModal();
   await new Promise((resolve) => requestAnimationFrame(resolve));
   resetCoverCropBox();
+}
+
+function resetCoverCropDialogState() {
+  coverCropState = null;
+  coverCropConfirmHandler = null;
+  coverCropChangeImageHandler = null;
 }
 
 function getCoverCropImageRect() {
@@ -2641,6 +2959,67 @@ function isMobileLayout() {
   return window.matchMedia(MOBILE_LAYOUT_QUERY).matches;
 }
 
+function getMobileViewportHeight() {
+  const visualHeight = window.visualViewport?.height;
+  const fallbackHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  return Math.max(360, Math.round(Number(visualHeight || fallbackHeight || 0)));
+}
+
+function getChatInputHeight() {
+  if (!el.chatForm || !isMobileLayout()) {
+    return 76;
+  }
+  const rect = el.chatForm.getBoundingClientRect();
+  return Math.max(64, Math.ceil(Number(rect.height || 0)) || 76);
+}
+
+function updateMobileViewportMetrics() {
+  const applyMetrics = () => {
+    mobileViewportUpdateFrame = 0;
+    document.documentElement.style.setProperty("--app-mobile-viewport-height", `${getMobileViewportHeight()}px`);
+    document.documentElement.style.setProperty("--chat-input-height", `${getChatInputHeight()}px`);
+  };
+
+  if (typeof window.requestAnimationFrame !== "function") {
+    applyMetrics();
+    return;
+  }
+
+  if (mobileViewportUpdateFrame) {
+    window.cancelAnimationFrame(mobileViewportUpdateFrame);
+  }
+  mobileViewportUpdateFrame = window.requestAnimationFrame(applyMetrics);
+}
+
+function scrollMessagesToBottom() {
+  if (!el.messages) {
+    return;
+  }
+  el.messages.scrollTop = el.messages.scrollHeight;
+}
+
+function realignMobileChat(options = {}) {
+  updateMobileViewportMetrics();
+  const shouldScroll = options.scroll || (isMobileLayout() && document.activeElement === el.chatInput);
+  if (!shouldScroll) {
+    return;
+  }
+
+  if (typeof window.requestAnimationFrame === "function") {
+    if (mobileMessageScrollFrame) {
+      window.cancelAnimationFrame(mobileMessageScrollFrame);
+    }
+    mobileMessageScrollFrame = window.requestAnimationFrame(() => {
+      mobileMessageScrollFrame = 0;
+      scrollMessagesToBottom();
+    });
+  } else {
+    scrollMessagesToBottom();
+  }
+
+  window.setTimeout(scrollMessagesToBottom, 120);
+}
+
 function setMobilePage(page) {
   mobilePage = page === "controls" ? "controls" : "chat";
   mobileInfoOpen = false;
@@ -2670,6 +3049,8 @@ function applyMobilePage() {
     el.mobileInfoToggleBtn.textContent = mobileInfoOpen ? "▾" : "▸";
     el.mobileInfoToggleBtn.setAttribute("aria-expanded", mobileInfoOpen ? "true" : "false");
   }
+
+  realignMobileChat({ scroll: isMobileLayout() && mobilePage === "chat" });
 }
 
 function fillProfile(state) {
@@ -3070,54 +3451,260 @@ function createSessionPickerTile(session, state) {
   return tile;
 }
 
+function getActiveRoleCardFromState(state = appState) {
+  return (state?.roleCards || []).find((card) => card.id === state?.activeRoleCardId) || null;
+}
+
+function getWebDisplayConfig(state = appState) {
+  const activeCard = getActiveRoleCardFromState(state);
+  return {
+    userName: state?.webDisplay?.userName || state?.userProfile?.displayName || "User",
+    aiName: state?.webDisplay?.aiName || activeCard?.name || "AI",
+    userAvatar: state?.webDisplay?.userAvatar || "",
+    aiAvatar: state?.webDisplay?.aiAvatar || activeCard?.coverImage || ""
+  };
+}
+
+function createAvatarElement(url = "", label = "", role = "") {
+  const avatar = document.createElement("div");
+  avatar.className = `discord-avatar ${role ? `discord-avatar-${role}` : ""}`;
+  const normalizedUrl = String(url || "").trim();
+  const fallback = document.createElement("span");
+  fallback.textContent = getInitials(label || role || "?");
+  avatar.appendChild(fallback);
+  if (normalizedUrl) {
+    const image = document.createElement("img");
+    image.src = normalizedUrl;
+    image.alt = "";
+    image.loading = "lazy";
+    image.addEventListener("load", () => avatar.classList.add("has-image"));
+    image.addEventListener("error", () => {
+      avatar.classList.remove("has-image");
+      image.remove();
+    });
+    avatar.appendChild(image);
+  }
+  return avatar;
+}
+
+function getInitials(value = "") {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "?";
+  }
+  const compact = text.replace(/\s+/g, "");
+  return Array.from(compact).slice(0, 2).join("");
+}
+
+function formatDateDivider(value = "") {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function formatMessageTimestamp(value = "") {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleString("zh-Hant", {
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
+}
+
+function getMessageAuthorInfo(message = {}, state = appState) {
+  const display = getWebDisplayConfig(state);
+  if (message.role === "assistant") {
+    return {
+      name: display.aiName,
+      avatar: display.aiAvatar,
+      badge: "OAI"
+    };
+  }
+  return {
+    name: message.discordUserName || message.extra?.discordUserName || display.userName,
+    avatar: message.discordUserAvatarUrl || message.extra?.discordUserAvatarUrl || display.userAvatar,
+    badge: message.source === "discord" ? "Discord" : ""
+  };
+}
+
+function getMessageDisplayText(message = {}) {
+  const autoTimeWarning = typeof message.autoTimeWarning === "string"
+    ? message.autoTimeWarning.trim()
+    : typeof message.extra?.autoTimeWarning === "string"
+      ? message.extra.autoTimeWarning.trim()
+      : "";
+  return [message.content, autoTimeWarning].filter(Boolean).join("\n\n");
+}
+
+function getMessageReasoningText(message = {}) {
+  return typeof message.reasoningContent === "string"
+    ? message.reasoningContent
+    : typeof message.extra?.reasoningContent === "string"
+      ? message.extra.reasoningContent
+      : "";
+}
+
+function isMessageEdited(message = {}) {
+  return Boolean(message.edited || message.replayFromDiscordEdit || message.extra?.replayFromDiscordEdit);
+}
+
+function normalizeAssistantFeedbackType(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "like" || normalized === "dislike" ? normalized : "";
+}
+
+function getMessageFeedbackType(message = {}) {
+  return normalizeAssistantFeedbackType(message.feedback || message.extra?.feedback);
+}
+
+function openEditAssistantMessage(messageId = "") {
+  if (!messageId) {
+    return;
+  }
+  refreshAssistantSelector();
+  if (el.assistantMessageSelect) {
+    el.assistantMessageSelect.value = messageId;
+  }
+  onAssistantMessagePick();
+  el.editAiDialog?.showModal();
+}
+
+async function copyMessageText(message = {}) {
+  const text = String(message.content || "");
+  if (!text) {
+    showToast("沒有可複製的內容", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("已複製文字");
+  } catch {
+    showToast("瀏覽器不允許直接複製，請手動選取文字。", "error");
+  }
+}
+
+async function setAssistantMessageFeedback(messageId = "", feedback = "") {
+  const normalizedFeedback = normalizeAssistantFeedbackType(feedback);
+  if (!messageId || !normalizedFeedback) {
+    return;
+  }
+  try {
+    const payload = await request(`/api/messages/${messageId}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ feedback: normalizedFeedback })
+    });
+    if (payload?.state) {
+      appState = payload.state;
+      renderMessages(appState);
+      renderAiLogs(appState);
+      renderStatus(appState);
+      refreshAssistantSelector();
+    } else {
+      await refresh();
+    }
+    showToast(
+      payload?.pendingForNextUser
+        ? `已標記：${ASSISTANT_FEEDBACK_LABELS[normalizedFeedback]}，會套用在下一則輸入`
+        : `已標記：${ASSISTANT_FEEDBACK_LABELS[normalizedFeedback]}`
+    );
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function renderChatHeader(state = appState) {
+  const display = getWebDisplayConfig(state);
+  const activeCard = getActiveRoleCardFromState(state);
+  if (el.chatHeaderTitle) {
+    el.chatHeaderTitle.textContent = display.aiName || "時分居酒屋";
+  }
+  if (el.chatHeaderSubtitle) {
+    el.chatHeaderSubtitle.textContent = state?.aiSessionStarted
+      ? [
+          activeCard?.name ? `角色卡：${activeCard.name}` : isCharacterCardCreationAssistantActive(state) ? "角色卡建立助手" : "對話已開始",
+          state?.discord?.connected ? "Discord 已連線" : "本地對話"
+        ].filter(Boolean).join("｜")
+      : "選擇角色卡後開始對話";
+  }
+  if (el.chatHeaderAvatar) {
+    el.chatHeaderAvatar.innerHTML = "";
+    el.chatHeaderAvatar.appendChild(createAvatarElement(display.aiAvatar, display.aiName, "assistant"));
+  }
+  if (el.chatInput) {
+    el.chatInput.placeholder = `傳送訊息給 ${display.aiName || "AI"}`;
+  }
+}
+
 function renderMessages(state) {
   el.messages.innerHTML = "";
-  const compactMobile = isMobileLayout();
   const conversation = Array.isArray(state.conversation) ? [...state.conversation] : [];
+  renderChatHeader(state);
 
   if (!conversation.length) {
     const empty = document.createElement("p");
+    empty.className = "discord-empty";
     empty.textContent = "尚無對話。";
-    empty.style.color = "#9eb0d0";
     el.messages.appendChild(empty);
+    realignMobileChat();
     return;
   }
 
+  let lastDivider = "";
   conversation.forEach((message, index) => {
-    const wrapper = document.createElement("details");
-    wrapper.className = `message ${message.role}`;
-    wrapper.open = compactMobile || index >= conversation.length - 1;
+    const dividerLabel = formatDateDivider(message.createdAt);
+    if (dividerLabel && dividerLabel !== lastDivider) {
+      const divider = document.createElement("div");
+      divider.className = "discord-date-divider";
+      divider.textContent = dividerLabel;
+      el.messages.appendChild(divider);
+      lastDivider = dividerLabel;
+    }
 
-    const summary = document.createElement("summary");
-    summary.className = "message-summary";
+    const author = getMessageAuthorInfo(message, state);
+    const wrapper = document.createElement("article");
+    wrapper.className = `message discord-message ${message.role}`;
 
-    const meta = document.createElement("div");
-    const editedTag = message.edited ? "(已編輯)" : "";
-    const sourceTag =
-      message.source === "discord"
-        ? "[Discord]"
-        : message.source === "opening"
-          ? "[開場]"
-          : "[系統]";
-    meta.className = "meta";
-    meta.textContent = `#${index + 1} ${message.role === "assistant" ? "AI" : "User"} ${sourceTag} ${editedTag}`;
+    const avatar = createAvatarElement(author.avatar, author.name, message.role);
 
-    const preview = document.createElement("div");
-    preview.className = "message-preview";
-    const autoTimeWarning = typeof message.autoTimeWarning === "string"
-      ? message.autoTimeWarning.trim()
-      : typeof message.extra?.autoTimeWarning === "string"
-        ? message.extra.autoTimeWarning.trim()
-        : "";
-    const displayText = [message.content, autoTimeWarning].filter(Boolean).join("\n\n");
-    preview.textContent = message.streaming
-      ? truncateText(message.content || "正在生成...", 90) || "正在生成..."
-      : truncateText(displayText, 90) || "（空白）";
+    const body = document.createElement("div");
+    body.className = "discord-message-body";
 
-    const reasoning = typeof message.reasoningContent === "string" ? message.reasoningContent : "";
+    const header = document.createElement("div");
+    header.className = "discord-message-header";
+
+    const name = document.createElement("span");
+    name.className = "discord-message-author";
+    name.textContent = author.name;
+
+    header.appendChild(name);
+    if (author.badge) {
+      const badge = document.createElement("span");
+      badge.className = "discord-message-badge";
+      badge.textContent = author.badge;
+      header.appendChild(badge);
+    }
+
+    const timestamp = document.createElement("span");
+    timestamp.className = "discord-message-time";
+    timestamp.textContent = formatMessageTimestamp(message.createdAt);
+    header.appendChild(timestamp);
+
+    if (isMessageEdited(message)) {
+      const edited = document.createElement("span");
+      edited.className = "discord-message-edited";
+      edited.textContent = "已編輯";
+      header.appendChild(edited);
+    }
 
     const content = document.createElement("div");
-    content.className = "message-content";
+    content.className = "message-content discord-message-content";
     const fullContent = message.content || (
       message.phase === "compression"
         ? "正在處理模型內容..."
@@ -3125,7 +3712,9 @@ function renderMessages(state) {
     );
     const fullContentBody = document.createElement("div");
     fullContentBody.className = "markdown-body";
-    fullContentBody.innerHTML = renderMarkdownToHtml(fullContent);
+    fullContentBody.innerHTML = renderMarkdownToHtml(fullContent, {
+      allowHtml: message.role === "assistant"
+    });
     if (message.role === "assistant" && (message.compressionNotice || message.extra?.compressionNotice)) {
       const compressionNotice = document.createElement("div");
       compressionNotice.className = "compression-notice";
@@ -3133,6 +3722,11 @@ function renderMessages(state) {
       content.appendChild(compressionNotice);
     }
     content.appendChild(fullContentBody);
+    const autoTimeWarning = typeof message.autoTimeWarning === "string"
+      ? message.autoTimeWarning.trim()
+      : typeof message.extra?.autoTimeWarning === "string"
+        ? message.extra.autoTimeWarning.trim()
+        : "";
     if (message.role === "assistant" && autoTimeWarning) {
       const timeWarningNotice = document.createElement("div");
       timeWarningNotice.className = "auto-time-warning-notice";
@@ -3140,8 +3734,29 @@ function renderMessages(state) {
       content.appendChild(timeWarningNotice);
     }
 
-    summary.append(meta, preview);
+    const feedbackControls = document.createElement("div");
+    feedbackControls.className = "message-feedback-actions";
+    if (message.role === "assistant") {
+      const currentFeedback = getMessageFeedbackType(message);
+      ["like", "dislike"].forEach((feedbackType) => {
+        const feedbackBtn = document.createElement("button");
+        feedbackBtn.type = "button";
+        feedbackBtn.className = `message-feedback-button${currentFeedback === feedbackType ? " active" : ""}`;
+        feedbackBtn.textContent = ASSISTANT_FEEDBACK_EMOJIS[feedbackType];
+        feedbackBtn.title = ASSISTANT_FEEDBACK_LABELS[feedbackType];
+        feedbackBtn.setAttribute("aria-label", ASSISTANT_FEEDBACK_LABELS[feedbackType]);
+        feedbackBtn.addEventListener("click", () => setAssistantMessageFeedback(message.id, feedbackType));
+        feedbackControls.appendChild(feedbackBtn);
+      });
+      if (currentFeedback) {
+        const feedbackLabel = document.createElement("span");
+        feedbackLabel.className = "message-feedback-state";
+        feedbackLabel.textContent = `已標記：${ASSISTANT_FEEDBACK_LABELS[currentFeedback]}`;
+        feedbackControls.appendChild(feedbackLabel);
+      }
+    }
 
+    const reasoning = getMessageReasoningText(message);
     if (message.role === "assistant" && reasoning) {
       const reasoningDetails = document.createElement("details");
       reasoningDetails.className = "message-reasoning";
@@ -3154,16 +3769,48 @@ function renderMessages(state) {
       reasoningContent.innerHTML = renderMarkdownToHtml(reasoning);
 
       reasoningDetails.append(reasoningSummary, reasoningContent);
-      wrapper.append(summary, reasoningDetails, content);
-      el.messages.appendChild(wrapper);
-      return;
+      body.append(header, content, feedbackControls, reasoningDetails);
+    } else {
+      body.append(header, content);
+      if (message.role === "assistant") {
+        body.appendChild(feedbackControls);
+      }
     }
 
-    wrapper.append(summary, content);
+    const menu = document.createElement("details");
+    menu.className = "discord-message-menu";
+    const menuSummary = document.createElement("summary");
+    menuSummary.textContent = "⋯";
+    menu.appendChild(menuSummary);
+    const menuList = document.createElement("div");
+    menuList.className = "discord-message-menu-list";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "複製文字";
+    copyBtn.addEventListener("click", async () => {
+      menu.open = false;
+      await copyMessageText(message);
+    });
+    menuList.appendChild(copyBtn);
+
+    if (message.role === "assistant") {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.textContent = "編輯訊息";
+      editBtn.addEventListener("click", () => {
+        menu.open = false;
+        openEditAssistantMessage(message.id);
+      });
+      menuList.appendChild(editBtn);
+    }
+
+    menu.appendChild(menuList);
+    wrapper.append(avatar, body, menu);
     el.messages.appendChild(wrapper);
   });
 
-  el.messages.scrollTop = el.messages.scrollHeight;
+  realignMobileChat({ scroll: true });
 }
 
 function formatAiLogPurpose(purpose) {
@@ -3279,6 +3926,7 @@ function renderAiLogs(state) {
 function renderStatus(state) {
   const discordAuthorizeUrl = state.discord?.authorizeUrl || "";
   const hasConversationTarget = Boolean(state.aiSessionStarted && (state.activeRoleCardId || isCharacterCardCreationAssistantActive(state)));
+  const display = getWebDisplayConfig(state);
 
   if (pendingRoleCardStartId) {
     el.startStatus.textContent = "切換中";
@@ -3295,14 +3943,15 @@ function renderStatus(state) {
 
   el.chatInput.readOnly = Boolean(pendingRoleCardStartId);
   el.chatInput.placeholder = hasConversationTarget
-    ? "輸入對話內容"
+    ? `傳送訊息給 ${display.aiName || "AI"}`
     : "請先選擇角色卡或啟用角色卡建立助手";
   el.sendBtn.disabled = Boolean(pendingRoleCardStartId) || !hasConversationTarget;
   el.sendBtn.textContent = pendingRoleCardStartId ? "切換中..." : "送出";
 
   if (el.discordBotLinkBtn) {
     el.discordBotLinkBtn.disabled = !discordAuthorizeUrl;
-    el.discordBotLinkBtn.textContent = discordAuthorizeUrl ? "Discord Bot 連結" : "缺少 Discord Bot 連結";
+    el.discordBotLinkBtn.textContent = "✦";
+    el.discordBotLinkBtn.title = discordAuthorizeUrl ? "Discord Bot 連結" : "缺少 Discord Bot 連結";
     el.discordBotLinkBtn.dataset.discordAuthorizeUrl = discordAuthorizeUrl;
   }
 
@@ -5217,11 +5866,35 @@ function bindEvents() {
       renderMessages(appState);
       renderStatus(appState);
     }
+    realignMobileChat({ scroll: isMobileLayout() && mobilePage === "chat" });
   };
   if (typeof layoutMedia.addEventListener === "function") {
     layoutMedia.addEventListener("change", handleLayoutChange);
   } else if (typeof layoutMedia.addListener === "function") {
     layoutMedia.addListener(handleLayoutChange);
+  }
+
+  window.addEventListener("resize", () => realignMobileChat());
+  window.addEventListener("orientationchange", () => {
+    window.setTimeout(() => realignMobileChat({ scroll: isMobileLayout() && mobilePage === "chat" }), 80);
+  });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => realignMobileChat());
+    window.visualViewport.addEventListener("scroll", () => realignMobileChat());
+  }
+
+  if (el.chatInput) {
+    el.chatInput.addEventListener("focus", () => {
+      if (isMobileLayout()) {
+        setMobilePage("chat");
+      }
+      realignMobileChat({ scroll: true });
+      window.setTimeout(() => realignMobileChat({ scroll: true }), 260);
+    });
+    el.chatInput.addEventListener("blur", () => {
+      window.setTimeout(() => realignMobileChat(), 120);
+    });
+    el.chatInput.addEventListener("input", () => realignMobileChat({ scroll: true }));
   }
 
   el.profileForm.addEventListener("submit", async (event) => {
@@ -5362,9 +6035,13 @@ function bindEvents() {
     el.confirmCoverCropBtn.addEventListener("click", () => {
       try {
         const dataUrl = getCoverCropResultDataUrl();
-        setRoleCardCoverPreview(dataUrl);
+        if (coverCropConfirmHandler) {
+          coverCropConfirmHandler(dataUrl);
+        } else {
+          setRoleCardCoverPreview(dataUrl);
+        }
         el.coverCropDialog.close();
-        coverCropState = null;
+        resetCoverCropDialogState();
       } catch (error) {
         showToast(error.message || "封面裁切失敗", "error");
       }
@@ -5373,17 +6050,22 @@ function bindEvents() {
 
   if (el.cancelCoverCropBtn) {
     el.cancelCoverCropBtn.addEventListener("click", () => {
-      coverCropState = null;
+      resetCoverCropDialogState();
       el.coverCropDialog.close();
     });
   }
 
   if (el.changeCoverCropImageBtn) {
     el.changeCoverCropImageBtn.addEventListener("click", () => {
-      coverCropState = null;
+      const changeImageHandler = coverCropChangeImageHandler;
+      resetCoverCropDialogState();
       el.coverCropDialog.close();
-      el.roleCardCoverImageFile.value = "";
-      el.roleCardCoverImageFile.click();
+      if (changeImageHandler) {
+        changeImageHandler();
+      } else {
+        el.roleCardCoverImageFile.value = "";
+        el.roleCardCoverImageFile.click();
+      }
     });
   }
 
@@ -5499,6 +6181,7 @@ function bindEvents() {
         body: JSON.stringify({ content })
       });
       el.chatInput.value = "";
+      realignMobileChat({ scroll: true });
       await refresh();
       showToast("已送出");
     } catch (error) {
@@ -5518,6 +6201,17 @@ function bindEvents() {
       }
       window.open(discordAuthorizeUrl, "_blank", "noopener,noreferrer");
       showToast("新增 Bot 後，可以在 Discord 使用 Slash 指令 /ai");
+    });
+  }
+
+  if (el.stopChatBtn) {
+    el.stopChatBtn.addEventListener("click", async () => {
+      try {
+        const payload = await request("/api/chat/stop", { method: "POST" });
+        showToast(payload?.message || "已送出停止要求");
+      } catch (error) {
+        showToast(error.message, "error");
+      }
     });
   }
 
@@ -5835,6 +6529,7 @@ function bindEvents() {
 async function boot() {
   initUiLanguageToggle();
   bindEvents();
+  updateMobileViewportMetrics();
   try {
     await refresh();
   } catch (error) {
