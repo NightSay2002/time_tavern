@@ -8764,6 +8764,42 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const messageReplayEditMatch = pathname.match(/^\/api\/messages\/([^/]+)\/replay-edit$/);
+    if (messageReplayEditMatch && method === "POST") {
+      const messageId = messageReplayEditMatch[1];
+      const body = await readBody(req);
+      const newContent = safeText(body.content);
+      const targetIndex = state.conversation.findIndex((item) => item?.id === messageId);
+      if (targetIndex < 0) {
+        sendJson(res, 404, { error: "訊息不存在" });
+        return;
+      }
+      const message = state.conversation[targetIndex];
+      if (message?.role !== "user") {
+        sendJson(res, 400, { error: "僅允許用這個方式編輯使用者訊息" });
+        return;
+      }
+      if (!newContent) {
+        sendJson(res, 400, { error: "內容不可空白" });
+        return;
+      }
+      const result = await replayConversationFromMessageNumber({
+        messageNumber: targetIndex + 1,
+        content: newContent,
+        source: "web",
+        extra: {
+          platform: "web",
+          replayFromWebEdit: true,
+          editedMessageId: messageId
+        }
+      });
+      sendJson(res, 200, {
+        ...result,
+        state: statePayload(state)
+      });
+      return;
+    }
+
     if (pathname === "/api/chat/send" && method === "POST") {
       const body = await readBody(req);
       const content = safeText(body.content);

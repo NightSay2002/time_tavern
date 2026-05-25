@@ -88,6 +88,11 @@
   assistantMessageSelect: document.getElementById("assistantMessageSelect"),
   assistantMessageContent: document.getElementById("assistantMessageContent"),
   cancelEditAiDialog: document.getElementById("cancelEditAiDialog"),
+  editMessageDialog: document.getElementById("editMessageDialog"),
+  editMessageForm: document.getElementById("editMessageForm"),
+  editMessageHint: document.getElementById("editMessageHint"),
+  editMessageContent: document.getElementById("editMessageContent"),
+  cancelEditMessageDialog: document.getElementById("cancelEditMessageDialog"),
 
   contextCompressionDialog: document.getElementById("contextCompressionDialog"),
   contextCompressionForm: document.getElementById("contextCompressionForm"),
@@ -194,6 +199,7 @@ let selectedChatCommandIndex = 0;
 let chatCommandMenuShowAll = false;
 let activeChatCommandForm = null;
 let focusedChatCommandField = "";
+let editingUserMessageId = "";
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
@@ -4103,6 +4109,23 @@ function scrollMessagesToBottom() {
   el.messages.scrollTop = el.messages.scrollHeight;
 }
 
+function scrollMessageNumberIntoView(messageNumber) {
+  if (!el.messages) {
+    return false;
+  }
+  const normalizedMessageNumber = Math.floor(Number(messageNumber || ""));
+  if (!Number.isFinite(normalizedMessageNumber) || normalizedMessageNumber < 1) {
+    return false;
+  }
+  const target = el.messages.querySelector(`[data-message-number="${normalizedMessageNumber}"]`);
+  if (!target) {
+    return false;
+  }
+  updateMobileViewportMetrics();
+  target.scrollIntoView({ block: "start", inline: "nearest", behavior: "smooth" });
+  return true;
+}
+
 function realignMobileChat(options = {}) {
   updateMobileViewportMetrics();
   const shouldScroll = options.scroll || (isMobileLayout() && document.activeElement === el.chatInput);
@@ -4747,7 +4770,13 @@ function getMessageStreamingReasoningText(message = {}) {
 }
 
 function isMessageEdited(message = {}) {
-  return Boolean(message.edited || message.replayFromDiscordEdit || message.extra?.replayFromDiscordEdit);
+  return Boolean(
+    message.edited
+      || message.replayFromDiscordEdit
+      || message.replayFromWebEdit
+      || message.extra?.replayFromDiscordEdit
+      || message.extra?.replayFromWebEdit
+  );
 }
 
 function normalizeAssistantFeedbackType(value = "") {
@@ -4769,6 +4798,99 @@ function openEditAssistantMessage(messageId = "") {
   }
   onAssistantMessagePick();
   el.editAiDialog?.showModal();
+}
+
+function openEditUserMessage(message = {}) {
+  if (!message?.id || message.role !== "user") {
+    return;
+  }
+  editingUserMessageId = message.id;
+  if (el.editMessageContent) {
+    el.editMessageContent.value = String(message.content || "");
+  }
+  if (el.editMessageHint) {
+    const messageNumber = (appState?.conversation || []).findIndex((item) => item?.id === message.id) + 1;
+    el.editMessageHint.textContent = `保存後會刪除此訊息之後的對話，並從第 ${messageNumber || "?"} 則重新生成。`;
+  }
+  el.editMessageDialog?.showModal();
+  window.setTimeout(() => {
+    el.editMessageContent?.focus();
+    el.editMessageContent?.setSelectionRange?.(el.editMessageContent.value.length, el.editMessageContent.value.length);
+  }, 0);
+}
+
+async function submitEditUserMessage() {
+  const messageId = editingUserMessageId;
+  const content = String(el.editMessageContent?.value || "").trim();
+  if (!messageId || !content) {
+    showToast("請填入要重新生成的訊息內容", "error");
+    return;
+  }
+  const previousState = appState;
+  const conversation = Array.isArray(appState?.conversation) ? appState.conversation : [];
+  const targetIndex = conversation.findIndex((item) => item?.id === messageId);
+  const targetMessageNumber = targetIndex + 1;
+  editingUserMessageId = "";
+  el.editMessageDialog?.close();
+  try {
+    isChatStreaming = true;
+    if (targetIndex >= 0) {
+      const editedMessage = {
+        ...conversation[targetIndex],
+        content,
+        edited: true,
+        replayFromWebEdit: true,
+        updatedAt: new Date().toISOString(),
+        extra: {
+          ...(conversation[targetIndex]?.extra || {}),
+          replayFromWebEdit: true
+        }
+      };
+      const pendingAssistantMessage = {
+        id: `web_edit_pending_${Date.now()}`,
+        role: "assistant",
+        content: "",
+        source: "web",
+        streaming: true,
+        createdAt: new Date().toISOString()
+      };
+      appState = {
+        ...appState,
+        conversation: [
+          ...conversation.slice(0, targetIndex),
+          editedMessage,
+          pendingAssistantMessage
+        ]
+      };
+      renderMessages(appState, { focusMessageNumber: targetMessageNumber, scroll: false });
+    }
+    renderStatus(appState);
+    showToast("正在從編輯後的訊息重新生成...");
+    const payload = await request(`/api/messages/${messageId}/replay-edit`, {
+      method: "POST",
+      body: JSON.stringify({ content })
+    });
+    appState = payload?.state || appState;
+    renderMessages(appState, { focusMessageNumber: targetMessageNumber, scroll: false });
+    renderAiLogs(appState);
+    renderStatus(appState);
+    refreshAssistantSelector();
+    showToast(payload?.backupSession ? "已刪除後續分支並重新生成，編輯前已備份" : "已刪除後續分支並重新生成");
+  } catch (error) {
+    appState = previousState;
+    if (appState) {
+      renderMessages(appState, { focusMessageNumber: targetMessageNumber, scroll: false });
+      renderAiLogs(appState);
+      renderStatus(appState);
+      refreshAssistantSelector();
+    }
+    throw error;
+  } finally {
+    isChatStreaming = false;
+    if (appState) {
+      renderStatus(appState);
+    }
+  }
 }
 
 async function copyMessageText(message = {}) {
@@ -4837,7 +4959,7 @@ function renderChatHeader(state = appState) {
   }
 }
 
-function renderMessages(state) {
+function renderMessages(state, options = {}) {
   el.messages.innerHTML = "";
   const conversation = Array.isArray(state.conversation) ? [...state.conversation] : [];
   renderChatHeader(state);
@@ -4865,6 +4987,10 @@ function renderMessages(state) {
     const author = getMessageAuthorInfo(message, state);
     const wrapper = document.createElement("article");
     wrapper.className = `message discord-message ${message.role}`;
+    wrapper.dataset.messageNumber = String(index + 1);
+    if (message.id) {
+      wrapper.dataset.messageId = message.id;
+    }
 
     const avatar = createAvatarElement(author.avatar, author.name, message.role);
 
@@ -4990,6 +5116,15 @@ function renderMessages(state) {
         openEditAssistantMessage(message.id);
       });
       menuList.appendChild(editBtn);
+    } else if (message.role === "user") {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.textContent = "編輯訊息";
+      editBtn.addEventListener("click", () => {
+        menu.open = false;
+        openEditUserMessage(message);
+      });
+      menuList.appendChild(editBtn);
     }
 
     menu.appendChild(menuList);
@@ -4997,7 +5132,10 @@ function renderMessages(state) {
     el.messages.appendChild(wrapper);
   });
 
-  realignMobileChat({ scroll: true });
+  if (options.focusMessageNumber && scrollMessageNumberIntoView(options.focusMessageNumber)) {
+    return;
+  }
+  realignMobileChat({ scroll: options.scroll !== false });
 }
 
 function formatAiLogPurpose(purpose) {
@@ -7686,6 +7824,24 @@ function bindEvents() {
   });
 
   el.cancelEditAiDialog.addEventListener("click", () => el.editAiDialog.close());
+
+  if (el.editMessageForm) {
+    el.editMessageForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await submitEditUserMessage();
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    });
+  }
+
+  if (el.cancelEditMessageDialog) {
+    el.cancelEditMessageDialog.addEventListener("click", () => {
+      editingUserMessageId = "";
+      el.editMessageDialog?.close();
+    });
+  }
 
   if (el.contextCompressionInspectBtn) {
     el.contextCompressionInspectBtn.addEventListener("click", async () => {

@@ -247,6 +247,21 @@
       </form>
     </dialog>
 
+    <dialog id="editMessageDialog" class="dialog">
+      <form id="editMessageForm" method="dialog" class="stack">
+        <h3>編輯訊息</h3>
+        <p id="editMessageHint" class="form-hint">保存後會刪除此訊息之後的對話，並從修改內容重新生成。</p>
+        <label>
+          內容
+          <textarea id="editMessageContent" rows="8" required></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button type="submit">保存並重新生成</button>
+          <button type="button" id="cancelEditMessageDialog">取消</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="contextCompressionDialog" class="dialog prompt-viewer-dialog">
       <form id="contextCompressionForm" method="dialog" class="stack">
         <h3>查看/編輯模型內容</h3>
@@ -504,6 +519,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20260525-slash-fields"></script>
+    <script type="module" src="/app.js?v=20260525-edit-jump"></script>
   </body>
 </html>
