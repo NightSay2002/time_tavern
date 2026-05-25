@@ -64,6 +64,21 @@ const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
   [ASSISTANT_FEEDBACK_LIKE]: "【user 喜歡你這次的正文輸出】",
   [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
 };
+const CHAT_API_COST_PRICING = [
+  { label: "DeepSeek-V4-Pro", aliases: ["deepseek-v4-pro"], currency: "CNY", inputCacheHitPerMillion: 0.025, inputCacheMissPerMillion: 3, outputPerMillion: 6 },
+  { label: "DeepSeek-V4-Flash", aliases: ["deepseek-v4-flash"], currency: "CNY", inputCacheHitPerMillion: 0.02, inputCacheMissPerMillion: 1, outputPerMillion: 2 },
+  { label: "Gemini 2.5 Flash-Lite", aliases: ["gemini-2.5-flash-lite", "gemini 2.5 flash-lite", "gemini-2.5-flash-lite-preview"], currency: "USD", inputCacheHitPerMillion: 0.01, inputCacheMissPerMillion: 0.10, outputPerMillion: 0.40 },
+  { label: "Gemini 2.5 Flash", aliases: ["gemini-2.5-flash", "gemini 2.5 flash"], currency: "USD", inputCacheHitPerMillion: 0.03, inputCacheMissPerMillion: 0.30, outputPerMillion: 2.50 },
+  { label: "Gemini 3 Flash Preview", aliases: ["gemini-3-flash-preview", "gemini 3 flash preview"], currency: "USD", inputCacheHitPerMillion: 0.05, inputCacheMissPerMillion: 0.50, outputPerMillion: 3.00 },
+  { label: "Gemini 2.5 Pro >200k prompt", aliases: ["gemini-2.5-pro", "gemini 2.5 pro"], currency: "USD", minPromptTokens: 200001, inputCacheHitPerMillion: 0.25, inputCacheMissPerMillion: 2.50, outputPerMillion: 15.00 },
+  { label: "Gemini 2.5 Pro <=200k prompt", aliases: ["gemini-2.5-pro", "gemini 2.5 pro"], currency: "USD", maxPromptTokens: 200000, inputCacheHitPerMillion: 0.125, inputCacheMissPerMillion: 1.25, outputPerMillion: 10.00 },
+  { label: "GPT-5.4 mini", aliases: ["gpt-5.4-mini", "gpt-5.4 mini"], currency: "USD", inputCacheHitPerMillion: 0.075, inputCacheMissPerMillion: 0.75, outputPerMillion: 4.50 },
+  { label: "GPT-5.4", aliases: ["gpt-5.4"], currency: "USD", inputCacheHitPerMillion: 0.25, inputCacheMissPerMillion: 2.50, outputPerMillion: 15.00 },
+  { label: "GPT-5.5", aliases: ["gpt-5.5"], currency: "USD", inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5.00, outputPerMillion: 30.00 },
+  { label: "Claude Haiku 4.5", aliases: ["claude-haiku-4.5", "claude haiku 4.5"], currency: "USD", inputCacheHitPerMillion: 0.10, inputCacheMissPerMillion: 1.00, outputPerMillion: 5.00 },
+  { label: "Claude Sonnet 4.6 / 4.5", aliases: ["claude-sonnet-4.6", "claude sonnet 4.6", "claude-sonnet-4.5", "claude sonnet 4.5"], currency: "USD", inputCacheHitPerMillion: 0.30, inputCacheMissPerMillion: 3.00, outputPerMillion: 15.00 },
+  { label: "Claude Opus 4.7 / 4.6 / 4.5", aliases: ["claude-opus-4.7", "claude opus 4.7", "claude-opus-4.6", "claude opus 4.6", "claude-opus-4.5", "claude opus 4.5"], currency: "USD", inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5.00, outputPerMillion: 25.00 }
+];
 const DEFAULT_TIME_TRACKING_CONFIG = {
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
   connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
@@ -862,21 +877,129 @@ function resetDiscordPlayerAssignments(currentState, channelId = "") {
   };
 }
 
+function normalizeAiUsageCost(input) {
+  const source = input && typeof input === "object" ? input : {};
+  const amount = Number(source.amount ?? source.amountCny ?? source.amountUsd ?? source.costCny ?? source.costUsd);
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+  const inputCacheHitCost = Number(source.inputCacheHitCost ?? source.inputCacheHitCostCny ?? source.inputCacheHitCostUsd);
+  const inputCacheMissCost = Number(source.inputCacheMissCost ?? source.inputCacheMissCostCny ?? source.inputCacheMissCostUsd);
+  const outputCost = Number(source.outputCost ?? source.outputCostCny ?? source.outputCostUsd);
+  const inputCacheHitTokens = Number(source.inputCacheHitTokens);
+  const inputCacheMissTokens = Number(source.inputCacheMissTokens);
+  const outputTokens = Number(source.outputTokens);
+  const inputCacheHitPerMillion = Number(source.inputCacheHitPerMillion);
+  const inputCacheMissPerMillion = Number(source.inputCacheMissPerMillion);
+  const outputPerMillion = Number(source.outputPerMillion);
+  const inferredCurrency = source.amountUsd || source.costUsd ? "USD" : source.amountCny || source.costCny ? "CNY" : "CNY";
+  const currency = safeText(source.currency || inferredCurrency).toUpperCase();
+  return {
+    amount,
+    currency,
+    pricingModel: safeText(source.pricingModel),
+    pricingUnit: safeText(source.pricingUnit) || "per_million_tokens",
+    inputCacheHitCost: Number.isFinite(inputCacheHitCost) ? inputCacheHitCost : null,
+    inputCacheMissCost: Number.isFinite(inputCacheMissCost) ? inputCacheMissCost : null,
+    outputCost: Number.isFinite(outputCost) ? outputCost : null,
+    inputCacheHitTokens: Number.isFinite(inputCacheHitTokens) ? inputCacheHitTokens : null,
+    inputCacheMissTokens: Number.isFinite(inputCacheMissTokens) ? inputCacheMissTokens : null,
+    outputTokens: Number.isFinite(outputTokens) ? outputTokens : null,
+    inputCacheHitPerMillion: Number.isFinite(inputCacheHitPerMillion) ? inputCacheHitPerMillion : null,
+    inputCacheMissPerMillion: Number.isFinite(inputCacheMissPerMillion) ? inputCacheMissPerMillion : null,
+    outputPerMillion: Number.isFinite(outputPerMillion) ? outputPerMillion : null,
+    promptCacheMissFallback: Boolean(source.promptCacheMissFallback)
+  };
+}
+
 function normalizeAiUsage(input) {
   const source = input && typeof input === "object" ? input : {};
-  const promptTokens = Number(source.promptTokens ?? source.prompt_tokens);
-  const completionTokens = Number(source.completionTokens ?? source.completion_tokens);
-  const totalTokens = Number(source.totalTokens ?? source.total_tokens);
-  const promptCacheHitTokens = Number(source.promptCacheHitTokens ?? source.prompt_cache_hit_tokens);
+  const promptTokens = Number(source.promptTokens ?? source.prompt_tokens ?? source.input_tokens);
+  const completionTokens = Number(source.completionTokens ?? source.completion_tokens ?? source.output_tokens);
+  const inferredTotalTokens = Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
+    ? promptTokens + completionTokens
+    : null;
+  const totalTokens = Number(source.totalTokens ?? source.total_tokens ?? inferredTotalTokens);
+  const promptCacheHitTokens = Number(
+    source.promptCacheHitTokens ??
+    source.prompt_cache_hit_tokens ??
+    source.prompt_tokens_details?.cached_tokens ??
+    source.cache_read_input_tokens ??
+    source.cache_read_tokens
+  );
   const promptCacheMissTokens = Number(source.promptCacheMissTokens ?? source.prompt_cache_miss_tokens);
+  const cost = normalizeAiUsageCost(source.cost || source);
 
   return {
     promptTokens: Number.isFinite(promptTokens) ? promptTokens : null,
     completionTokens: Number.isFinite(completionTokens) ? completionTokens : null,
     totalTokens: Number.isFinite(totalTokens) ? totalTokens : null,
     promptCacheHitTokens: Number.isFinite(promptCacheHitTokens) ? promptCacheHitTokens : null,
-    promptCacheMissTokens: Number.isFinite(promptCacheMissTokens) ? promptCacheMissTokens : null
+    promptCacheMissTokens: Number.isFinite(promptCacheMissTokens) ? promptCacheMissTokens : null,
+    cost
   };
+}
+
+function getAiUsagePricingForModel(model = "", promptTokens = null) {
+  const normalizedModel = safeText(model).toLowerCase().replace(/[_\s]+/gu, "-");
+  return CHAT_API_COST_PRICING.find((pricing) => {
+    if (Number.isFinite(pricing.minPromptTokens) && (!Number.isFinite(promptTokens) || promptTokens < pricing.minPromptTokens)) {
+      return false;
+    }
+    if (Number.isFinite(pricing.maxPromptTokens) && Number.isFinite(promptTokens) && promptTokens > pricing.maxPromptTokens) {
+      return false;
+    }
+    const aliases = Array.isArray(pricing.aliases) ? pricing.aliases : [pricing.label];
+    return aliases.some((alias) => {
+      const normalizedAlias = safeText(alias).toLowerCase().replace(/[_\s]+/gu, "-");
+      return normalizedAlias && normalizedModel.includes(normalizedAlias);
+    });
+  }) || null;
+}
+
+function calculateAiUsageCost(usage = {}, model = "") {
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+  const promptTokens = Number.isFinite(usage.promptTokens) ? usage.promptTokens : null;
+  const pricing = getAiUsagePricingForModel(model, promptTokens);
+  if (!pricing) {
+    return null;
+  }
+  const completionTokens = Number.isFinite(usage.completionTokens) ? usage.completionTokens : 0;
+  const hasCacheHit = Number.isFinite(usage.promptCacheHitTokens);
+  const hasCacheMiss = Number.isFinite(usage.promptCacheMissTokens);
+  if (promptTokens === null && completionTokens <= 0 && !hasCacheHit && !hasCacheMiss) {
+    return null;
+  }
+
+  const inputCacheHitTokens = hasCacheHit ? Math.max(0, usage.promptCacheHitTokens) : 0;
+  let inputCacheMissTokens = hasCacheMiss ? Math.max(0, usage.promptCacheMissTokens) : 0;
+  let promptCacheMissFallback = false;
+  if (!hasCacheMiss && promptTokens !== null) {
+    inputCacheMissTokens = Math.max(0, promptTokens - inputCacheHitTokens);
+    promptCacheMissFallback = true;
+  }
+
+  const inputCacheHitCost = (inputCacheHitTokens / 1_000_000) * pricing.inputCacheHitPerMillion;
+  const inputCacheMissCost = (inputCacheMissTokens / 1_000_000) * pricing.inputCacheMissPerMillion;
+  const outputCost = (Math.max(0, completionTokens) / 1_000_000) * pricing.outputPerMillion;
+  return normalizeAiUsageCost({
+    amount: inputCacheHitCost + inputCacheMissCost + outputCost,
+    currency: pricing.currency,
+    pricingModel: pricing.label,
+    pricingUnit: "per_million_tokens",
+    inputCacheHitCost,
+    inputCacheMissCost,
+    outputCost,
+    inputCacheHitTokens,
+    inputCacheMissTokens,
+    outputTokens: Math.max(0, completionTokens),
+    inputCacheHitPerMillion: pricing.inputCacheHitPerMillion,
+    inputCacheMissPerMillion: pricing.inputCacheMissPerMillion,
+    outputPerMillion: pricing.outputPerMillion,
+    promptCacheMissFallback
+  });
 }
 
 function normalizeAssistantMode(value) {
@@ -7331,10 +7454,13 @@ function findAssistantMessageByDiscordReplyId(currentState, discordReplyMessageI
 
 function normalizeAiLog(entry) {
   const source = entry && typeof entry === "object" ? entry : {};
+  const model = safeText(source.model) || "";
+  const usage = normalizeAiUsage(source.usage);
+  usage.cost = calculateAiUsageCost(usage, model) || usage.cost;
   return {
     id: safeText(source.id) || newId("ailog"),
     purpose: safeText(source.purpose) || "chat",
-    model: safeText(source.model) || "",
+    model,
     temperature: typeof source.temperature === "number" ? source.temperature : null,
     maxTokens: typeof source.maxTokens === "number" ? source.maxTokens : null,
     requestMessages: Array.isArray(source.requestMessages)
@@ -7351,7 +7477,7 @@ function normalizeAiLog(entry) {
       : [],
     responseText: typeof source.responseText === "string" ? source.responseText : "",
     debugReasoningContent: typeof source.debugReasoningContent === "string" ? source.debugReasoningContent : "",
-    usage: normalizeAiUsage(source.usage),
+    usage,
     error: safeText(source.error),
     status: safeText(source.status) || "success",
     createdAt: safeText(source.createdAt) || nowIso()
@@ -8453,7 +8579,43 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/chat/send-stream" && method === "POST") {
-      sendJson(res, 403, { error: getDiscordGuidance() });
+      const body = await readBody(req);
+      const content = safeText(body.content);
+      if (!content) {
+        sendJson(res, 400, { error: "輸入不可空白。" });
+        return;
+      }
+      if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
+        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。" });
+        return;
+      }
+
+      beginNdjsonStream(res);
+      writeNdjsonEvent(res, { type: "status", phase: "start" });
+      try {
+        const result = await runConversationTurnStreaming({
+          content,
+          source: "web",
+          extra: {
+            platform: "web"
+          },
+          onPhaseStatus: (phase) => writeNdjsonEvent(res, { type: "status", phase }),
+          onReasoningDelta: (delta) => writeNdjsonEvent(res, { type: "reasoning_delta", delta }),
+          onContentDelta: (delta) => writeNdjsonEvent(res, { type: "content_delta", delta })
+        });
+        writeNdjsonEvent(res, {
+          type: "done",
+          assistantMessage: result.assistantMessage,
+          state: statePayload(state)
+        });
+      } catch (error) {
+        writeNdjsonEvent(res, {
+          type: "error",
+          error: error.message || "伺服器錯誤"
+        });
+      } finally {
+        res.end();
+      }
       return;
     }
 

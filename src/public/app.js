@@ -183,6 +183,8 @@ let coverCropState = null;
 let coverCropConfirmHandler = null;
 let coverCropChangeImageHandler = null;
 let envExtraEntries = [];
+let chatStreamRenderFrame = 0;
+let isChatStreaming = false;
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
@@ -1336,6 +1338,65 @@ async function request(url, options = {}) {
   return data;
 }
 
+async function requestChatStream(content, handlers = {}) {
+  const response = await fetch("/api/chat/send-stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify({ content })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    const data = text ? safeParseJson(text) : {};
+    throw new Error(data?.error || `請求失敗(${response.status})`);
+  }
+
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    throw new Error("瀏覽器不支援即時讀取回覆。");
+  }
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  const processLine = (line) => {
+    const trimmed = String(line || "").trim();
+    if (!trimmed) {
+      return;
+    }
+    const event = safeParseJson(trimmed);
+    if (!event || typeof event !== "object") {
+      return;
+    }
+    handlers.onEvent?.(event);
+    if (event.type === "error") {
+      throw new Error(event.error || "生成失敗。");
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      processLine(line);
+      newlineIndex = buffer.indexOf("\n");
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    processLine(buffer);
+  }
+}
+
 function safeParseJson(text) {
   try {
     return JSON.parse(text);
@@ -2150,6 +2211,59 @@ async function testChatApiConnection() {
   }
 }
 
+function getUsageCost(usage) {
+  const amount = Number(usage?.cost?.amount ?? usage?.cost?.amountCny ?? usage?.costCny);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function getUsageCostCurrency(usage) {
+  return String(usage?.cost?.currency || (usage?.cost?.amountCny || usage?.costCny ? "CNY" : "CNY")).toUpperCase();
+}
+
+function getCurrencySymbol(currency = "CNY") {
+  return String(currency).toUpperCase() === "USD" ? "$" : "¥";
+}
+
+function getPricingUnitLabel(unit = "") {
+  return unit === "per_million_tokens" || !unit ? "每百萬 tokens" : unit;
+}
+
+function formatCurrencyAmount(value, currency = "CNY") {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return "";
+  }
+  const abs = Math.abs(amount);
+  const digits = abs >= 1 ? 4 : abs >= 0.01 ? 6 : 8;
+  return `${getCurrencySymbol(currency)}${amount.toFixed(digits).replace(/0+$/u, "").replace(/[.]$/u, "")}`;
+}
+
+function formatUsageCostBreakdown(usage) {
+  const cost = usage?.cost;
+  if (!cost || typeof cost !== "object" || getUsageCost(usage) === null) {
+    return "";
+  }
+  const currency = getUsageCostCurrency(usage);
+  const unitLabel = getPricingUnitLabel(cost.pricingUnit);
+  const lines = [
+    `使用金額：${formatCurrencyAmount(getUsageCost(usage), currency)}${cost.pricingModel ? `（${cost.pricingModel}）` : ""}`,
+    `計費單位：${currency} / ${unitLabel}`
+  ];
+  if (Number.isFinite(cost.inputCacheHitTokens) && Number.isFinite(cost.inputCacheHitPerMillion)) {
+    lines.push(`輸入（快取命中）：${cost.inputCacheHitTokens} tokens × ${formatCurrencyAmount(cost.inputCacheHitPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.inputCacheHitCost, currency)}`);
+  }
+  if (Number.isFinite(cost.inputCacheMissTokens) && Number.isFinite(cost.inputCacheMissPerMillion)) {
+    lines.push(`輸入（快取未命中）：${cost.inputCacheMissTokens} tokens × ${formatCurrencyAmount(cost.inputCacheMissPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.inputCacheMissCost, currency)}`);
+  }
+  if (Number.isFinite(cost.outputTokens) && Number.isFinite(cost.outputPerMillion)) {
+    lines.push(`輸出：${cost.outputTokens} tokens × ${formatCurrencyAmount(cost.outputPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.outputCost, currency)}`);
+  }
+  if (cost.promptCacheMissFallback) {
+    lines.push("未收到快取未命中 token 欄位時，剩餘輸入 token 會按未命中價格計算。");
+  }
+  return lines.join("\n");
+}
+
 function formatUsage(usage) {
   if (!usage || typeof usage !== "object") {
     return "";
@@ -2163,7 +2277,8 @@ function formatUsage(usage) {
   const cacheRate = cacheTotal > 0 && cacheHit !== null
     ? `${Math.round((cacheHit / cacheTotal) * 100)}%`
     : "";
-  if (prompt === null && completion === null && total === null && cacheHit === null && cacheMiss === null) {
+  const cost = getUsageCost(usage);
+  if (prompt === null && completion === null && total === null && cacheHit === null && cacheMiss === null && cost === null) {
     return "";
   }
   return [
@@ -2172,7 +2287,8 @@ function formatUsage(usage) {
     total !== null ? `總計 ${total}` : "",
     cacheHit !== null ? `Cache Hit ${cacheHit}` : "",
     cacheMiss !== null ? `Cache Miss ${cacheMiss}` : "",
-    cacheRate ? `命中率 ${cacheRate}` : ""
+    cacheRate ? `命中率 ${cacheRate}` : "",
+    cost !== null ? `金額 ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : ""
   ].filter(Boolean).join(" / ");
 }
 
@@ -2973,6 +3089,21 @@ function getChatInputHeight() {
   return Math.max(64, Math.ceil(Number(rect.height || 0)) || 76);
 }
 
+function resizeChatInput() {
+  if (!el.chatInput) {
+    return;
+  }
+  const input = el.chatInput;
+  const computed = window.getComputedStyle(input);
+  const minHeight = Number.parseFloat(computed.minHeight) || 48;
+  const maxHeight = Number.parseFloat(computed.maxHeight) || (isMobileLayout() ? 132 : 168);
+  input.style.height = `${minHeight}px`;
+  const nextHeight = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
+  input.style.height = `${nextHeight}px`;
+  input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+  updateMobileViewportMetrics();
+}
+
 function updateMobileViewportMetrics() {
   const applyMetrics = () => {
     mobileViewportUpdateFrame = 0;
@@ -3460,6 +3591,7 @@ function getWebDisplayConfig(state = appState) {
   return {
     userName: state?.webDisplay?.userName || state?.userProfile?.displayName || "User",
     aiName: state?.webDisplay?.aiName || activeCard?.name || "AI",
+    aiBadge: state?.chatApi?.model || "AI",
     userAvatar: state?.webDisplay?.userAvatar || "",
     aiAvatar: state?.webDisplay?.aiAvatar || activeCard?.coverImage || ""
   };
@@ -3474,15 +3606,19 @@ function createAvatarElement(url = "", label = "", role = "") {
   avatar.appendChild(fallback);
   if (normalizedUrl) {
     const image = document.createElement("img");
-    image.src = normalizedUrl;
     image.alt = "";
-    image.loading = "lazy";
+    image.loading = "eager";
+    image.decoding = "async";
     image.addEventListener("load", () => avatar.classList.add("has-image"));
     image.addEventListener("error", () => {
       avatar.classList.remove("has-image");
       image.remove();
     });
     avatar.appendChild(image);
+    image.src = normalizedUrl;
+    if (image.complete && image.naturalWidth > 0) {
+      avatar.classList.add("has-image");
+    }
   }
   return avatar;
 }
@@ -3524,12 +3660,12 @@ function getMessageAuthorInfo(message = {}, state = appState) {
     return {
       name: display.aiName,
       avatar: display.aiAvatar,
-      badge: "OAI"
+      badge: display.aiBadge
     };
   }
   return {
-    name: message.discordUserName || message.extra?.discordUserName || display.userName,
-    avatar: message.discordUserAvatarUrl || message.extra?.discordUserAvatarUrl || display.userAvatar,
+    name: display.userName,
+    avatar: display.userAvatar,
     badge: message.source === "discord" ? "Discord" : ""
   };
 }
@@ -3543,11 +3679,11 @@ function getMessageDisplayText(message = {}) {
   return [message.content, autoTimeWarning].filter(Boolean).join("\n\n");
 }
 
-function getMessageReasoningText(message = {}) {
-  return typeof message.reasoningContent === "string"
-    ? message.reasoningContent
-    : typeof message.extra?.reasoningContent === "string"
-      ? message.extra.reasoningContent
+function getMessageStreamingReasoningText(message = {}) {
+  return typeof message.streamingReasoning === "string"
+    ? message.streamingReasoning
+    : typeof message.extra?.streamingReasoning === "string"
+      ? message.extra.streamingReasoning
       : "";
 }
 
@@ -3705,7 +3841,15 @@ function renderMessages(state) {
 
     const content = document.createElement("div");
     content.className = "message-content discord-message-content";
-    const fullContent = message.content || (
+    const streamingReasoning = getMessageStreamingReasoningText(message);
+    const showStreamingReasoning = message.role === "assistant"
+      && message.streaming
+      && !String(message.content || "").trim()
+      && Boolean(streamingReasoning);
+    if (showStreamingReasoning) {
+      content.classList.add("streaming-reasoning");
+    }
+    const fullContent = showStreamingReasoning ? streamingReasoning : message.content || (
       message.phase === "compression"
         ? "正在處理模型內容..."
         : "正在生成回覆..."
@@ -3736,7 +3880,7 @@ function renderMessages(state) {
 
     const feedbackControls = document.createElement("div");
     feedbackControls.className = "message-feedback-actions";
-    if (message.role === "assistant") {
+    if (message.role === "assistant" && !message.streaming) {
       const currentFeedback = getMessageFeedbackType(message);
       ["like", "dislike"].forEach((feedbackType) => {
         const feedbackBtn = document.createElement("button");
@@ -3756,25 +3900,9 @@ function renderMessages(state) {
       }
     }
 
-    const reasoning = getMessageReasoningText(message);
-    if (message.role === "assistant" && reasoning) {
-      const reasoningDetails = document.createElement("details");
-      reasoningDetails.className = "message-reasoning";
-
-      const reasoningSummary = document.createElement("summary");
-      reasoningSummary.textContent = "顯示思考過程";
-
-      const reasoningContent = document.createElement("div");
-      reasoningContent.className = "message-reasoning-content";
-      reasoningContent.innerHTML = renderMarkdownToHtml(reasoning);
-
-      reasoningDetails.append(reasoningSummary, reasoningContent);
-      body.append(header, content, feedbackControls, reasoningDetails);
-    } else {
-      body.append(header, content);
-      if (message.role === "assistant") {
-        body.appendChild(feedbackControls);
-      }
+    body.append(header, content);
+    if (message.role === "assistant" && !message.streaming) {
+      body.appendChild(feedbackControls);
     }
 
     const menu = document.createElement("details");
@@ -3849,6 +3977,25 @@ function renderAiLogs(state) {
     return;
   }
 
+  const totalsByCurrency = logs.reduce((totals, log) => {
+    const cost = getUsageCost(log.usage);
+    if (cost !== null) {
+      const currency = getUsageCostCurrency(log.usage);
+      totals[currency] = (totals[currency] || 0) + cost;
+    }
+    return totals;
+  }, {});
+  const totalCostText = Object.entries(totalsByCurrency)
+    .filter(([, amount]) => amount > 0)
+    .map(([currency, amount]) => `${formatCurrencyAmount(amount, currency)} ${currency}`)
+    .join(" / ");
+  if (totalCostText) {
+    const total = document.createElement("div");
+    total.className = "ai-log-cost-total";
+    total.textContent = `目前 AI 呼叫紀錄總金額：${totalCostText}（按幣種分開統計，只統計已有價格表的模型）`;
+    el.aiLogs.appendChild(total);
+  }
+
   logs.forEach((log) => {
     const wrapper = document.createElement("details");
     wrapper.className = "ai-log-item";
@@ -3889,6 +4036,17 @@ function renderAiLogs(state) {
       usageArea.textContent = usageText;
       usageLabel.appendChild(usageArea);
       body.append(usageLabel);
+    }
+
+    const costText = formatUsageCostBreakdown(log.usage);
+    if (costText) {
+      const costLabel = document.createElement("label");
+      costLabel.textContent = "本次使用金額";
+      const costArea = document.createElement("pre");
+      costArea.className = "ai-log-block cost";
+      costArea.textContent = costText;
+      costLabel.appendChild(costArea);
+      body.append(costLabel);
     }
 
     const requestLabel = document.createElement("label");
@@ -3941,12 +4099,12 @@ function renderStatus(state) {
     el.startStatus.classList.remove("started");
   }
 
-  el.chatInput.readOnly = Boolean(pendingRoleCardStartId);
+  el.chatInput.readOnly = Boolean(pendingRoleCardStartId) || isChatStreaming;
   el.chatInput.placeholder = hasConversationTarget
     ? `傳送訊息給 ${display.aiName || "AI"}`
     : "請先選擇角色卡或啟用角色卡建立助手";
-  el.sendBtn.disabled = Boolean(pendingRoleCardStartId) || !hasConversationTarget;
-  el.sendBtn.textContent = pendingRoleCardStartId ? "切換中..." : "送出";
+  el.sendBtn.disabled = Boolean(pendingRoleCardStartId) || !hasConversationTarget || isChatStreaming;
+  el.sendBtn.textContent = isChatStreaming ? "生成中..." : pendingRoleCardStartId ? "切換中..." : "送出";
 
   if (el.discordBotLinkBtn) {
     el.discordBotLinkBtn.disabled = !discordAuthorizeUrl;
@@ -3957,6 +4115,119 @@ function renderStatus(state) {
 
   const canEditAiOutput = state.conversation.some((msg) => msg.role === "assistant");
   el.editAiOutputBtn.disabled = !canEditAiOutput;
+}
+
+function createClientMessageId(prefix = "msg") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function renderChatStreamNow() {
+  if (!appState) {
+    return;
+  }
+  if (chatStreamRenderFrame && typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(chatStreamRenderFrame);
+  }
+  chatStreamRenderFrame = 0;
+  renderMessages(appState);
+  renderStatus(appState);
+  realignMobileChat({ scroll: true });
+}
+
+function scheduleChatStreamRender() {
+  if (!appState) {
+    return;
+  }
+  if (chatStreamRenderFrame) {
+    return;
+  }
+  const render = () => {
+    chatStreamRenderFrame = 0;
+    renderMessages(appState);
+    renderStatus(appState);
+    realignMobileChat({ scroll: true });
+  };
+  if (typeof window.requestAnimationFrame === "function") {
+    chatStreamRenderFrame = window.requestAnimationFrame(render);
+  } else {
+    render();
+  }
+}
+
+function appendOptimisticChatTurn(content = "") {
+  if (!appState) {
+    return null;
+  }
+  const userCreatedAt = new Date().toISOString();
+  const assistantCreatedAt = new Date(Date.now() + 1).toISOString();
+  const userMessage = {
+    id: createClientMessageId("temp_user"),
+    role: "user",
+    content,
+    source: "web",
+    createdAt: userCreatedAt,
+    updatedAt: userCreatedAt
+  };
+  const assistantMessage = {
+    id: createClientMessageId("temp_ai"),
+    role: "assistant",
+    content: "",
+    source: "web",
+    streaming: true,
+    phase: "start",
+    createdAt: assistantCreatedAt,
+    updatedAt: assistantCreatedAt,
+    extra: {
+      streamingReasoning: ""
+    }
+  };
+  appState = {
+    ...appState,
+    conversation: [
+      ...(Array.isArray(appState.conversation) ? appState.conversation : []),
+      userMessage,
+      assistantMessage
+    ]
+  };
+  renderChatStreamNow();
+  return assistantMessage;
+}
+
+function applyChatStreamEventToMessage(event = {}, assistantMessage = null) {
+  if (!assistantMessage || typeof event !== "object") {
+    return;
+  }
+  if (event.type === "status") {
+    assistantMessage.phase = event.phase === "before_reasoner" ? "compression" : event.phase || "";
+    scheduleChatStreamRender();
+    return;
+  }
+  if (event.type === "reasoning_delta") {
+    if (!assistantMessage.content) {
+      assistantMessage.extra = assistantMessage.extra || {};
+      assistantMessage.extra.streamingReasoning = `${assistantMessage.extra.streamingReasoning || ""}${event.delta || ""}`;
+      scheduleChatStreamRender();
+    }
+    return;
+  }
+  if (event.type === "content_delta") {
+    assistantMessage.phase = "chat";
+    assistantMessage.content = `${assistantMessage.content || ""}${event.delta || ""}`;
+    if (assistantMessage.extra) {
+      assistantMessage.extra.streamingReasoning = "";
+    }
+    scheduleChatStreamRender();
+    return;
+  }
+  if (event.type === "error") {
+    assistantMessage.streaming = false;
+    assistantMessage.phase = "";
+    assistantMessage.content = `生成失敗：${event.error || "未知錯誤"}`;
+    if (assistantMessage.extra) {
+      assistantMessage.extra.streamingReasoning = "";
+    }
+    renderChatStreamNow();
+  }
 }
 
 function renderConversationModelSettings(state) {
@@ -5408,6 +5679,7 @@ async function refresh() {
   renderStatus(state);
   refreshAssistantSelector();
   applyMobilePage();
+  resizeChatInput();
 }
 
 function getCompressionProfileStateFromRuntime(compression = {}, profileId = STANDARD_COMPRESSION_PROFILE_ID) {
@@ -5888,13 +6160,17 @@ function bindEvents() {
       if (isMobileLayout()) {
         setMobilePage("chat");
       }
+      resizeChatInput();
       realignMobileChat({ scroll: true });
       window.setTimeout(() => realignMobileChat({ scroll: true }), 260);
     });
     el.chatInput.addEventListener("blur", () => {
       window.setTimeout(() => realignMobileChat(), 120);
     });
-    el.chatInput.addEventListener("input", () => realignMobileChat({ scroll: true }));
+    el.chatInput.addEventListener("input", () => {
+      resizeChatInput();
+      realignMobileChat({ scroll: true });
+    });
   }
 
   el.profileForm.addEventListener("submit", async (event) => {
@@ -6174,18 +6450,36 @@ function bindEvents() {
     }
 
     try {
-      el.sendBtn.disabled = true;
-      el.sendBtn.textContent = "生成中...";
-      await request("/api/chat/send", {
-        method: "POST",
-        body: JSON.stringify({ content })
-      });
+      isChatStreaming = true;
+      renderStatus(appState);
+      const streamingAssistantMessage = appendOptimisticChatTurn(content);
       el.chatInput.value = "";
+      resizeChatInput();
       realignMobileChat({ scroll: true });
+      await requestChatStream(content, {
+        onEvent: (streamEvent) => {
+          if (streamEvent.type === "done" && streamEvent.state) {
+            appState = streamEvent.state;
+            renderMessages(appState);
+            renderAiLogs(appState);
+            renderStatus(appState);
+            refreshAssistantSelector();
+            realignMobileChat({ scroll: true });
+            return;
+          }
+          applyChatStreamEventToMessage(streamEvent, streamingAssistantMessage);
+        }
+      });
       await refresh();
       showToast("已送出");
     } catch (error) {
       showToast(error.message, "error");
+      if (appState) {
+        renderStatus(appState);
+      }
+    } finally {
+      isChatStreaming = false;
+      resizeChatInput();
       if (appState) {
         renderStatus(appState);
       }

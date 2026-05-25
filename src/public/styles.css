@@ -1200,6 +1200,10 @@ button {
 }
 
 .discord-message-badge {
+  max-width: min(42vw, 240px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 1px 6px;
   border-radius: 5px;
   background: rgba(150, 145, 174, 0.32);
@@ -1404,6 +1408,11 @@ button {
   text-underline-offset: 3px;
 }
 
+.discord-message-content.streaming-reasoning .markdown-body {
+  color: #aaa4c7;
+  font-style: italic;
+}
+
 .markdown-body img {
   max-width: 100%;
   height: auto;
@@ -1507,6 +1516,16 @@ button {
   padding: 10px;
 }
 
+.ai-log-cost-total {
+  border: 1px solid rgba(191, 236, 230, 0.22);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: rgba(62, 186, 168, 0.08);
+  color: #dffaf7;
+  font-size: 17px;
+  font-weight: 800;
+}
+
 .ai-log-item summary {
   cursor: pointer;
   list-style: none;
@@ -1576,6 +1595,12 @@ button {
   background: rgba(46, 196, 182, 0.08);
 }
 
+.ai-log-block.cost {
+  border-color: rgba(191, 236, 230, 0.24);
+  background: rgba(23, 76, 68, 0.34);
+  color: #dffaf7;
+}
+
 .meta-box {
   margin-top: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1611,12 +1636,13 @@ button {
 .chat-input textarea {
   height: 48px;
   min-height: 48px;
-  max-height: 128px;
+  max-height: 168px;
   padding: 9px 4px;
   border: 0;
   background: transparent;
   color: #eeeaff;
   resize: none;
+  overflow-y: hidden;
   line-height: 1.45;
   box-shadow: none;
 }
@@ -2308,7 +2334,7 @@ button {
     margin: 0;
     height: 46px;
     min-height: 46px;
-    max-height: 96px;
+    max-height: 132px;
     font-size: 19px;
   }
 
