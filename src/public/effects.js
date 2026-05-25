@@ -7,8 +7,6 @@
     return;
   }
 
-  const backgroundCtx = backgroundCanvas.getContext("2d");
-  const sparkCtx = sparkCanvas.getContext("2d");
   const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
   const userAgent = navigator.userAgent || "";
   const platform = navigator.userAgentData && typeof navigator.userAgentData.platform === "string"
@@ -18,23 +16,62 @@
   const isAppleTouchDevice = /iPhone|iPad|iPod/i.test(userAgent) ||
     (/Mac/i.test(platform) && Number(navigator.maxTouchPoints || 0) > 1);
   const isMacDesktop = !isWindows && /Mac/i.test(platform) && !isAppleTouchDevice;
-  const effectsEnabled = isWindows || !prefersReducedMotion;
-  const followerEnabled = effectsEnabled && !isMacDesktop;
-  const targetFrameMs = isMacDesktop ? 1000 / 30 : 0;
+  const effectsModeStorageKey = "time_tavern_effects_mode";
+  const storedEffectsMode = (() => {
+    try {
+      return localStorage.getItem(effectsModeStorageKey) || "";
+    } catch {
+      return "";
+    }
+  })();
+  const effectsMode = storedEffectsMode === "full" ? "full" : "off";
+  const effectsEnabled = effectsMode === "full" && !prefersReducedMotion;
+  const followerEnabled = false;
+  const targetFrameMs = 1000 / 24;
   document.documentElement.classList.toggle("is-mac-desktop", isMacDesktop);
   document.documentElement.classList.toggle("is-windows", isWindows);
   document.documentElement.classList.toggle("prefers-reduced-motion", Boolean(prefersReducedMotion));
   document.documentElement.classList.toggle("effects-disabled", !effectsEnabled);
   window.timeTavernEffects = {
+    mode: effectsMode,
     platform,
     isWindows,
     isAppleTouchDevice,
     isMacDesktop,
     prefersReducedMotion: Boolean(prefersReducedMotion),
     effectsEnabled,
-    followerEnabled
+    followerEnabled,
+    setMode(nextMode = "off") {
+      const normalizedMode = nextMode === "full" ? "full" : "off";
+      try {
+        localStorage.setItem(effectsModeStorageKey, normalizedMode);
+      } catch {
+        // Ignore storage failures; reloading still keeps the current low-power default.
+      }
+      window.location.reload();
+    }
   };
   mouseFollower.hidden = !followerEnabled;
+  if (!followerEnabled) {
+    mouseFollower.removeAttribute("src");
+  }
+
+  if (!effectsEnabled) {
+    backgroundCanvas.hidden = true;
+    sparkCanvas.hidden = true;
+    mouseFollower.hidden = true;
+    backgroundCanvas.width = 0;
+    backgroundCanvas.height = 0;
+    sparkCanvas.width = 0;
+    sparkCanvas.height = 0;
+    return;
+  }
+
+  const backgroundCtx = backgroundCanvas.getContext("2d", { alpha: true });
+  const sparkCtx = sparkCanvas.getContext("2d", { alpha: true });
+  if (!backgroundCtx || !sparkCtx) {
+    return;
+  }
 
   let width = 0;
   let height = 0;
@@ -82,8 +119,8 @@
 
   function createParticles() {
     const count = isMacDesktop
-      ? Math.min(320, Math.max(90, Math.floor((width * height) / 4200)))
-      : Math.min(1200, Math.floor((width * height) / 900));
+      ? Math.min(140, Math.max(50, Math.floor((width * height) / 9000)))
+      : Math.min(260, Math.max(70, Math.floor((width * height) / 6200)));
     const centerX = width * 0.5;
     const centerY = height * 0.5;
     const spreadX = width * 0.42;
@@ -121,9 +158,7 @@
   }
 
   function resizeCanvas() {
-    pixelRatio = isMacDesktop
-      ? Math.min(window.devicePixelRatio || 1, 1.25)
-      : Math.min(window.devicePixelRatio || 1, 2);
+    pixelRatio = Math.min(window.devicePixelRatio || 1, 1.25);
     width = window.innerWidth;
     height = window.innerHeight;
 

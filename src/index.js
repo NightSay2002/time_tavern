@@ -10,7 +10,6 @@ import { ApplicationCommandOptionType, Client, GatewayIntentBits, MessageFlags, 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT || 3234);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DEFAULTS_DIR = path.join(__dirname, "..", "defaults");
@@ -21,6 +20,18 @@ const APP_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
+const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?:$|_|\d)|(?:^|_)TOKEN(?:$|\d)|(?:^|_)API_KEY(?:$|\d)/iu;
+const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
+  "DISCORD_BOT_TOKEN",
+  "CHAT_API_KEY",
+  "CONVERSATION_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY"
+]);
+let appDefaultEnvironmentValuesCache = null;
+applyDefaultEnvToProcess();
+const PORT = Number(process.env.PORT || 3234);
 const COMMAND_PREFIX = safeText(process.env.COMMAND_PREFIX) || "!ai";
 const DISCORD_BOT_TOKEN = safeText(process.env.DISCORD_BOT_TOKEN);
 const DISCORD_GUILD_ID = safeText(process.env.DISCORD_GUILD_ID);
@@ -89,7 +100,9 @@ const DEFAULT_TIME_TRACKING_CONFIG = {
 };
 
 function envText(key, fallback) {
-  const raw = process.env[key];
+  const raw = Object.prototype.hasOwnProperty.call(process.env, key)
+    ? safeText(process.env[key])
+    : getAppDefaultEnvText(key);
   if (typeof raw !== "string" || raw.trim() === "") {
     return fallback;
   }
@@ -137,6 +150,131 @@ function parseEnvContent(content = "") {
   } catch {
     return {};
   }
+}
+
+function isDefaultEnvSecretKey(key = "") {
+  const normalizedKey = safeText(key).trim();
+  if (!normalizedKey) {
+    return true;
+  }
+  if (/^CHAT_API_KEY[2-9]\d*$/iu.test(normalizedKey)) {
+    return true;
+  }
+  if (/^(?:CONVERSATION_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_KEY)[2-9]\d*$/iu.test(normalizedKey)) {
+    return true;
+  }
+  if (DEFAULT_ENV_EXCLUDED_KEYS.has(normalizedKey.toUpperCase())) {
+    return true;
+  }
+  return DEFAULT_ENV_SECRET_KEY_PATTERN.test(normalizedKey);
+}
+
+function normalizeDefaultEnvironmentValues(values = {}) {
+  const source = values && typeof values === "object" && !Array.isArray(values) ? values : {};
+  return Object.entries(source).reduce((acc, [key, value]) => {
+    const normalizedKey = safeText(key).trim();
+    const text = safeText(value);
+    if (!normalizedKey || !text || isDefaultEnvSecretKey(normalizedKey)) {
+      return acc;
+    }
+    acc[normalizedKey] = text;
+    return acc;
+  }, {});
+}
+
+function readRawAppDefaults() {
+  try {
+    if (!fs.existsSync(APP_DEFAULTS_FILE)) {
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(APP_DEFAULTS_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDefaultEnvironment(source = {}) {
+  const raw = source && typeof source === "object" ? source : {};
+  const values = raw.values && typeof raw.values === "object"
+    ? raw.values
+    : raw.env && typeof raw.env === "object"
+      ? raw.env
+      : raw;
+  return {
+    values: normalizeDefaultEnvironmentValues(values),
+    updatedAt: safeText(raw.updatedAt)
+  };
+}
+
+function loadAppDefaultEnvironmentValues() {
+  if (appDefaultEnvironmentValuesCache) {
+    return appDefaultEnvironmentValuesCache;
+  }
+  const parsed = readRawAppDefaults();
+  const environment = normalizeDefaultEnvironment(parsed?.environment || parsed?.envDefaults || parsed?.env);
+  appDefaultEnvironmentValuesCache = environment.values;
+  return appDefaultEnvironmentValuesCache;
+}
+
+function getAppDefaultEnvText(key = "") {
+  const normalizedKey = safeText(key).trim();
+  if (!normalizedKey) {
+    return "";
+  }
+  return safeText(loadAppDefaultEnvironmentValues()[normalizedKey]);
+}
+
+function applyDefaultEnvToProcess() {
+  const values = loadAppDefaultEnvironmentValues();
+  Object.entries(values).forEach(([key, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(process.env, key)) {
+      process.env[key] = value;
+    }
+  });
+}
+
+function createDefaultEnvironmentPayload(content = "") {
+  const parsedEnv = parseEnvContent(content);
+  const mergedValues = {
+    ...loadAppDefaultEnvironmentValues(),
+    ...parsedEnv
+  };
+  return {
+    values: normalizeDefaultEnvironmentValues(mergedValues),
+    updatedAt: nowIso()
+  };
+}
+
+function formatDefaultEnvValue(value = "") {
+  const text = safeText(value);
+  if (!text) {
+    return "";
+  }
+  if (/^[^\s#"'`\\]+$/u.test(text)) {
+    return text;
+  }
+  return JSON.stringify(text.replace(/\n/g, "\\n"));
+}
+
+function buildEnvContentFromDefaultEnvironment(values = {}) {
+  const entries = Object.entries(normalizeDefaultEnvironmentValues(values))
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    return "";
+  }
+  return [
+    "# 由 GitHub 預設載入的環境設定。",
+    "# Discord Bot Token 與對話 API Key 不會寫入預設。",
+    ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
+  ].join("\n") + "\n";
+}
+
+function readEnvFileContentForEditor() {
+  const content = readEnvFileContent();
+  if (safeText(content)) {
+    return content;
+  }
+  return buildEnvContentFromDefaultEnvironment(loadAppDefaultEnvironmentValues());
 }
 
 function saveEnvFileContent(content = "") {
@@ -208,25 +346,55 @@ function renderPromptTemplate(template, variables) {
 }
 
 function envNumber(key, fallback) {
-  const raw = Number(process.env[key] || "");
+  const raw = Number(
+    Object.prototype.hasOwnProperty.call(process.env, key)
+      ? safeText(process.env[key])
+      : getAppDefaultEnvText(key) || ""
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 }
 
 function envFirstText(keys = [], fallback = "") {
+  let hasExplicitValue = false;
   for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(process.env, key)) {
+      continue;
+    }
+    hasExplicitValue = true;
     const value = safeText(process.env[key]);
     if (value) {
       return value;
+    }
+  }
+  if (!hasExplicitValue) {
+    for (const key of keys) {
+      const value = getAppDefaultEnvText(key);
+      if (value) {
+        return value;
+      }
     }
   }
   return fallback;
 }
 
 function envFirstNumber(keys = [], fallback) {
+  let hasExplicitValue = false;
   for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(process.env, key)) {
+      continue;
+    }
+    hasExplicitValue = true;
     const raw = Number(process.env[key] || "");
     if (Number.isFinite(raw) && raw > 0) {
       return raw;
+    }
+  }
+  if (!hasExplicitValue) {
+    for (const key of keys) {
+      const raw = Number(getAppDefaultEnvText(key) || "");
+      if (Number.isFinite(raw) && raw > 0) {
+        return raw;
+      }
     }
   }
   return fallback;
@@ -558,43 +726,55 @@ function createDefaultTimeTrackingState() {
 }
 
 function loadAppDefaults() {
-  if (!fs.existsSync(APP_DEFAULTS_FILE)) {
+  const parsed = readRawAppDefaults();
+  if (!parsed || typeof parsed !== "object") {
     return null;
   }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(APP_DEFAULTS_FILE, "utf8"));
-    return {
-      userProfile: normalizeUserProfile(parsed.userProfile),
-      roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
-      updatedAt: safeText(parsed.updatedAt)
-    };
-  } catch {
-    return null;
-  }
+  return {
+    userProfile: normalizeUserProfile(parsed.userProfile),
+    roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
+    roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(parsed.roleCardRuntimeState),
+    activeRoleCardId: safeText(parsed.activeRoleCardId) || null,
+    activeAssistantMode: normalizeAssistantMode(parsed.activeAssistantMode),
+    conversationSettings: normalizeConversationSettings(parsed.conversationSettings),
+    contextCompression: normalizeContextCompressionState(parsed.contextCompression),
+    timeTracking: normalizeTimeTrackingState(parsed.timeTracking),
+    environment: normalizeDefaultEnvironment(parsed.environment || parsed.envDefaults || parsed.env),
+    updatedAt: safeText(parsed.updatedAt)
+  };
 }
 
 function createDefaultState() {
   const appDefaults = loadAppDefaults();
+  const defaultRoleCards = appDefaults?.roleCards || [];
+  const validDefaultRoleCardIds = new Set(defaultRoleCards.map((card) => card.id));
+  const defaultActiveRoleCardId = defaultRoleCards.some((card) => card.id === appDefaults?.activeRoleCardId)
+    ? appDefaults.activeRoleCardId
+    : null;
+  const defaultActiveAssistantMode = appDefaults?.activeAssistantMode || null;
+  const defaultRoleCardRuntimeState = Object.fromEntries(
+    Object.entries(appDefaults?.roleCardRuntimeState || {}).filter(([cardId]) => validDefaultRoleCardIds.has(cardId))
+  );
   return {
     userProfile: appDefaults?.userProfile || {
       identityText: "",
       displayName: ""
     },
-    roleCards: appDefaults?.roleCards || [],
-    roleCardRuntimeState: {},
-    activeRoleCardId: null,
-    activeAssistantMode: null,
-    conversationSettings: {
+    roleCards: defaultRoleCards,
+    roleCardRuntimeState: defaultRoleCardRuntimeState,
+    activeRoleCardId: defaultActiveAssistantMode ? null : defaultActiveRoleCardId,
+    activeAssistantMode: defaultActiveAssistantMode,
+    conversationSettings: appDefaults?.conversationSettings || {
       chatOutputModel: DEFAULT_CHAT_API_MODEL,
       dialogueContextRounds: DEFAULT_DIALOGUE_CONTEXT_ROUNDS
     },
-    contextCompression: createDefaultContextCompressionState(),
+    contextCompression: appDefaults?.contextCompression || createDefaultContextCompressionState(),
     aiSessionStarted: false,
     pendingOpeningBroadcast: false,
     lastDiscordChannelId: "",
     discordPlayers: createDefaultDiscordPlayerState(),
     turnState: createDefaultTurnState(),
-    timeTracking: createDefaultTimeTrackingState(),
+    timeTracking: appDefaults?.timeTracking || createDefaultTimeTrackingState(),
     conversation: [],
     aiLogs: [],
     savedSessions: [],
@@ -1077,15 +1257,35 @@ function saveDefaultAppSettings(currentState) {
   if (!fs.existsSync(DEFAULTS_DIR)) {
     fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
   }
+  const normalizedRoleCards = Array.isArray(currentState?.roleCards)
+    ? currentState.roleCards.map((card) => normalizeRoleCard(card))
+    : [];
+  const normalizedRoleCardIds = new Set(normalizedRoleCards.map((card) => card.id));
+  const activeRoleCardId = normalizedRoleCards.some((card) => card.id === safeText(currentState?.activeRoleCardId))
+    ? safeText(currentState?.activeRoleCardId)
+    : null;
+  const environment = createDefaultEnvironmentPayload(readEnvFileContent());
+  const roleCardRuntimeState = Object.fromEntries(
+    Object.entries(normalizeRoleCardRuntimeStateMap(currentState?.roleCardRuntimeState))
+      .filter(([cardId]) => normalizedRoleCardIds.has(cardId))
+  );
+  const activeAssistantMode = normalizeAssistantMode(currentState?.activeAssistantMode);
   const payload = {
-    version: 1,
+    version: 2,
     userProfile: normalizeUserProfile(currentState?.userProfile),
-    roleCards: Array.isArray(currentState?.roleCards)
-      ? currentState.roleCards.map((card) => normalizeRoleCard(card))
-      : [],
+    roleCards: normalizedRoleCards,
+    roleCardRuntimeState,
+    activeRoleCardId: activeAssistantMode ? null : activeRoleCardId,
+    activeAssistantMode,
+    conversationSettings: normalizeConversationSettings(currentState?.conversationSettings),
+    contextCompression: normalizeContextCompressionState(currentState?.contextCompression),
+    timeTracking: normalizeTimeTrackingState(currentState?.timeTracking),
+    environment,
     updatedAt: nowIso()
   };
   fs.writeFileSync(APP_DEFAULTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  appDefaultEnvironmentValuesCache = environment.values;
+  applyDefaultEnvToProcess();
 
   const modularPromptConfigs = getModularPromptConfigsPayload();
   Object.entries(modularPromptConfigs).forEach(([mode, config]) => {
@@ -1096,6 +1296,7 @@ function saveDefaultAppSettings(currentState) {
     defaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
     userProfile: payload.userProfile,
     roleCardCount: payload.roleCards.length,
+    environmentCount: Object.keys(environment.values).length,
     modularPromptCount: Object.keys(modularPromptConfigs).length,
     updatedAt: payload.updatedAt
   };
@@ -1742,6 +1943,9 @@ function getContentType(filePath) {
   if (filePath.endsWith(".gif")) {
     return "image/gif";
   }
+  if (filePath.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
   if (filePath.endsWith(".cur")) {
     return "image/x-icon";
   }
@@ -1750,7 +1954,7 @@ function getContentType(filePath) {
 
 function getStaticHeaders(filePath) {
   const headers = { "Content-Type": getContentType(filePath) };
-  if (/\.(?:woff2|png|gif|cur)$/i.test(filePath)) {
+  if (/\.(?:woff2|png|gif|mp3|cur)$/i.test(filePath)) {
     headers["Cache-Control"] = "public, max-age=31536000, immutable";
   } else {
     headers["Cache-Control"] = "no-cache";
@@ -2791,11 +2995,15 @@ function getWebChatDisplayConfig(currentState = state) {
   const userAvatar = envFirstText(["WEB_USER_AVATAR_IMAGE", "WEB_USER_AVATAR_URL", "CHAT_USER_AVATAR_URL"], "");
   const aiAvatar = envFirstText(["WEB_AI_AVATAR_IMAGE", "WEB_AI_AVATAR_URL", "CHAT_AI_AVATAR_URL"], "") ||
     safeText(activeRoleCard?.coverImage);
+  const backgroundImage = envFirstText(["WEB_BACKGROUND_IMAGE", "WEB_BACKGROUND_URL"], "");
+  const dailyWelcomeAudio = envFirstText(["WEB_DAILY_WELCOME_AUDIO"], "/assets/audio/welcome-back.mp3");
   return {
     userName,
     aiName,
     userAvatar,
-    aiAvatar
+    aiAvatar,
+    backgroundImage,
+    dailyWelcomeAudio
   };
 }
 
@@ -3824,7 +4032,7 @@ function attachTriggeredLorebooksToUserMessage(message, currentState = state, ru
 }
 
 function getMinimumReplyChars() {
-  const raw = Number(process.env.AI_MIN_REPLY_CHARS || "");
+  const raw = envFirstNumber(["AI_MIN_REPLY_CHARS"], DEFAULT_MIN_REPLY_CHARS);
   if (Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
@@ -5588,7 +5796,16 @@ function getChatApiTemperature(purpose = "chat", temperature = null) {
   if (Number.isFinite(temperature)) {
     return temperature;
   }
-  const envTemperature = Number(process.env.CHAT_API_TEMPERATURE || process.env.CONVERSATION_API_TEMPERATURE || "");
+  const temperatureKeys = ["CHAT_API_TEMPERATURE", "CONVERSATION_API_TEMPERATURE"];
+  const hasExplicitTemperature = temperatureKeys.some((key) => Object.prototype.hasOwnProperty.call(process.env, key));
+  const envTemperature = Number(
+    safeText(process.env.CHAT_API_TEMPERATURE) ||
+    safeText(process.env.CONVERSATION_API_TEMPERATURE) ||
+    (!hasExplicitTemperature
+      ? getAppDefaultEnvText("CHAT_API_TEMPERATURE") || getAppDefaultEnvText("CONVERSATION_API_TEMPERATURE")
+      : "") ||
+    ""
+  );
   return Number.isFinite(envTemperature) ? envTemperature : CHAT_API_TEMPERATURE;
 }
 
@@ -5655,7 +5872,10 @@ function resolveChatApiMaxTokens({ purpose = "reasoner_history_chat", maxTokens,
     return Math.min(Math.floor(maxTokens), modelCap);
   }
 
-  const envMaxTokens = Number(process.env.CHAT_API_MAX_TOKENS || process.env.CONVERSATION_API_MAX_TOKENS || process.env.DEEPSEEK_MAX_TOKENS || "");
+  const envMaxTokens = envFirstNumber(
+    ["CHAT_API_MAX_TOKENS", "CONVERSATION_API_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS"],
+    0
+  );
   const preferredEnvMaxTokens = envMaxTokens;
   if (
     Number.isFinite(preferredEnvMaxTokens) &&
@@ -7944,7 +8164,7 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/env" && method === "GET") {
       sendJson(res, 200, {
-        content: readEnvFileContent(),
+        content: readEnvFileContentForEditor(),
         restartHint: "對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
       });
       return;
@@ -8574,6 +8794,55 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         stopped,
         message: stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"
+      });
+      return;
+    }
+
+    if (pathname === "/api/chat/reload" && method === "POST") {
+      const body = await readBody(req);
+      const result = await regenerateLatestAssistantReply({
+        source: "web",
+        extra: {
+          platform: "web"
+        },
+        reloadFeedback: safeText(body?.feedback)
+      });
+      sendJson(res, 200, {
+        ...result,
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (pathname === "/api/chat/replay" && method === "POST") {
+      const body = await readBody(req);
+      const result = await replayConversationFromMessageNumber({
+        messageNumber: body?.messageNumber,
+        content: body?.content,
+        source: "web",
+        extra: {
+          platform: "web"
+        }
+      });
+      sendJson(res, 200, {
+        ...result,
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (pathname === "/api/chat/run-time" && method === "POST") {
+      const body = await readBody(req);
+      const result = await runRuntimeTurns({
+        turns: body?.turns,
+        message: body?.message,
+        userName: resolveUserDisplayName(state.userProfile),
+        source: "web_runtime",
+        platform: "web"
+      });
+      sendJson(res, 200, {
+        ...result,
+        state: statePayload(state)
       });
       return;
     }
@@ -9457,7 +9726,8 @@ async function runRuntimeTurns({
   guildId = "",
   userId = "",
   userName = "",
-  source = "discord_runtime"
+  source = "discord_runtime",
+  platform = "discord"
 }) {
   const normalizedTurns = Math.floor(Number(turns));
   const runtimeRequest = safeText(message);
@@ -9489,7 +9759,7 @@ async function runRuntimeTurns({
       content: turnRequest,
       source,
       extra: {
-        platform: "discord",
+        platform,
         discordChannelId: channelId,
         discordGuildId: guildId,
         discordUserId: userId,

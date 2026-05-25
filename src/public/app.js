@@ -32,6 +32,9 @@
   chatHeaderSubtitle: document.getElementById("chatHeaderSubtitle"),
   aiLogs: document.getElementById("aiLogs"),
   chatForm: document.getElementById("chatForm"),
+  chatCommandMenu: document.getElementById("chatCommandMenu"),
+  chatPlusButton: document.getElementById("chatPlusButton"),
+  chatCommandComposer: document.getElementById("chatCommandComposer"),
   chatInput: document.getElementById("chatInput"),
   sendBtn: document.getElementById("sendBtn"),
   stopChatBtn: document.getElementById("stopChatBtn"),
@@ -185,6 +188,12 @@ let coverCropChangeImageHandler = null;
 let envExtraEntries = [];
 let chatStreamRenderFrame = 0;
 let isChatStreaming = false;
+let dailyWelcomeAudioArmed = false;
+let chatCommandMenuOpen = false;
+let selectedChatCommandIndex = 0;
+let chatCommandMenuShowAll = false;
+let activeChatCommandForm = null;
+let focusedChatCommandField = "";
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
@@ -202,6 +211,7 @@ const MODEL_APPEND_PLAYER_OTHER = "userx";
 const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
 const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
 const UI_LANGUAGE_STORAGE_KEY = "time_tavern_ui_language";
+const DAILY_WELCOME_PLAYED_STORAGE_KEY = "time_tavern_daily_welcome_played";
 const UI_LANGUAGE_TEXT_ATTRS = ["placeholder", "title", "aria-label", "alt", "value"];
 const ASSISTANT_FEEDBACK_LABELS = {
   like: "喜歡",
@@ -211,6 +221,191 @@ const ASSISTANT_FEEDBACK_EMOJIS = {
   like: "👍",
   dislike: "👎"
 };
+const CHAT_COMMAND_MENU_ITEMS = [
+  {
+    id: "ai-start",
+    command: "/ai_start",
+    title: "開始目前角色卡對話",
+    description: "如果還沒選角色卡，會先打開角色卡列表。",
+    hint: "執行",
+    action: "start"
+  },
+  {
+    id: "ai-status",
+    command: "/ai_status",
+    title: "查看目前狀態",
+    description: "查看目前角色卡與對話是否已開始。",
+    hint: "執行",
+    action: "status"
+  },
+  {
+    id: "stop",
+    command: "/stop",
+    title: "停止生成",
+    description: "停止目前正在生成的 AI 回覆。",
+    hint: "執行",
+    action: "stop"
+  },
+  {
+    id: "reload",
+    command: "/reload",
+    title: "重跑最新回覆",
+    description: "可在後面補充不滿意或需要改進的地方。",
+    hint: "參數",
+    form: "reload",
+    fields: [
+      {
+        name: "feedback",
+        label: "feedback",
+        type: "text",
+        placeholder: "不滿意或要改進的地方",
+        defaultValue: "",
+        required: false,
+        help: "描述目前回覆不好或需要改進的地方；可留空直接重跑。"
+      }
+    ]
+  },
+  {
+    id: "replay",
+    command: "/replay",
+    title: "從指定訊息分支",
+    description: "從指定訊息編號建立分支並重寫後續。",
+    hint: "參數",
+    form: "replay",
+    fields: [
+      {
+        name: "message_number",
+        label: "message_number",
+        type: "number",
+        placeholder: "訊息編號",
+        defaultValue: "",
+        required: true,
+        help: "要重寫的訊息編號，從 1 開始。"
+      },
+      {
+        name: "content",
+        label: "content",
+        type: "text",
+        placeholder: "新的使用者內容",
+        defaultValue: "",
+        required: true,
+        help: "這次分支要送出的新使用者內容。"
+      }
+    ]
+  },
+  {
+    id: "run-time",
+    command: "/run_time",
+    title: "自動推演多輪",
+    description: "依照要求自動推演多輪對話。",
+    hint: "參數",
+    form: "run_time",
+    fields: [
+      {
+        name: "number",
+        label: "number",
+        type: "number",
+        placeholder: "輪數",
+        defaultValue: "",
+        help: "要自動推演多少輪，例如 3。"
+      },
+      {
+        name: "message",
+        label: "message",
+        type: "text",
+        placeholder: "推演要求",
+        defaultValue: "",
+        help: "這次多輪推演要遵守的要求或方向。"
+      }
+    ]
+  },
+  {
+    id: "help",
+    command: "/ai_help",
+    title: "查看可用指令",
+    description: "顯示網頁可用的常用指令和功能。",
+    hint: "執行",
+    action: "help"
+  },
+  {
+    id: "session-save",
+    command: "/session_save",
+    title: "保存目前對話",
+    description: "建立一個可回到此刻的對話存檔。",
+    hint: "參數",
+    form: "session_save",
+    fields: [
+      {
+        name: "name",
+        label: "name",
+        type: "text",
+        placeholder: "存檔名稱",
+        defaultValue: "",
+        required: false,
+        help: "存檔名稱；可留空使用預設時間名稱。"
+      }
+    ]
+  },
+  {
+    id: "session-list",
+    command: "/session_list",
+    title: "載入對話存檔",
+    description: "打開對話存檔列表。",
+    hint: "執行",
+    action: "sessionList"
+  },
+  {
+    id: "session-load",
+    command: "/session_load",
+    title: "載入對話存檔",
+    description: "依照存檔 ID 載入對話存檔。",
+    hint: "參數",
+    form: "session_load",
+    fields: [
+      {
+        name: "id",
+        label: "id",
+        type: "text",
+        placeholder: "存檔 ID",
+        defaultValue: "",
+        required: true,
+        help: "要載入的對話存檔 ID。"
+      }
+    ]
+  },
+  {
+    id: "role-picker",
+    command: "角色卡",
+    title: "選擇角色卡",
+    description: "切換或啟動角色卡。",
+    hint: "面板",
+    action: "rolePicker"
+  },
+  {
+    id: "model-content",
+    command: "模型內容",
+    title: "查看/編輯模型內容",
+    description: "查看目前各大模型保存的內容。",
+    hint: "面板",
+    action: "modelContent"
+  },
+  {
+    id: "time-settings",
+    command: "統計時間",
+    title: "統計判斷編輯",
+    description: "編輯時間、天數與自動切換規則。",
+    hint: "面板",
+    action: "timeSettings"
+  },
+  {
+    id: "env-settings",
+    command: "環境設定",
+    title: "環境設定",
+    description: "調整頭像、背景、API 與顯示設定。",
+    hint: "面板",
+    action: "envSettings"
+  }
+];
 const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
   "script",
   "style",
@@ -562,6 +757,21 @@ const ENV_FIELD_GROUPS = [
         label: "AI 頭像",
         type: "image",
         help: "選擇本機圖片後會裁切並保存成頭像資料；留空時使用角色卡封面。"
+      },
+      {
+        key: "WEB_BACKGROUND_IMAGE",
+        label: "背景圖片",
+        type: "image",
+        crop: false,
+        emptyText: "未設定背景",
+        help: "選擇本機圖片後會壓縮並保存成背景資料；留空時使用預設靜態背景。"
+      },
+      {
+        key: "WEB_DAILY_WELCOME_AUDIO",
+        label: "每日第一次開啟語音",
+        type: "text",
+        placeholder: "/assets/audio/welcome-back.mp3",
+        help: "每天第一次開啟網頁時播放。留空時使用內建 welcome-back.mp3；瀏覽器若阻擋自動播放，會等第一次點擊或按鍵後播放。"
       }
     ]
   },
@@ -590,7 +800,8 @@ const ENV_ALIAS_KEYS = {
   WEB_USER_NAME_TEMPLATE: ["CHAT_USER_NAME_TEMPLATE"],
   WEB_AI_NAME_TEMPLATE: ["CHAT_AI_NAME_TEMPLATE"],
   WEB_USER_AVATAR_IMAGE: ["WEB_USER_AVATAR_URL", "CHAT_USER_AVATAR_URL"],
-  WEB_AI_AVATAR_IMAGE: ["WEB_AI_AVATAR_URL", "CHAT_AI_AVATAR_URL"]
+  WEB_AI_AVATAR_IMAGE: ["WEB_AI_AVATAR_URL", "CHAT_AI_AVATAR_URL"],
+  WEB_BACKGROUND_IMAGE: ["WEB_BACKGROUND_URL"]
 };
 const ENV_KNOWN_KEYS = new Set(ENV_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key)));
 Object.values(ENV_ALIAS_KEYS).flat().forEach((key) => ENV_KNOWN_KEYS.add(key));
@@ -1759,7 +1970,7 @@ function renderEnvImagePreview(preview, value = "", emptyText = "未設定頭像
   }
   const image = document.createElement("img");
   image.src = imageValue;
-  image.alt = "頭像預覽";
+  image.alt = emptyText.includes("背景") ? "背景預覽" : "頭像預覽";
   image.addEventListener("error", () => {
     preview.classList.remove("has-image");
     preview.textContent = "圖片無法顯示";
@@ -1793,7 +2004,8 @@ function createEnvImageField(field, parsedEnv) {
 
   const preview = document.createElement("div");
   preview.className = "env-image-preview";
-  renderEnvImagePreview(preview, hiddenInput.value, "未設定頭像");
+  const emptyText = field.emptyText || "未設定頭像";
+  renderEnvImagePreview(preview, hiddenInput.value, emptyText);
 
   const actions = document.createElement("div");
   actions.className = "env-image-actions";
@@ -1812,7 +2024,7 @@ function createEnvImageField(field, parsedEnv) {
     hiddenInput.value = "";
     fileInput.value = "";
     uploadBtn.textContent = "上傳圖片";
-    renderEnvImagePreview(preview, "", "未設定頭像");
+    renderEnvImagePreview(preview, "", emptyText);
   });
 
   fileInput.addEventListener("change", async () => {
@@ -1822,11 +2034,21 @@ function createEnvImageField(field, parsedEnv) {
     }
     try {
       const dataUrl = await readImageFileAsDataUrl(file);
+      if (field.crop === false) {
+        const backgroundDataUrl = await createCompressedImageDataUrl(dataUrl, {
+          maxSide: field.maxSide || 1920,
+          quality: field.quality || 0.86
+        });
+        hiddenInput.value = backgroundDataUrl;
+        uploadBtn.textContent = "更換圖片";
+        renderEnvImagePreview(preview, backgroundDataUrl, emptyText);
+        return;
+      }
       await openCoverCropDialog(dataUrl, {
         onConfirm: (croppedDataUrl) => {
           hiddenInput.value = croppedDataUrl;
           uploadBtn.textContent = "更換圖片";
-          renderEnvImagePreview(preview, croppedDataUrl, "未設定頭像");
+          renderEnvImagePreview(preview, croppedDataUrl, emptyText);
         },
         onChangeImage: () => {
           fileInput.value = "";
@@ -1834,7 +2056,7 @@ function createEnvImageField(field, parsedEnv) {
         }
       });
     } catch (error) {
-      showToast(error.message || "頭像讀取失敗", "error");
+      showToast(error.message || "圖片讀取失敗", "error");
     } finally {
       fileInput.value = "";
     }
@@ -2689,6 +2911,23 @@ function loadImageForExport(source = "") {
   });
 }
 
+async function createCompressedImageDataUrl(dataUrl = "", options = {}) {
+  const image = await loadImage(dataUrl);
+  const maxSide = Math.max(320, Number(options.maxSide || 1920) || 1920);
+  const quality = Math.min(0.95, Math.max(0.55, Number(options.quality || 0.86) || 0.86));
+  const sourceWidth = image.naturalWidth || image.width || 1;
+  const sourceHeight = image.naturalHeight || image.height || 1;
+  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 function sanitizeDownloadFileName(value = "role-card") {
   return String(value || "role-card")
     .trim()
@@ -3069,6 +3308,741 @@ function showToast(message, type = "ok") {
   showToast.timer = setTimeout(() => {
     el.toast.className = "toast";
   }, 1700);
+}
+
+function getChatCommandMenuItemByForm(formName = "") {
+  return CHAT_COMMAND_MENU_ITEMS.find((item) => item.form === formName) || null;
+}
+
+function getChatCommandMenuItemByCommand(commandName = "") {
+  const normalized = String(commandName || "").trim().replace(/^\//u, "").toLowerCase();
+  return CHAT_COMMAND_MENU_ITEMS.find((item) => {
+    const itemCommand = String(item.command || "").trim().replace(/^\//u, "").toLowerCase();
+    return itemCommand === normalized;
+  }) || null;
+}
+
+function getActiveChatCommandField(name = "") {
+  if (!activeChatCommandForm) {
+    return null;
+  }
+  return activeChatCommandForm.fields.find((field) => field.name === name) || null;
+}
+
+function setActiveChatCommandFieldValue(name = "", value = "") {
+  const field = getActiveChatCommandField(name);
+  if (!field) {
+    return;
+  }
+  field.value = value;
+}
+
+function getActiveChatCommandFieldValue(name = "") {
+  return String(getActiveChatCommandField(name)?.value || "").trim();
+}
+
+function getActiveChatCommandFieldValues() {
+  if (!activeChatCommandForm) {
+    return {};
+  }
+  return activeChatCommandForm.fields.reduce((values, field) => {
+    values[field.name] = getActiveChatCommandFieldValue(field.name);
+    return values;
+  }, {});
+}
+
+function areActiveChatCommandFieldsEmpty() {
+  if (!activeChatCommandForm) {
+    return true;
+  }
+  return activeChatCommandForm.fields.every((field) => !getActiveChatCommandFieldValue(field.name));
+}
+
+function syncActiveChatCommandToHiddenInput() {
+  if (!activeChatCommandForm || !el.chatInput) {
+    return;
+  }
+  const values = activeChatCommandForm.fields
+    .map((field) => getActiveChatCommandFieldValue(field.name))
+    .filter(Boolean);
+  el.chatInput.value = [activeChatCommandForm.command, ...values].filter(Boolean).join(" ");
+}
+
+function renderActiveChatCommandHelp() {
+  if (!el.chatCommandMenu || !activeChatCommandForm) {
+    return;
+  }
+  el.chatCommandMenu.innerHTML = "";
+  el.chatCommandMenu.classList.add("is-command-form");
+  el.chatCommandMenu.classList.remove("show-all", "is-filtered", "is-single");
+
+  const header = document.createElement("div");
+  header.className = "chat-command-form-header";
+
+  const icon = document.createElement("span");
+  icon.className = "chat-command-icon";
+  icon.textContent = "/";
+
+  const body = document.createElement("span");
+  body.className = "chat-command-body";
+  const title = document.createElement("span");
+  title.className = "chat-command-title";
+  const commandName = document.createElement("span");
+  commandName.className = "chat-command-name";
+  commandName.textContent = activeChatCommandForm.command;
+  const titleText = document.createElement("span");
+  titleText.className = "chat-command-title-text";
+  titleText.textContent = activeChatCommandForm.title ? ` ${activeChatCommandForm.title}` : "";
+  title.append(commandName, titleText);
+  const description = document.createElement("span");
+  description.className = "chat-command-description";
+  description.textContent = activeChatCommandForm.description || "";
+  body.append(title, description);
+  header.append(icon, body);
+  el.chatCommandMenu.appendChild(header);
+
+  const fieldList = document.createElement("div");
+  fieldList.className = "chat-command-field-help-list";
+  activeChatCommandForm.fields.forEach((field) => {
+    const row = document.createElement("div");
+    row.className = `chat-command-field-help${focusedChatCommandField === field.name ? " active" : ""}`;
+
+    const name = document.createElement("span");
+    name.className = "chat-command-field-help-name";
+    name.textContent = field.label || field.name;
+
+    const help = document.createElement("span");
+    help.className = "chat-command-field-help-text";
+    help.textContent = field.help || "";
+
+    row.append(name, help);
+    fieldList.appendChild(row);
+  });
+  el.chatCommandMenu.appendChild(fieldList);
+}
+
+function openActiveChatCommandHelp() {
+  if (!el.chatCommandMenu || !activeChatCommandForm) {
+    return;
+  }
+  chatCommandMenuOpen = true;
+  renderActiveChatCommandHelp();
+  el.chatCommandMenu.hidden = false;
+  el.chatPlusButton?.setAttribute("aria-expanded", "true");
+}
+
+function focusActiveChatCommandField(name = "") {
+  focusedChatCommandField = name || activeChatCommandForm?.fields?.[0]?.name || "";
+  openActiveChatCommandHelp();
+}
+
+function clearActiveChatCommandForm(options = {}) {
+  activeChatCommandForm = null;
+  focusedChatCommandField = "";
+  el.chatForm?.classList.remove("has-command-composer");
+  if (el.chatCommandComposer) {
+    el.chatCommandComposer.hidden = true;
+    el.chatCommandComposer.innerHTML = "";
+  }
+  if (el.chatInput) {
+    el.chatInput.value = "";
+    el.chatInput.hidden = false;
+    el.chatInput.removeAttribute("aria-hidden");
+  }
+  if (!options.keepMenu) {
+    closeChatCommandMenu();
+  }
+  resizeChatInput();
+  realignMobileChat({ scroll: true });
+  if (options.focusInput) {
+    window.setTimeout(() => el.chatInput?.focus(), 0);
+  }
+}
+
+function renderActiveChatCommandComposer() {
+  if (!el.chatCommandComposer || !activeChatCommandForm) {
+    return;
+  }
+  el.chatForm?.classList.add("has-command-composer");
+  el.chatCommandComposer.hidden = false;
+  el.chatCommandComposer.innerHTML = "";
+  if (el.chatInput) {
+    el.chatInput.hidden = true;
+    el.chatInput.setAttribute("aria-hidden", "true");
+  }
+
+  const commandChip = document.createElement("span");
+  commandChip.className = "chat-command-composer-command";
+  commandChip.textContent = activeChatCommandForm.command;
+  el.chatCommandComposer.appendChild(commandChip);
+
+  activeChatCommandForm.fields.forEach((field) => {
+    const wrapper = document.createElement("label");
+    wrapper.className = `chat-command-param chat-command-param-${field.name}`;
+    wrapper.dataset.field = field.name;
+
+    const label = document.createElement("span");
+    label.className = "chat-command-param-label";
+    label.textContent = field.label || field.name;
+
+    const input = document.createElement("input");
+    input.className = "chat-command-param-input";
+    input.type = field.type === "number" ? "number" : "text";
+    input.placeholder = field.placeholder || "";
+    input.value = field.value || "";
+    if (field.type === "number") {
+      input.min = "1";
+      input.step = "1";
+      input.inputMode = "numeric";
+    }
+    input.addEventListener("focus", () => {
+      wrapper.classList.add("active");
+      focusActiveChatCommandField(field.name);
+    });
+    input.addEventListener("blur", () => {
+      wrapper.classList.remove("active");
+    });
+    input.addEventListener("input", () => {
+      focusedChatCommandField = field.name;
+      wrapper.classList.add("active");
+      setActiveChatCommandFieldValue(field.name, input.value);
+      syncActiveChatCommandToHiddenInput();
+      openActiveChatCommandHelp();
+      realignMobileChat({ scroll: true });
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        clearActiveChatCommandForm({ focusInput: true });
+        return;
+      }
+      if (event.key === "Backspace" && !String(input.value || "")) {
+        event.preventDefault();
+        if (areActiveChatCommandFieldsEmpty()) {
+          clearActiveChatCommandForm({ focusInput: true });
+          return;
+        }
+        const fieldIndex = activeChatCommandForm.fields.findIndex((item) => item.name === field.name);
+        const previousField = activeChatCommandForm.fields[fieldIndex - 1];
+        const previousInput = previousField
+          ? el.chatCommandComposer?.querySelector(`[data-field="${previousField.name}"] input`)
+          : null;
+        previousInput?.focus();
+      }
+    });
+
+    wrapper.append(label, input);
+    el.chatCommandComposer.appendChild(wrapper);
+  });
+
+  syncActiveChatCommandToHiddenInput();
+  resizeChatInput();
+  realignMobileChat({ scroll: true });
+}
+
+function startChatCommandForm(item, values = {}) {
+  if (!item?.form) {
+    return;
+  }
+  closeChatCommandMenu();
+  activeChatCommandForm = {
+    id: item.id,
+    form: item.form,
+    command: item.command,
+    title: item.title,
+    description: item.description,
+    fields: (item.fields || []).map((field) => ({
+      ...field,
+      value: values[field.name] ?? field.defaultValue ?? ""
+    }))
+  };
+  focusedChatCommandField = values.focusField || activeChatCommandForm.fields[0]?.name || "";
+  renderActiveChatCommandComposer();
+  openActiveChatCommandHelp();
+  window.setTimeout(() => {
+    const target = el.chatCommandComposer?.querySelector(`[data-field="${focusedChatCommandField}"] input`)
+      || el.chatCommandComposer?.querySelector("input");
+    target?.focus();
+  }, 0);
+}
+
+async function submitActiveChatCommandForm() {
+  if (!activeChatCommandForm) {
+    return false;
+  }
+  const values = getActiveChatCommandFieldValues();
+  const missingField = activeChatCommandForm.fields.find((field) => field.required && !values[field.name]);
+  if (missingField) {
+    focusActiveChatCommandField(missingField.name);
+    showToast(`請填寫 ${missingField.label || missingField.name}。`, "error");
+    return true;
+  }
+  if (activeChatCommandForm.form === "reload") {
+    await reloadLatestAssistantReply(values.feedback || "");
+    clearActiveChatCommandForm();
+    return true;
+  }
+  if (activeChatCommandForm.form === "replay") {
+    await replayLatestFromCommand(values.message_number, values.content);
+    clearActiveChatCommandForm();
+    return true;
+  }
+  if (activeChatCommandForm.form === "run_time") {
+    const numberValue = values.number;
+    const message = values.message;
+    const turns = Number(numberValue);
+    if (!Number.isFinite(turns) || turns < 1) {
+      focusActiveChatCommandField("number");
+      showToast("請在 number 填入要推演的輪數，例如 3。", "error");
+      return true;
+    }
+    if (!message) {
+      focusActiveChatCommandField("message");
+      showToast("請在 message 填入推演要求。", "error");
+      return true;
+    }
+    await runRuntimeFromCommand([String(Math.floor(turns)), message]);
+    clearActiveChatCommandForm();
+    return true;
+  }
+  if (activeChatCommandForm.form === "session_save") {
+    await saveSession(values.name || "", { promptIfMissing: false });
+    clearActiveChatCommandForm();
+    return true;
+  }
+  if (activeChatCommandForm.form === "session_load") {
+    await loadSession(values.id, false);
+    clearActiveChatCommandForm();
+    return true;
+  }
+  return false;
+}
+
+function getChatCommandQuery() {
+  const value = el.chatInput?.value || "";
+  if (!value.startsWith("/")) {
+    return "";
+  }
+  return value.slice(1).split(/\s+/u)[0].toLowerCase();
+}
+
+function getVisibleChatCommandItems() {
+  if (chatCommandMenuShowAll) {
+    return CHAT_COMMAND_MENU_ITEMS;
+  }
+  const query = getChatCommandQuery();
+  if (!query) {
+    return CHAT_COMMAND_MENU_ITEMS;
+  }
+  return CHAT_COMMAND_MENU_ITEMS.filter((item) => {
+    const haystack = [item.command, item.title, item.description].join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function renderChatCommandMenu() {
+  if (!el.chatCommandMenu) {
+    return;
+  }
+  if (activeChatCommandForm) {
+    renderActiveChatCommandHelp();
+    return;
+  }
+  const items = getVisibleChatCommandItems();
+  selectedChatCommandIndex = Math.min(Math.max(0, selectedChatCommandIndex), Math.max(0, items.length - 1));
+  el.chatCommandMenu.innerHTML = "";
+  el.chatCommandMenu.classList.remove("is-command-form");
+  el.chatCommandMenu.classList.toggle("show-all", chatCommandMenuShowAll);
+  el.chatCommandMenu.classList.toggle("is-filtered", !chatCommandMenuShowAll);
+  el.chatCommandMenu.classList.toggle("is-single", items.length === 1);
+
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "chat-command-empty";
+    empty.textContent = "沒有符合的功能。";
+    el.chatCommandMenu.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item, index) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = `chat-command-item${index === selectedChatCommandIndex ? " active" : ""}`;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", index === selectedChatCommandIndex ? "true" : "false");
+    option.dataset.commandId = item.id;
+
+    const icon = document.createElement("span");
+    icon.className = "chat-command-icon";
+    icon.textContent = item.command.startsWith("/") ? "/" : "✦";
+
+    const body = document.createElement("span");
+    body.className = "chat-command-body";
+    const title = document.createElement("span");
+    title.className = "chat-command-title";
+    if (item.command.startsWith("/")) {
+      const commandName = document.createElement("span");
+      commandName.className = "chat-command-name";
+      commandName.textContent = item.command;
+      const titleText = document.createElement("span");
+      titleText.className = "chat-command-title-text";
+      titleText.textContent = item.title ? ` ${item.title}` : "";
+      title.append(commandName, titleText);
+    } else {
+      title.textContent = item.title;
+    }
+    const description = document.createElement("span");
+    description.className = "chat-command-description";
+    description.textContent = item.description;
+    body.append(title, description);
+
+    option.append(icon, body);
+    if (chatCommandMenuShowAll && item.hint) {
+      const hint = document.createElement("span");
+      hint.className = "chat-command-hint";
+      hint.textContent = item.hint;
+      option.appendChild(hint);
+    }
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => runChatCommandMenuItem(item));
+    el.chatCommandMenu.appendChild(option);
+  });
+}
+
+function openChatCommandMenu(options = {}) {
+  if (!el.chatCommandMenu) {
+    return;
+  }
+  chatCommandMenuShowAll = Boolean(options.showAll);
+  chatCommandMenuOpen = true;
+  renderChatCommandMenu();
+  el.chatCommandMenu.hidden = false;
+  el.chatPlusButton?.setAttribute("aria-expanded", "true");
+}
+
+function closeChatCommandMenu() {
+  chatCommandMenuOpen = false;
+  selectedChatCommandIndex = 0;
+  chatCommandMenuShowAll = false;
+  if (el.chatCommandMenu) {
+    el.chatCommandMenu.hidden = true;
+    el.chatCommandMenu.innerHTML = "";
+  }
+  el.chatPlusButton?.setAttribute("aria-expanded", "false");
+}
+
+function toggleChatCommandMenu() {
+  if (chatCommandMenuOpen) {
+    closeChatCommandMenu();
+    return;
+  }
+  selectedChatCommandIndex = 0;
+  openChatCommandMenu({ showAll: true });
+}
+
+function insertChatCommandTemplate(text = "") {
+  if (!el.chatInput) {
+    return;
+  }
+  clearActiveChatCommandForm({ keepMenu: true });
+  el.chatInput.value = text;
+  resizeChatInput();
+  closeChatCommandMenu();
+  el.chatInput.focus();
+  const end = el.chatInput.value.length;
+  el.chatInput.setSelectionRange?.(end, end);
+}
+
+function clearChatInputValue() {
+  if (!el.chatInput) {
+    return;
+  }
+  el.chatInput.value = "";
+  resizeChatInput();
+}
+
+function openRoleCardPicker() {
+  roleCardPickerPage = 1;
+  renderRoleCardPicker(appState);
+  el.roleCardPickerDialog?.showModal();
+}
+
+function openSessionPicker() {
+  sessionPickerPage = 1;
+  renderSessionPicker(appState);
+  el.sessionPickerDialog?.showModal();
+}
+
+async function startCurrentChatTarget() {
+  const activeCardId = appState?.activeRoleCardId || "";
+  if (activeCardId) {
+    await startRoleCard(activeCardId);
+    return;
+  }
+  if (isCharacterCardCreationAssistantActive(appState)) {
+    await startCharacterCardCreationAssistant();
+    return;
+  }
+  openRoleCardPicker();
+  showToast("請先選擇要開始的角色卡");
+}
+
+async function stopActiveChatGeneration() {
+  const payload = await request("/api/chat/stop", { method: "POST" });
+  showToast(payload?.message || "已送出停止要求");
+}
+
+async function reloadLatestAssistantReply(feedback = "") {
+  if (!appState?.aiSessionStarted) {
+    showToast("尚未開始對話，不能重跑回覆。", "error");
+    return;
+  }
+  try {
+    isChatStreaming = true;
+    renderStatus(appState);
+    showToast("正在重跑最新回覆...");
+    const payload = await request("/api/chat/reload", {
+      method: "POST",
+      body: JSON.stringify({ feedback })
+    });
+    appState = payload?.state || appState;
+    renderMessages(appState);
+    renderAiLogs(appState);
+    renderStatus(appState);
+    realignMobileChat({ scroll: true });
+    showToast("已重跑最新回覆");
+  } finally {
+    isChatStreaming = false;
+    if (appState) {
+      renderStatus(appState);
+    }
+  }
+}
+
+async function replayLatestFromCommand(messageNumber, content) {
+  const normalizedMessageNumber = Math.floor(Number(messageNumber || ""));
+  const nextContent = String(content || "").trim();
+  if (!Number.isFinite(normalizedMessageNumber) || normalizedMessageNumber < 1) {
+    throw new Error("請在 message_number 填入有效訊息編號，從 1 開始。");
+  }
+  if (!nextContent) {
+    throw new Error("請在 content 填入新的使用者內容。");
+  }
+  try {
+    isChatStreaming = true;
+    renderStatus(appState);
+    showToast("正在從指定訊息建立分支...");
+    const payload = await request("/api/chat/replay", {
+      method: "POST",
+      body: JSON.stringify({
+        messageNumber: normalizedMessageNumber,
+        content: nextContent
+      })
+    });
+    appState = payload?.state || appState;
+    renderMessages(appState);
+    renderAiLogs(appState);
+    renderStatus(appState);
+    refreshAssistantSelector();
+    realignMobileChat({ scroll: true });
+    showToast(payload?.backupSession ? "已建立分支並保存分支前備份" : "已建立分支");
+  } finally {
+    isChatStreaming = false;
+    if (appState) {
+      renderStatus(appState);
+    }
+  }
+}
+
+async function runRuntimeFromCommand(args = []) {
+  const turns = Number(args[0] || "");
+  const message = String(args.slice(1).join(" ") || "").trim();
+  if (!Number.isFinite(turns) || turns < 1 || !message) {
+    startChatCommandForm(getChatCommandMenuItemByForm("run_time"), {
+      number: Number.isFinite(turns) && turns >= 1 ? String(Math.floor(turns)) : "",
+      message,
+      focusField: Number.isFinite(turns) && turns >= 1 ? "message" : "number"
+    });
+    showToast("請填寫 number 和 message。", "error");
+    return;
+  }
+  try {
+    isChatStreaming = true;
+    renderStatus(appState);
+    showToast("正在自動推演...");
+    const payload = await request("/api/chat/run-time", {
+      method: "POST",
+      body: JSON.stringify({ turns, message })
+    });
+    appState = payload?.state || appState;
+    renderMessages(appState);
+    renderAiLogs(appState);
+    renderStatus(appState);
+    realignMobileChat({ scroll: true });
+    showToast(`已完成 ${payload?.turns || Math.floor(turns)} 輪推演`);
+  } finally {
+    isChatStreaming = false;
+    if (appState) {
+      renderStatus(appState);
+    }
+  }
+}
+
+function showChatCommandHelp() {
+  selectedChatCommandIndex = 0;
+  openChatCommandMenu({ showAll: true });
+  showToast("已打開功能列表；輸入 / 可以搜尋指令。");
+}
+
+function showCurrentChatStatus() {
+  const activeCard = getActiveRoleCardFromState(appState);
+  const target = activeCard?.name || (isCharacterCardCreationAssistantActive(appState) ? "角色卡建立助手" : "未選擇");
+  showToast(`${appState?.aiSessionStarted ? "已開始" : "尚未開始"}｜${target}`);
+}
+
+async function runChatCommandAction(action = "", args = []) {
+  if (action === "start") {
+    await startCurrentChatTarget();
+    return;
+  }
+  if (action === "status") {
+    showCurrentChatStatus();
+    return;
+  }
+  if (action === "stop") {
+    await stopActiveChatGeneration();
+    return;
+  }
+  if (action === "reload") {
+    await reloadLatestAssistantReply(args.join(" "));
+    return;
+  }
+  if (action === "help") {
+    showChatCommandHelp();
+    return;
+  }
+  if (action === "sessionSave") {
+    await saveSession();
+    return;
+  }
+  if (action === "sessionList") {
+    openSessionPicker();
+    return;
+  }
+  if (action === "rolePicker") {
+    openRoleCardPicker();
+    return;
+  }
+  if (action === "modelContent") {
+    await openContextCompressionDialog();
+    return;
+  }
+  if (action === "timeSettings") {
+    await openTimeTrackingDialog();
+    return;
+  }
+  if (action === "envSettings") {
+    await openEnvSettingsDialog();
+  }
+}
+
+async function runChatCommandMenuItem(item) {
+  closeChatCommandMenu();
+  if (item.form) {
+    startChatCommandForm(item);
+    return;
+  }
+  if (item.insert) {
+    insertChatCommandTemplate(item.insert);
+    return;
+  }
+  await runChatCommandAction(item.action);
+}
+
+async function handleChatSlashCommand(content = "") {
+  const trimmed = String(content || "").trim();
+  if (!trimmed.startsWith("/")) {
+    return false;
+  }
+  const parts = trimmed.slice(1).trim().split(/\s+/u).filter(Boolean);
+  const command = String(parts[0] || "").trim().toLowerCase();
+  const args = parts.slice(1);
+  if (!command) {
+    openChatCommandMenu();
+    return true;
+  }
+
+  if (command === "ai_start" || command === "start") {
+    await runChatCommandAction("start", args);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "ai_status" || command === "status") {
+    await runChatCommandAction("status", args);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "stop") {
+    await runChatCommandAction("stop", args);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "reload") {
+    await runChatCommandAction("reload", args);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "replay") {
+    const messageNumber = args[0] || "";
+    const content = args.slice(1).join(" ").trim();
+    if (!messageNumber || !content) {
+      startChatCommandForm(getChatCommandMenuItemByForm("replay"), {
+        message_number: messageNumber,
+        content,
+        focusField: messageNumber ? "content" : "message_number"
+      });
+      return true;
+    }
+    await replayLatestFromCommand(messageNumber, content);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "run_time") {
+    await runRuntimeFromCommand(args);
+    if (Number.isFinite(Number(args[0] || "")) && Number(args[0] || "") >= 1 && args.slice(1).join(" ").trim()) {
+      clearChatInputValue();
+    }
+    return true;
+  }
+  if (command === "ai_help" || command === "help") {
+    await runChatCommandAction("help", args);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "session_save") {
+    await saveSession(args.join(" "), { promptIfMissing: args.length === 0 });
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "session_list") {
+    await runChatCommandAction("sessionList", args);
+    clearChatInputValue();
+    return true;
+  }
+  if (command === "session_load") {
+    const sessionId = args[0] || "";
+    if (!sessionId) {
+      startChatCommandForm(getChatCommandMenuItemByForm("session_load"));
+      return true;
+    }
+    await loadSession(sessionId, false);
+    clearChatInputValue();
+    return true;
+  }
+
+  showToast(`未知指令：/${command}`, "error");
+  openChatCommandMenu();
+  return true;
 }
 
 function isMobileLayout() {
@@ -3593,8 +4567,93 @@ function getWebDisplayConfig(state = appState) {
     aiName: state?.webDisplay?.aiName || activeCard?.name || "AI",
     aiBadge: state?.chatApi?.model || "AI",
     userAvatar: state?.webDisplay?.userAvatar || "",
-    aiAvatar: state?.webDisplay?.aiAvatar || activeCard?.coverImage || ""
+    aiAvatar: state?.webDisplay?.aiAvatar || activeCard?.coverImage || "",
+    backgroundImage: state?.webDisplay?.backgroundImage || "",
+    dailyWelcomeAudio: state?.webDisplay?.dailyWelcomeAudio || "/assets/audio/welcome-back.mp3"
   };
+}
+
+function createCssUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const escaped = raw
+    .replace(/\\/gu, "\\\\")
+    .replace(/"/gu, "\\\"")
+    .replace(/\n|\r/gu, "");
+  return `url("${escaped}")`;
+}
+
+function applyWebDisplaySettings(state = appState) {
+  const display = getWebDisplayConfig(state);
+  const backgroundImage = String(display.backgroundImage || "").trim();
+  document.body.classList.toggle("has-custom-background", Boolean(backgroundImage));
+  if (backgroundImage) {
+    document.body.style.setProperty("--web-background-image", createCssUrl(backgroundImage));
+  } else {
+    document.body.style.removeProperty("--web-background-image");
+  }
+}
+
+function getLocalDateKey() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getStoredDailyWelcomeKey() {
+  try {
+    return localStorage.getItem(DAILY_WELCOME_PLAYED_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setStoredDailyWelcomeKey(value = "") {
+  try {
+    localStorage.setItem(DAILY_WELCOME_PLAYED_STORAGE_KEY, value);
+  } catch {
+    // Storage can fail in private contexts; playback should still work for this page load.
+  }
+}
+
+function playDailyWelcomeAudio(state = appState) {
+  const audioSrc = String(getWebDisplayConfig(state).dailyWelcomeAudio || "").trim();
+  const todayKey = getLocalDateKey();
+  if (!audioSrc || getStoredDailyWelcomeKey() === todayKey || dailyWelcomeAudioArmed) {
+    return;
+  }
+
+  const audio = new Audio(audioSrc);
+  audio.preload = "auto";
+  audio.volume = 0.72;
+
+  const markPlayed = () => {
+    setStoredDailyWelcomeKey(todayKey);
+    dailyWelcomeAudioArmed = false;
+    window.removeEventListener("pointerdown", playAfterGesture);
+    window.removeEventListener("keydown", playAfterGesture);
+  };
+  const tryPlay = async () => {
+    await audio.play();
+    markPlayed();
+  };
+  const playAfterGesture = () => {
+    tryPlay().catch(() => {
+      dailyWelcomeAudioArmed = false;
+      window.removeEventListener("pointerdown", playAfterGesture);
+      window.removeEventListener("keydown", playAfterGesture);
+    });
+  };
+
+  tryPlay().catch(() => {
+    dailyWelcomeAudioArmed = true;
+    window.addEventListener("pointerdown", playAfterGesture, { once: true, passive: true });
+    window.addEventListener("keydown", playAfterGesture, { once: true });
+  });
 }
 
 function createAvatarElement(url = "", label = "", role = "") {
@@ -5668,6 +6727,7 @@ async function refresh() {
   const state = await request("/api/state", { method: "GET" });
   appState = state;
   pendingRoleCardStartId = "";
+  applyWebDisplaySettings(state);
 
   fillProfile(state);
   renderConversationModelSettings(state);
@@ -5680,6 +6740,7 @@ async function refresh() {
   refreshAssistantSelector();
   applyMobilePage();
   resizeChatInput();
+  playDailyWelcomeAudio(state);
 }
 
 function getCompressionProfileStateFromRuntime(compression = {}, profileId = STANDARD_COMPRESSION_PROFILE_ID) {
@@ -5953,7 +7014,7 @@ async function saveModularPromptConfig() {
 }
 
 async function saveDefaults() {
-  if (!window.confirm("要把目前的使用者設定、角色卡與 Prompt 設定儲存成 GitHub 預設嗎？這不會保存目前對話紀錄。")) {
+  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等設定儲存成 GitHub 預設嗎？AI 呼叫紀錄、Discord Bot Token 與對話 API Key 不會保存。")) {
     return;
   }
   try {
@@ -5964,7 +7025,7 @@ async function saveDefaults() {
     const payload = await request("/api/defaults/save", { method: "POST" });
     appState = payload?.state || appState;
     const defaults = payload?.defaults || {};
-    showToast(`預設已保存：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個`);
+    showToast(`預設已保存：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
   } catch (error) {
     showToast(error.message || "預設保存失敗", "error");
   } finally {
@@ -6045,10 +7106,16 @@ async function previewModularPromptConfig() {
   }
 }
 
-async function saveSession() {
+async function saveSession(nameOverride, options = {}) {
   const suggested = `對話存檔 ${new Date().toLocaleString("zh-Hant")}`;
-  const input = window.prompt("請輸入存檔名稱", suggested);
-  const name = (input || "").trim();
+  const promptIfMissing = options.promptIfMissing !== false;
+  let name = "";
+  if (typeof nameOverride === "string") {
+    name = nameOverride.trim();
+  } else if (promptIfMissing) {
+    const input = window.prompt("請輸入存檔名稱", suggested);
+    name = (input || "").trim();
+  }
 
   try {
     await request("/api/sessions/save", {
@@ -6169,9 +7236,73 @@ function bindEvents() {
     });
     el.chatInput.addEventListener("input", () => {
       resizeChatInput();
+      if (el.chatInput.value.startsWith("/")) {
+        chatCommandMenuShowAll = false;
+        selectedChatCommandIndex = 0;
+        openChatCommandMenu();
+      } else if (chatCommandMenuOpen) {
+        closeChatCommandMenu();
+      }
       realignMobileChat({ scroll: true });
     });
+    el.chatInput.addEventListener("keydown", (event) => {
+      if (!chatCommandMenuOpen) {
+        return;
+      }
+      const items = getVisibleChatCommandItems();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeChatCommandMenu();
+        return;
+      }
+      if (event.key === "ArrowDown" && items.length > 0) {
+        event.preventDefault();
+        selectedChatCommandIndex = (selectedChatCommandIndex + 1) % items.length;
+        renderChatCommandMenu();
+        return;
+      }
+      if (event.key === "ArrowUp" && items.length > 0) {
+        event.preventDefault();
+        selectedChatCommandIndex = (selectedChatCommandIndex - 1 + items.length) % items.length;
+        renderChatCommandMenu();
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && items[selectedChatCommandIndex]) {
+        event.preventDefault();
+        void runChatCommandMenuItem(items[selectedChatCommandIndex]);
+      }
+    });
   }
+
+  if (el.chatPlusButton) {
+    el.chatPlusButton.addEventListener("click", () => {
+      selectedChatCommandIndex = 0;
+      if (activeChatCommandForm) {
+        clearActiveChatCommandForm({ keepMenu: true });
+        openChatCommandMenu({ showAll: true });
+        el.chatInput?.focus();
+        return;
+      }
+      if (chatCommandMenuOpen && chatCommandMenuShowAll) {
+        closeChatCommandMenu();
+      } else {
+        openChatCommandMenu({ showAll: true });
+      }
+      if (chatCommandMenuOpen) {
+        el.chatInput?.focus();
+      }
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!chatCommandMenuOpen) {
+      return;
+    }
+    if (el.chatForm?.contains(event.target)) {
+      return;
+    }
+    closeChatCommandMenu();
+  });
 
   el.profileForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -6443,9 +7574,24 @@ function bindEvents() {
 
   el.chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (activeChatCommandForm) {
+      try {
+        await submitActiveChatCommandForm();
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+      return;
+    }
     const content = el.chatInput.value.trim();
     if (!content) {
       showToast("請先輸入內容", "error");
+      return;
+    }
+    closeChatCommandMenu();
+
+    if (await handleChatSlashCommand(content)) {
+      resizeChatInput();
+      realignMobileChat({ scroll: true });
       return;
     }
 

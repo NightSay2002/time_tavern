@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260525-model-cost" />
+    <link rel="stylesheet" href="/styles.css?v=20260525-slash-fields" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -20,7 +20,7 @@
       <section id="mobileInfoDrawer" class="mobile-info-drawer">
         <header class="hero">
           <h1>時分居酒屋</h1>
-          <p>還沒想到寫什麼好</p>
+          <p>Ciallo～(∠・ω< )⌒☆</p>
           <span id="startStatus" class="status-pill">尚未開始</span>
         </header>
 
@@ -98,8 +98,10 @@
           <div id="messages" class="messages"></div>
 
           <form id="chatForm" class="chat-input">
-            <button type="button" class="chat-plus-button" aria-label="附加功能">＋</button>
+            <div id="chatCommandMenu" class="chat-command-menu" role="listbox" aria-label="功能列表" hidden></div>
+            <button id="chatPlusButton" type="button" class="chat-plus-button" aria-label="附加功能" aria-expanded="false" aria-controls="chatCommandMenu">＋</button>
             <textarea id="chatInput" rows="2" placeholder="輸入對話內容"></textarea>
+            <div id="chatCommandComposer" class="chat-command-composer" hidden></div>
             <div class="chat-actions">
               <button id="sendBtn" type="submit">送出</button>
             </div>
@@ -501,7 +503,7 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script src="/effects.js?v=20260513-chat-input" defer></script>
-    <script type="module" src="/app.js?v=20260525-model-cost"></script>
+    <script src="/effects.js?v=20260525-low-power" defer></script>
+    <script type="module" src="/app.js?v=20260525-slash-fields"></script>
   </body>
 </html>
