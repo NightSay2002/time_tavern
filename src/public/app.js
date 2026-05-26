@@ -21,6 +21,7 @@
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
   timeTrackingSettingsBtn: document.getElementById("timeTrackingSettingsBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
+  useDefaultsBtn: document.getElementById("useDefaultsBtn"),
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
   uiLanguageToggleBtn: document.getElementById("uiLanguageToggleBtn"),
   mobilePageChatBtn: document.getElementById("mobilePageChatBtn"),
@@ -1549,7 +1550,9 @@ async function request(url, options = {}) {
   const data = text ? safeParseJson(text) : {};
 
   if (!response.ok) {
-    throw new Error(data?.error || `請求失敗(${response.status})`);
+    const error = new Error(data?.error || `請求失敗(${response.status})`);
+    error.status = response.status;
+    throw error;
   }
 
   return data;
@@ -7174,6 +7177,33 @@ async function saveDefaults() {
   }
 }
 
+async function applyDefaults() {
+  if (!window.confirm("要使用 GitHub 預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空；對話存檔會保留。")) {
+    return;
+  }
+  try {
+    if (el.useDefaultsBtn) {
+      el.useDefaultsBtn.disabled = true;
+      el.useDefaultsBtn.textContent = "套用中...";
+    }
+    const payload = await request("/api/defaults/apply", { method: "POST" });
+    appState = payload?.state || appState;
+    await refresh();
+    const defaults = payload?.defaults || {};
+    showToast(`預設已套用：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
+  } catch (error) {
+    const message = error.status === 404
+      ? "使用預設 API 尚未載入，請重啟伺服器後再按一次。"
+      : error.message || "預設套用失敗";
+    showToast(message, "error");
+  } finally {
+    if (el.useDefaultsBtn) {
+      el.useDefaultsBtn.disabled = false;
+      el.useDefaultsBtn.textContent = "使用預設";
+    }
+  }
+}
+
 function createCustomPromptMode() {
   const configs = appState?.modularPromptConfigs || {};
   let index = Object.keys(configs).length + 1;
@@ -7869,6 +7899,10 @@ function bindEvents() {
 
   if (el.saveDefaultsBtn) {
     el.saveDefaultsBtn.addEventListener("click", saveDefaults);
+  }
+
+  if (el.useDefaultsBtn) {
+    el.useDefaultsBtn.addEventListener("click", applyDefaults);
   }
 
   if (el.addEnvExtraBtn) {

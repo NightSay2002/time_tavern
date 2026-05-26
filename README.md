@@ -83,7 +83,7 @@ http://localhost:3234
 │       ├── multi.json
 │       └── no_role.json
 ├── defaults/
-│   └── app-defaults.json        # GitHub 發佈用預設使用者設定與角色卡
+│   └── app-defaults.json        # GitHub 發佈用預設設定、角色卡與非機密環境值
 └── data/
     ├── app-state.json           # 執行狀態、目前對話、設定、存檔 metadata
     ├── cardstate.json           # 使用者設定與角色卡分離備份
@@ -92,7 +92,7 @@ http://localhost:3234
 
 `data/`、`.env`、`node_modules/` 已在 `.gitignore` 中，不會被提交。
 
-網頁中的「儲存預設」會把目前使用者設定與角色卡寫入 `defaults/app-defaults.json`，並把 Prompt 模式寫入 `prompts/modular/`。這些檔案可以提交到 GitHub，下載者第一次啟動時會自動套用；目前對話、AI logs 與存檔仍保留在被忽略的 `data/` 內，不會被保存成預設。
+網頁中的「儲存預設」會把目前使用者設定、角色卡、Prompt、模型內容設定、統計判斷與非機密環境顯示設定寫入 `defaults/app-defaults.json` 與 `prompts/modular/`。這些檔案可以提交到 GitHub，下載者第一次啟動時會自動套用；「使用預設」可在已有本機資料時手動套用 GitHub 預設，會清空原本環境設定、目前對話與 AI logs，但會保留對話存檔。
 
 ## 環境變數
 
@@ -150,7 +150,11 @@ Provider 預設 Base URL：
 | 對話存檔 | 保存目前整體對話 | 將目前角色卡、對話、壓縮內容、AI logs 與狀態保存成存檔。 |
 | 功能按鈕 | 編輯 AI 的輸出對話 | 選擇一則 assistant 訊息並覆寫內容。 |
 | 功能按鈕 | 查看/編輯模型內容 | 查看或手動修改標準與自訂大模型 profile 的目前內容。 |
+| 功能按鈕 | 統計判斷編輯 | 編輯時間、天數、自動切換時段與保留時間規則。 |
 | 功能按鈕 | 環境設定 | 編輯 `.env`，可測試對話 API 連接，也可觸發伺服器重啟。 |
+| 功能按鈕 | 使用預設 | 從 `defaults/app-defaults.json` 與 `prompts/modular/` 套用 GitHub 預設，清除原本環境設定並保留對話存檔。 |
+| 功能按鈕 | 儲存預設 | 將目前設定保存成可提交到 GitHub 的預設檔。 |
+| 功能按鈕 | 簡繁轉換 | 切換 UI 顯示為繁體或簡體。 |
 | 對話區 | 訊息列表 | 顯示使用者與 AI 對話、開場、壓縮通知等。 |
 | 對話區 | 輸入框 | 本地網頁送出一輪對話。 |
 | 對話區 | Discord Bot 連結 | 依 Bot Client ID 或 Token 產生邀請連結。 |
@@ -305,6 +309,8 @@ DM 若要執行 meta 指令也請加前綴；沒有前綴時會當作聊天內�
 | `PUT` | `/api/env` | 覆寫 `.env` 內容並同步 process env。 |
 | `POST` | `/api/chat-api/test` | 使用目前表單內容測試對話 API 連接，不會先寫入 `.env`。 |
 | `POST` | `/api/restart` | 排程重啟目前 Node server。 |
+| `POST` | `/api/defaults/apply` | 套用 GitHub 預設設定，清除原本環境設定並保留對話存檔。 |
+| `POST` | `/api/defaults/save` | 將目前設定保存成 GitHub 預設檔。 |
 | `PUT` | `/api/conversation-settings` | 相容舊版 UI 的對話設定 API；新版 UI 以 `.env` 的 `CHAT_API_MODEL` 與各 Prompt 模式的 `dialogueContextRounds` 為主。 |
 | `GET` | `/api/context-compression` | 取得目前模型內容與啟用的大模型 profiles。 |
 | `PUT` | `/api/context-compression` | 手動保存指定 profile 的模型內容。 |
@@ -360,13 +366,19 @@ DM 若要執行 meta 指令也請加前綴；沒有前綴時會當作聊天內�
 
 ### `defaults/app-defaults.json`
 
-GitHub 發佈用預設資料，只包含：
+GitHub 發佈用預設資料，包含：
 
 - `userProfile`
 - `roleCards`
+- `roleCardRuntimeState`
+- `activeRoleCardId` / `activeAssistantMode`
+- `conversationSettings`
+- `contextCompression`
+- `timeTracking`
+- `environment`：只保存非機密環境值，不保存 Discord Bot Token、對話 API Key 或其他 secret。
 - `updatedAt`
 
-如果本機沒有自己的 `data/app-state.json`，啟動時會用這個檔案建立初始使用者設定與角色卡。它不包含 conversation、AI logs 或 saved sessions。
+如果本機沒有自己的 `data/app-state.json`，啟動時會用這個檔案建立初始設定與角色卡。按下「使用預設」時，也會重新套用這些預設並重新載入 `prompts/modular/`；原本 `.env`、目前 conversation 與 AI logs 會清空，saved sessions 會保留。
 
 這讓角色卡資料在 runtime state 損壞或重整時有獨立備份。
 

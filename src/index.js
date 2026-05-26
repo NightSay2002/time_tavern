@@ -1302,6 +1302,55 @@ function saveDefaultAppSettings(currentState) {
   };
 }
 
+function applyDefaultAppSettings(currentState) {
+  appDefaultEnvironmentValuesCache = null;
+  const appDefaults = loadAppDefaults();
+  if (!appDefaults) {
+    throw new Error("找不到 GitHub 預設檔 defaults/app-defaults.json。");
+  }
+
+  const defaultState = createDefaultState();
+  const savedSessions = Array.isArray(currentState?.savedSessions)
+    ? currentState.savedSessions.map((session, index) => normalizeSavedSession(session, index))
+    : [];
+  currentState.userProfile = cloneData(defaultState.userProfile, { identityText: "", displayName: "" });
+  currentState.roleCards = cloneData(defaultState.roleCards, []).map((card) => normalizeRoleCard(card));
+  currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(defaultState.roleCardRuntimeState);
+  currentState.activeRoleCardId = defaultState.activeRoleCardId || null;
+  currentState.activeAssistantMode = normalizeAssistantMode(defaultState.activeAssistantMode);
+  currentState.conversationSettings = normalizeConversationSettings(defaultState.conversationSettings);
+  currentState.contextCompression = normalizeContextCompressionState(defaultState.contextCompression);
+  currentState.timeTracking = normalizeTimeTrackingState(defaultState.timeTracking);
+  currentState.aiSessionStarted = false;
+  currentState.pendingOpeningBroadcast = false;
+  currentState.lastDiscordChannelId = "";
+  currentState.discordPlayers = createDefaultDiscordPlayerState();
+  currentState.turnState = createDefaultTurnState();
+  currentState.conversation = [];
+  currentState.aiLogs = [];
+  currentState.savedSessions = savedSessions;
+  currentState.activeSavedSessionId = null;
+  delete currentState.conversationMode;
+
+  const environment = normalizeDefaultEnvironment(appDefaults.environment);
+  saveEnvFileContent(buildEnvContentFromDefaultEnvironment(environment.values));
+  appDefaultEnvironmentValuesCache = environment.values;
+  applyDefaultEnvToProcess();
+
+  modularPromptConfigStore = null;
+  const modularPromptConfigs = getModularPromptConfigsPayload();
+  saveState(currentState);
+
+  return {
+    defaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
+    roleCardCount: currentState.roleCards.length,
+    environmentCount: Object.keys(environment.values).length,
+    modularPromptCount: Object.keys(modularPromptConfigs).length,
+    savedSessionCount: currentState.savedSessions.length,
+    updatedAt: currentState.updatedAt
+  };
+}
+
 function readPersistedStateFile() {
   ensureDataFile();
   return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
@@ -8453,6 +8502,15 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/defaults/save" && method === "POST") {
       const defaults = saveDefaultAppSettings(state);
+      sendJson(res, 200, {
+        defaults,
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (pathname === "/api/defaults/apply" && method === "POST") {
+      const defaults = applyDefaultAppSettings(state);
       sendJson(res, 200, {
         defaults,
         state: statePayload(state)
