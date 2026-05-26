@@ -617,6 +617,8 @@ button {
   max-height: min(42vh, 360px);
   overflow-y: auto;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
+  contain: layout paint style;
   padding-right: 4px;
 }
 
@@ -633,7 +635,16 @@ button {
   max-height: min(52vh, 440px);
   overflow-y: auto;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
+  contain: layout paint style;
   padding-right: 4px;
+}
+
+.compression-trigger-action-card,
+.compression-append-term-card,
+.compression-model-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
 }
 
 .compression-model-card textarea.compression-model-rules {
@@ -1098,6 +1109,7 @@ button {
   max-height: 100%;
   overflow: auto;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
   border: 0;
   border-radius: 0;
   padding: 14px 0 22px;
@@ -1165,6 +1177,7 @@ button {
   gap: 10px;
   padding: 4px 18px 12px 24px;
   border-radius: 0;
+  contain: layout style;
 }
 
 .discord-message:hover {
@@ -1974,6 +1987,15 @@ button {
 
 .prompt-viewer-dialog {
   width: min(1040px, 90vw);
+  overflow: hidden;
+}
+
+.prompt-viewer-dialog > form {
+  max-height: calc(min(90vh, 920px) - 28px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: auto;
+  padding-right: 6px;
 }
 
 .env-settings-fields {

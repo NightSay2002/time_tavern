@@ -2757,10 +2757,19 @@ function normalizeContextCompressionPromptConfig(input = {}, fallbackPrompt = ""
   };
 }
 
+function hasExplicitEmptyCompressionModels(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  return (
+    (Array.isArray(source.models) && source.models.length === 0) ||
+    (Array.isArray(source.modules) && source.modules.length === 0)
+  );
+}
+
 function createStandardCompressionProfile(contextCompression) {
   const normalizedContextCompression = normalizeContextCompressionPromptConfig(
     contextCompression,
-    getContextCompressionPrompt()
+    getContextCompressionPrompt(),
+    { allowEmptyModels: hasExplicitEmptyCompressionModels(contextCompression) }
   );
   return {
     id: STANDARD_COMPRESSION_PROFILE_ID,
@@ -2785,7 +2794,11 @@ function normalizeCompressionProfileConfig(input = {}, index = 0, fallbackContex
   const contextCompression = normalizeContextCompressionPromptConfig(
     source.contextCompression || source.compression || fallbackContextCompression,
     fallbackContextCompression?.mainRules || getContextCompressionPrompt(),
-    { allowEmptyModels: !isStandard, allowEmptyMainRules: !isStandard }
+    {
+      allowEmptyModels: !isStandard ||
+        hasExplicitEmptyCompressionModels(source.contextCompression || source.compression || fallbackContextCompression),
+      allowEmptyMainRules: !isStandard
+    }
   );
   const triggerActions = normalizeCompressionTriggerActionsConfig(
     source.triggerActions || source.actions || source.triggerRules || [],
@@ -2866,7 +2879,8 @@ function normalizeModularPromptConfig(input, mode = "single") {
   const contextCompression = normalizeContextCompressionPromptConfig(
     source.contextCompression || source.contextCompressionPrompt || source.compressionPrompt,
     safeText(source.contextCompressionPrompt || source.contextCompression?.prompt) ||
-      defaults.contextCompression.mainRules
+      defaults.contextCompression.mainRules,
+    { allowEmptyModels: hasExplicitEmptyCompressionModels(source.contextCompression) }
   );
   const compressionProfiles = normalizeCompressionProfilesConfig(
     source.compressionProfiles || source.compressionProfileConfigs || [],
@@ -4628,7 +4642,10 @@ function resolveContextCompressionPromptConfig(currentState = state, config = nu
     return normalizeContextCompressionPromptConfig(
       activeConfig.contextCompression,
       getContextCompressionPrompt(),
-      { allowEmptyModels: !isStandardProfile, allowEmptyMainRules: !isStandardProfile }
+      {
+        allowEmptyModels: !isStandardProfile || hasExplicitEmptyCompressionModels(activeConfig.contextCompression),
+        allowEmptyMainRules: !isStandardProfile
+      }
     );
   }
 
@@ -4637,7 +4654,12 @@ function resolveContextCompressionPromptConfig(currentState = state, config = nu
     : null;
   return normalizeContextCompressionPromptConfig(
     standardProfile?.contextCompression || activeConfig.contextCompression || activeConfig.contextCompressionPrompt,
-    standardProfile?.contextCompression?.mainRules || activeConfig.contextCompressionPrompt || getContextCompressionPrompt()
+    standardProfile?.contextCompression?.mainRules || activeConfig.contextCompressionPrompt || getContextCompressionPrompt(),
+    {
+      allowEmptyModels: hasExplicitEmptyCompressionModels(
+        standardProfile?.contextCompression || activeConfig.contextCompression
+      )
+    }
   );
 }
 
@@ -4804,7 +4826,8 @@ function formatCompressionSummaryForReasoner(currentSummary = "", currentState =
   const activeConfig = getActiveModularPromptConfig(currentState);
   const compressionConfig = normalizeContextCompressionPromptConfig(
     activeConfig.contextCompression || activeConfig.contextCompressionPrompt,
-    activeConfig.contextCompressionPrompt || getContextCompressionPrompt()
+    activeConfig.contextCompressionPrompt || getContextCompressionPrompt(),
+    { allowEmptyModels: hasExplicitEmptyCompressionModels(activeConfig.contextCompression) }
   );
   const normalized = normalizeCompressionJsonState(currentSummary, compressionConfig);
   return JSON.stringify({ model: normalized.model }, null, 2);
@@ -4815,7 +4838,8 @@ function formatCompressionProfileSummaryForReasoner(profile, profileState, curre
     profile.contextCompression,
     getContextCompressionPrompt(),
     {
-      allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID,
+      allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID ||
+        hasExplicitEmptyCompressionModels(profile.contextCompression),
       allowEmptyMainRules: profile.id !== STANDARD_COMPRESSION_PROFILE_ID
     }
   );
@@ -5376,7 +5400,8 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         profile.contextCompression,
         getContextCompressionPrompt(),
         {
-          allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID,
+          allowEmptyModels: profile.id !== STANDARD_COMPRESSION_PROFILE_ID ||
+            hasExplicitEmptyCompressionModels(profile.contextCompression),
           allowEmptyMainRules: profile.id !== STANDARD_COMPRESSION_PROFILE_ID
         }
       );

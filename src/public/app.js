@@ -201,6 +201,7 @@ let chatCommandMenuShowAll = false;
 let activeChatCommandForm = null;
 let focusedChatCommandField = "";
 let editingUserMessageId = "";
+let modularPromptRenderFrame = 0;
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
@@ -1184,6 +1185,11 @@ function normalizeContextCompressionConfig(config = {}, fallbackPrompt = "", opt
   };
 }
 
+function hasExplicitEmptyCompressionModels(config = {}) {
+  const source = config && typeof config === "object" ? config : {};
+  return Array.isArray(source.models) && source.models.length === 0;
+}
+
 function normalizeCompressionProfileId(value = "") {
   const normalized = String(value || "")
     .trim()
@@ -1426,7 +1432,9 @@ function createStandardCompressionProfile(contextCompression = {}) {
       defaultName: "標準壓縮"
     }),
     appendTerms: [],
-    contextCompression: normalizeContextCompressionConfig(contextCompression, appState?.contextCompressionPrompt || "")
+    contextCompression: normalizeContextCompressionConfig(contextCompression, appState?.contextCompressionPrompt || "", {
+      allowEmptyModels: hasExplicitEmptyCompressionModels(contextCompression)
+    })
   };
 }
 
@@ -1454,7 +1462,11 @@ function normalizeCompressionProfileConfig(profile = {}, index = 0, fallbackCont
     contextCompression: normalizeContextCompressionConfig(
       source.contextCompression || source.compression || fallbackContextCompression,
       fallbackContextCompression?.mainRules || appState?.contextCompressionPrompt || "",
-      { allowEmptyModels: !isStandard, allowEmptyMainRules: !isStandard }
+      {
+        allowEmptyModels: !isStandard ||
+          hasExplicitEmptyCompressionModels(source.contextCompression || source.compression || fallbackContextCompression),
+        allowEmptyMainRules: !isStandard
+      }
     )
   };
 }
@@ -1462,7 +1474,8 @@ function normalizeCompressionProfileConfig(profile = {}, index = 0, fallbackCont
 function normalizeCompressionProfilesConfig(config = {}) {
   const standardContextCompression = normalizeContextCompressionConfig(
     config.contextCompression || { mainRules: config.contextCompressionPrompt },
-    config.contextCompressionPrompt || appState?.contextCompressionPrompt || ""
+    config.contextCompressionPrompt || appState?.contextCompressionPrompt || "",
+    { allowEmptyModels: hasExplicitEmptyCompressionModels(config.contextCompression) }
   );
   const profiles = Array.isArray(config.compressionProfiles) ? config.compressionProfiles : [];
   const byId = new Map([[STANDARD_COMPRESSION_PROFILE_ID, createStandardCompressionProfile(standardContextCompression)]]);
@@ -4125,7 +4138,10 @@ function scrollMessageNumberIntoView(messageNumber) {
     return false;
   }
   updateMobileViewportMetrics();
-  target.scrollIntoView({ block: "start", inline: "nearest", behavior: "smooth" });
+  const containerRect = el.messages.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const nextTop = el.messages.scrollTop + targetRect.top - containerRect.top - 10;
+  el.messages.scrollTop = Math.max(0, nextTop);
   return true;
 }
 
@@ -4835,38 +4851,9 @@ async function submitEditUserMessage() {
   const targetMessageNumber = targetIndex + 1;
   editingUserMessageId = "";
   el.editMessageDialog?.close();
+  scrollMessageNumberIntoView(targetMessageNumber);
   try {
     isChatStreaming = true;
-    if (targetIndex >= 0) {
-      const editedMessage = {
-        ...conversation[targetIndex],
-        content,
-        edited: true,
-        replayFromWebEdit: true,
-        updatedAt: new Date().toISOString(),
-        extra: {
-          ...(conversation[targetIndex]?.extra || {}),
-          replayFromWebEdit: true
-        }
-      };
-      const pendingAssistantMessage = {
-        id: `web_edit_pending_${Date.now()}`,
-        role: "assistant",
-        content: "",
-        source: "web",
-        streaming: true,
-        createdAt: new Date().toISOString()
-      };
-      appState = {
-        ...appState,
-        conversation: [
-          ...conversation.slice(0, targetIndex),
-          editedMessage,
-          pendingAssistantMessage
-        ]
-      };
-      renderMessages(appState, { focusMessageNumber: targetMessageNumber, scroll: false });
-    }
     renderStatus(appState);
     showToast("正在從編輯後的訊息重新生成...");
     const payload = await request(`/api/messages/${messageId}/replay-edit`, {
@@ -4963,7 +4950,6 @@ function renderChatHeader(state = appState) {
 }
 
 function renderMessages(state, options = {}) {
-  el.messages.innerHTML = "";
   const conversation = Array.isArray(state.conversation) ? [...state.conversation] : [];
   renderChatHeader(state);
 
@@ -4971,11 +4957,12 @@ function renderMessages(state, options = {}) {
     const empty = document.createElement("p");
     empty.className = "discord-empty";
     empty.textContent = "尚無對話。";
-    el.messages.appendChild(empty);
+    el.messages.replaceChildren(empty);
     realignMobileChat();
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   let lastDivider = "";
   conversation.forEach((message, index) => {
     const dividerLabel = formatDateDivider(message.createdAt);
@@ -4983,7 +4970,7 @@ function renderMessages(state, options = {}) {
       const divider = document.createElement("div");
       divider.className = "discord-date-divider";
       divider.textContent = dividerLabel;
-      el.messages.appendChild(divider);
+      fragment.appendChild(divider);
       lastDivider = dividerLabel;
     }
 
@@ -5132,9 +5119,10 @@ function renderMessages(state, options = {}) {
 
     menu.appendChild(menuList);
     wrapper.append(avatar, body, menu);
-    el.messages.appendChild(wrapper);
+    fragment.appendChild(wrapper);
   });
 
+  el.messages.replaceChildren(fragment);
   if (options.focusMessageNumber && scrollMessageNumberIntoView(options.focusMessageNumber)) {
     return;
   }
@@ -5493,13 +5481,18 @@ function renderPromptModeOptions(select, selectedMode = "single") {
       name: getPromptModeDisplayName(normalizedSelectedMode)
     });
   }
-  select.innerHTML = "";
-  modes.forEach((entry) => {
-    const option = document.createElement("option");
-    option.value = entry.mode;
-    option.textContent = entry.name || entry.mode;
-    select.appendChild(option);
-  });
+  const signature = modes.map((entry) => `${entry.mode}:${entry.name || entry.mode}`).join("|");
+  if (select.dataset.optionsSignature !== signature) {
+    const fragment = document.createDocumentFragment();
+    modes.forEach((entry) => {
+      const option = document.createElement("option");
+      option.value = entry.mode;
+      option.textContent = entry.name || entry.mode;
+      fragment.appendChild(option);
+    });
+    select.replaceChildren(fragment);
+    select.dataset.optionsSignature = signature;
+  }
   select.value = normalizedSelectedMode;
 }
 
@@ -5525,12 +5518,32 @@ function getModularConfig(mode = "") {
 }
 
 function clearModularPromptPreview() {
-  if (el.modularPreviewReasonerSystem) {
+  if (el.modularPreviewReasonerSystem?.value) {
     el.modularPreviewReasonerSystem.value = "";
   }
-  if (el.modularPreviewCompressionPrompt) {
+  if (el.modularPreviewCompressionPrompt?.value) {
     el.modularPreviewCompressionPrompt.value = "";
   }
+}
+
+function createEditorEmptyHint(text = "") {
+  const empty = document.createElement("p");
+  empty.className = "form-hint";
+  empty.textContent = text;
+  return empty;
+}
+
+function replaceEditorChildren(container, children = []) {
+  if (!container) {
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  children.forEach((child) => {
+    if (child) {
+      fragment.appendChild(child);
+    }
+  });
+  container.replaceChildren(fragment);
 }
 
 function getSelectedCompressionProfile() {
@@ -5543,16 +5556,23 @@ function renderCompressionProfileOptions(selectedId = selectedCompressionProfile
   if (!el.compressionProfileSelect) {
     return;
   }
-  el.compressionProfileSelect.innerHTML = "";
-  compressionProfilesDraft.forEach((profile, index) => {
-    const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = `${profile.name || profile.id || `大模型 ${index + 1}`}${profile.enabled === false ? "（未啟用）" : ""}`;
-    el.compressionProfileSelect.appendChild(option);
-  });
   selectedCompressionProfileId = compressionProfilesDraft.some((profile) => profile.id === selectedId)
     ? selectedId
     : STANDARD_COMPRESSION_PROFILE_ID;
+  const signature = compressionProfilesDraft
+    .map((profile, index) => `${profile.id}:${profile.name || profile.id || `大模型 ${index + 1}`}:${profile.enabled === false ? 0 : 1}`)
+    .join("|");
+  if (el.compressionProfileSelect.dataset.optionsSignature !== signature) {
+    const fragment = document.createDocumentFragment();
+    compressionProfilesDraft.forEach((profile, index) => {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = `${profile.name || profile.id || `大模型 ${index + 1}`}${profile.enabled === false ? "（未啟用）" : ""}`;
+      fragment.appendChild(option);
+    });
+    el.compressionProfileSelect.replaceChildren(fragment);
+    el.compressionProfileSelect.dataset.optionsSignature = signature;
+  }
   el.compressionProfileSelect.value = selectedCompressionProfileId;
 }
 
@@ -5612,17 +5632,13 @@ function renderCompressionTriggerActionEditor(actions = []) {
     defaultRoundLimit: selectedCompressionProfileId === STANDARD_COMPRESSION_PROFILE_ID,
     defaultName: selectedCompressionProfileId === STANDARD_COMPRESSION_PROFILE_ID ? "標準壓縮" : "觸發組合 1"
   });
-  el.compressionTriggerActionList.innerHTML = "";
 
   if (normalizedActions.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "form-hint";
-    empty.textContent = "尚未建立觸發組合。";
-    el.compressionTriggerActionList.appendChild(empty);
+    replaceEditorChildren(el.compressionTriggerActionList, [createEditorEmptyHint("尚未建立觸發組合。")]);
     return;
   }
 
-  normalizedActions.forEach((action, index) => {
+  const renderedActions = normalizedActions.map((action, index) => {
     const triggers = normalizeCompressionTriggerConfig(action.triggers || {});
     const item = document.createElement("details");
     item.className = "role-card compression-trigger-action-card";
@@ -5800,8 +5816,9 @@ function renderCompressionTriggerActionEditor(actions = []) {
     });
 
     item.append(header, editor);
-    el.compressionTriggerActionList.appendChild(item);
+    return item;
   });
+  replaceEditorChildren(el.compressionTriggerActionList, renderedActions);
 }
 
 function collectCompressionAppendTermsFromEditor(options = {}) {
@@ -5848,17 +5865,13 @@ function renderCompressionAppendTermEditor(terms = []) {
     return;
   }
   const normalizedTerms = normalizeModelAppendTermsConfig(terms);
-  el.compressionAppendTermList.innerHTML = "";
 
   if (normalizedTerms.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "form-hint";
-    empty.textContent = "尚未建立追加詞。";
-    el.compressionAppendTermList.appendChild(empty);
+    replaceEditorChildren(el.compressionAppendTermList, [createEditorEmptyHint("尚未建立追加詞。")]);
     return;
   }
 
-  normalizedTerms.forEach((term, index) => {
+  const renderedTerms = normalizedTerms.map((term, index) => {
     const item = document.createElement("details");
     item.className = "role-card compression-append-term-card";
     item.dataset.appendTermId = term.id;
@@ -5952,8 +5965,9 @@ function renderCompressionAppendTermEditor(terms = []) {
     });
 
     item.append(header, editor);
-    el.compressionAppendTermList.appendChild(item);
+    return item;
   });
+  replaceEditorChildren(el.compressionAppendTermList, renderedTerms);
 }
 
 function syncSelectedCompressionProfileFromEditor() {
@@ -5970,11 +5984,12 @@ function syncSelectedCompressionProfileFromEditor() {
   profile.triggers = profile.triggerActions[0]?.triggers ||
     normalizeCompressionTriggerConfig({}, { defaultRoundLimit: isStandard });
   profile.appendTerms = collectCompressionAppendTermsFromEditor();
+  const compressionModels = collectCompressionModelsFromEditor();
   profile.contextCompression = normalizeContextCompressionConfig({
     mainRules: el.modularCompressionMainRules?.value || "",
-    models: collectCompressionModelsFromEditor()
+    models: compressionModels
   }, appState?.contextCompressionPrompt || "", {
-    allowEmptyModels: !isStandard,
+    allowEmptyModels: !isStandard || compressionModels.length === 0,
     allowEmptyMainRules: !isStandard
   });
 }
@@ -6093,6 +6108,21 @@ function renderModularPromptEditor(mode = "") {
   clearModularPromptPreview();
 }
 
+function scheduleModularPromptEditorRender(mode = "") {
+  const render = () => {
+    modularPromptRenderFrame = 0;
+    renderModularPromptEditor(mode);
+  };
+  if (typeof window.requestAnimationFrame !== "function") {
+    render();
+    return;
+  }
+  if (modularPromptRenderFrame) {
+    window.cancelAnimationFrame(modularPromptRenderFrame);
+  }
+  modularPromptRenderFrame = window.requestAnimationFrame(render);
+}
+
 function collectCompressionModelsFromEditor(options = {}) {
   if (!el.modularCompressionModelList) {
     return [];
@@ -6113,17 +6143,15 @@ function renderCompressionModelEditor(models = []) {
     return;
   }
   compressionModelsDraft = (Array.isArray(models) ? models : []).map((item, index) => normalizeCompressionModelConfig(item, index));
-  el.modularCompressionModelList.innerHTML = "";
 
   if (compressionModelsDraft.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "form-hint";
-    empty.textContent = "尚未建立模塊，這個大模型會以純文本方式保存模型內容。";
-    el.modularCompressionModelList.appendChild(empty);
+    replaceEditorChildren(el.modularCompressionModelList, [
+      createEditorEmptyHint("尚未建立模塊，這個大模型會以純文本方式保存模型內容。")
+    ]);
     return;
   }
 
-  compressionModelsDraft.forEach((model, index) => {
+  const renderedModels = compressionModelsDraft.map((model, index) => {
     const item = document.createElement("div");
     item.className = "role-card custom-section-card compression-model-card";
     item.dataset.compressionModelId = model.id;
@@ -6186,8 +6214,9 @@ function renderCompressionModelEditor(models = []) {
     });
 
     item.append(title, idLabel, nameLabel, addLabel, deleteLabel);
-    el.modularCompressionModelList.appendChild(item);
+    return item;
   });
+  replaceEditorChildren(el.modularCompressionModelList, renderedModels);
 }
 
 function collectModularPromptConfig() {
@@ -8003,7 +8032,7 @@ function bindEvents() {
 
   if (el.modularPromptModeSelect) {
     el.modularPromptModeSelect.addEventListener("change", () => {
-      renderModularPromptEditor(el.modularPromptModeSelect.value);
+      scheduleModularPromptEditorRender(el.modularPromptModeSelect.value);
     });
   }
 
