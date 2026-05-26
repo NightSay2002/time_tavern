@@ -8755,9 +8755,29 @@ const server = http.createServer(async (req, res) => {
         resetConversationProgress(state);
         state.roleCardRuntimeState = {};
         resetGeneratedBackendContextPreservingManual(state);
+        const resolvedUserName = resolveUserDisplayName(state.userProfile, "");
+        const openingDialogue = injectUserPlaceholder(card.openingDialogue, resolvedUserName, card.name);
+        let openingMessage = null;
+        state.pendingOpeningBroadcast = false;
+        if (openingDialogue) {
+          updateTimeTrackingFromText(state, openingDialogue, {
+            allowBareTimeExpressions: true
+          });
+          openingMessage = createMessageRecord({
+            role: "assistant",
+            content: openingDialogue,
+            source: "opening",
+            extra: {
+              roleCardId: card.id,
+              platform: "web",
+              stateAfterTurnSnapshot: captureNarrativeCheckpoint(state)
+            }
+          });
+          appendConversationMessage(openingMessage);
+        }
 
         saveState(state);
-        return { state: statePayload(state), status: 200 };
+        return { openingMessage, state: statePayload(state), status: 200 };
       });
 
       if (result.error) {
@@ -8765,7 +8785,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      sendJson(res, 200, { openingMessage: null, state: result.state });
+      sendJson(res, 200, { openingMessage: result.openingMessage, state: result.state });
       return;
     }
 
