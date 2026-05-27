@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCommandOptionType, Client, GatewayIntentBits, MessageFlags, Partials } from "discord.js";
@@ -1493,6 +1494,20 @@ function sendJson(res, status, payload) {
 function sendText(res, status, text) {
   res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   res.end(text);
+}
+
+function getLocalNetworkUrls(port) {
+  const urls = [];
+  const interfaces = os.networkInterfaces();
+  Object.values(interfaces).forEach((entries) => {
+    (entries || []).forEach((entry) => {
+      if (!entry || entry.internal || entry.family !== "IPv4" || !entry.address) {
+        return;
+      }
+      urls.push(`http://${entry.address}:${port}`);
+    });
+  });
+  return [...new Set(urls)];
 }
 
 function beginNdjsonStream(res, status = 200) {
@@ -10576,6 +10591,13 @@ function setupDiscordBot() {
 }
 
 server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  const localUrl = `http://localhost:${PORT}`;
+  const networkUrls = getLocalNetworkUrls(PORT);
+  const lines = [
+    "Server running:",
+    `- Local: ${localUrl}`,
+    ...networkUrls.map((url) => `- IP: ${url}`)
+  ];
+  console.log(lines.join("\n"));
   setupDiscordBot();
 });
