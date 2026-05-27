@@ -7,6 +7,7 @@ import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCommandOptionType, Client, GatewayIntentBits, MessageFlags, Partials } from "discord.js";
+import { runConversationTurnWorkflow } from "./conversation-turn.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -310,14 +311,6 @@ function ensurePromptsDir() {
   if (!fs.existsSync(PROMPTS_DIR)) {
     fs.mkdirSync(PROMPTS_DIR, { recursive: true });
   }
-}
-
-function saveContextCompressionPrompt(content = "") {
-  const nextPrompt = safeText(content) || getContextCompressionPrompt();
-  ensurePromptsDir();
-  fs.writeFileSync(CONTEXT_COMPRESSION_PROMPT_FILE, `${nextPrompt}\n`, "utf8");
-  contextCompressionPrompt = nextPrompt;
-  return contextCompressionPrompt;
 }
 
 function saveCharacterCardCreationAssistantPrompt(content = "") {
@@ -1745,68 +1738,6 @@ function materializeSavedSessionSnapshot(session) {
   return snapshot;
 }
 
-function mergeConversationWithRuntimeTail(existingConversation = [], runtimeConversation = []) {
-  const existing = Array.isArray(existingConversation) ? cloneData(existingConversation, []) : [];
-  const runtime = Array.isArray(runtimeConversation) ? cloneData(runtimeConversation, []) : [];
-  if (runtime.length === 0) {
-    return existing;
-  }
-  if (existing.length === 0) {
-    return runtime;
-  }
-
-  const firstRuntimeId = safeText(runtime[0]?.id);
-  if (firstRuntimeId) {
-    const startIndex = existing.findIndex((message) => safeText(message?.id) === firstRuntimeId);
-    if (startIndex >= 0) {
-      return [...existing.slice(0, startIndex), ...runtime];
-    }
-  }
-
-  const knownIds = new Set(existing.map((message) => safeText(message?.id)).filter(Boolean));
-  const missingRuntimeMessages = runtime.filter((message) => {
-    const id = safeText(message?.id);
-    return !id || !knownIds.has(id);
-  });
-  return [...existing, ...missingRuntimeMessages];
-}
-
-function mergeAiLogsById(existingLogs = [], runtimeLogs = []) {
-  const output = (Array.isArray(existingLogs) ? existingLogs : []).map((entry) => normalizeAiLog(entry));
-  const indexById = new Map(output.map((entry, index) => [safeText(entry.id), index]).filter(([id]) => id));
-  (Array.isArray(runtimeLogs) ? runtimeLogs : []).forEach((entry) => {
-    const normalized = normalizeAiLog(entry);
-    const id = safeText(normalized.id);
-    if (id && indexById.has(id)) {
-      output[indexById.get(id)] = normalized;
-      return;
-    }
-    if (id) {
-      indexById.set(id, output.length);
-    }
-    output.push(normalized);
-  });
-  return output;
-}
-
-function appendSavedSessionExternalMessage(session, message) {
-  if (!session || !message) {
-    return;
-  }
-  const externalData = readSavedSessionExternalData(session);
-  externalData.conversation.push(cloneData(message, message));
-  writeSavedSessionExternalData(session, externalData);
-}
-
-function appendSavedSessionExternalAiLog(session, entry) {
-  if (!session || !entry) {
-    return;
-  }
-  const externalData = readSavedSessionExternalData(session);
-  externalData.aiLogs.push(normalizeAiLog(entry));
-  writeSavedSessionExternalData(session, externalData);
-}
-
 function normalizeSavedSession(rawSession, index) {
   const now = nowIso();
   const source = rawSession && typeof rawSession === "object" ? rawSession : {};
@@ -1860,10 +1791,6 @@ function listSavedSessionSummaries(currentState) {
 
 function getSavedSessionById(currentState, sessionId) {
   return currentState.savedSessions.find((session) => session.id === sessionId) || null;
-}
-
-function syncActiveSavedSession(currentState) {
-  currentState.activeSavedSessionId = null;
 }
 
 function createSavedSessionFromCurrentState(currentState, nameInput = "", options = {}) {
@@ -2096,19 +2023,6 @@ function getRoleCardRuntimeStateEntry(state, cardId) {
   return normalizeRoleCardRuntimeStateEntry(map[normalizedId]);
 }
 
-function ensureRoleCardRuntimeStateEntry(state, cardId) {
-  const normalizedId = safeText(cardId);
-  if (!normalizedId) {
-    return null;
-  }
-  if (!state.roleCardRuntimeState || typeof state.roleCardRuntimeState !== "object") {
-    state.roleCardRuntimeState = {};
-  }
-  const existing = normalizeRoleCardRuntimeStateEntry(state.roleCardRuntimeState[normalizedId]);
-  state.roleCardRuntimeState[normalizedId] = existing;
-  return state.roleCardRuntimeState[normalizedId];
-}
-
 function mergeRoleCardWithRuntimeState(baseCard, runtimeState) {
   const base = normalizeRoleCard(baseCard);
   const runtime = runtimeState ? normalizeRoleCardRuntimeStateEntry(runtimeState) : null;
@@ -2137,21 +2051,6 @@ function mergeBaseAndRuntimePersonality(basePersonality = "", runtimeAdditions =
   return `${base}\n【新增性格】${additions}`;
 }
 
-function isClearRuntimePersonalityDirective(value = "") {
-  const normalized = safeText(value).replace(/\s+/g, "");
-  return (
-    normalized === "無" ||
-    normalized === "无" ||
-    normalized === "清空" ||
-    normalized === "刪除" ||
-    normalized === "删除" ||
-    normalized === "none" ||
-    normalized === "null" ||
-    normalized === "（無）" ||
-    normalized === "(無)"
-  );
-}
-
 function normalizeUserProfile(input) {
   const raw = input && typeof input === "object" ? input : {};
   return {
@@ -2161,18 +2060,6 @@ function normalizeUserProfile(input) {
 }
 
 function splitLorebookKeywords(value) {
-  if (Array.isArray(value)) {
-    return dedupeStringArray(value.map((item) => safeText(item)).filter(Boolean));
-  }
-  return dedupeStringArray(
-    safeText(value)
-      .split(/[\n,，、;；|/／]+/)
-      .map((item) => safeText(item))
-      .filter(Boolean)
-  );
-}
-
-function splitLorebookLinkTargets(value) {
   if (Array.isArray(value)) {
     return dedupeStringArray(value.map((item) => safeText(item)).filter(Boolean));
   }
@@ -3240,18 +3127,6 @@ function getAttachedLorebookEntryIdsSinceLastCompression(currentState = state, e
   return ids;
 }
 
-function getLorebookRuntimeEntry(state, cardId, entryId) {
-  const runtime = ensureRoleCardRuntimeStateEntry(state, cardId);
-  if (!runtime) {
-    return null;
-  }
-  runtime.lorebookRuntime = normalizeRoleCardLorebookRuntimeMap(runtime.lorebookRuntime);
-  if (!runtime.lorebookRuntime[entryId]) {
-    runtime.lorebookRuntime[entryId] = normalizeRoleCardLorebookRuntimeEntry({});
-  }
-  return runtime.lorebookRuntime[entryId];
-}
-
 function resolveTriggeredLorebookEntries(state, activeRoleCard, runtimeUserName = "", purpose = "reasoner") {
   const activeCard = activeRoleCard || getActiveRoleCard(state);
   if (!activeCard?.id) {
@@ -3399,14 +3274,6 @@ function formatNoRoleAvailableCharacters(roleCard) {
     getRoleCardCustomSectionValue(roleCard, "性格") ? `人物資料:${getRoleCardCustomSectionValue(roleCard, "性格")}` : "",
     getRoleCardCustomSectionValue(roleCard, "人物關係（純文字）") ? `可出場人物/關係:${getRoleCardCustomSectionValue(roleCard, "人物關係（純文字）")}` : ""
   ].filter(Boolean).join("\n") || "未設定";
-}
-
-function formatStructuredItemsForPrompt(items, maxItems = 10) {
-  const normalized = normalizeStructuredStringArray(items);
-  if (normalized.length === 0) {
-    return "無";
-  }
-  return normalized.slice(-Math.max(1, maxItems)).join("\n\n");
 }
 
 function normalizeTimeMatchText(text = "") {
@@ -4228,39 +4095,6 @@ function normalizeStringArray(value) {
   return [];
 }
 
-function serializeStructuredText(value) {
-  if (typeof value === "string") {
-    return safeText(value);
-  }
-  if (value && typeof value === "object") {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return safeText(String(value));
-    }
-  }
-  return safeText(String(value ?? ""));
-}
-
-function normalizeStructuredStringArray(value) {
-  if (!value) {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => serializeStructuredText(item)).filter(Boolean);
-  }
-  if (typeof value === "string") {
-    return value
-      .split(/\r?\n\s*\r?\n+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  if (value && typeof value === "object") {
-    return [serializeStructuredText(value)].filter(Boolean);
-  }
-  return [];
-}
-
 function createUiActions(state) {
   return [
     {
@@ -4397,108 +4231,6 @@ function messageListHasSameContent(messages = [], content = "") {
   }
   return (Array.isArray(messages) ? messages : [])
     .some((message) => safeText(message?.content) === normalizedContent);
-}
-
-function getRecentDialogueContextMessages(
-  currentState,
-  latestUserMessageId = "",
-  maxRounds = 10,
-  runtimeUserName = ""
-) {
-  const normalizedMaxRounds = Math.max(0, Number(maxRounds) || 0);
-  const latestUserIndex = findLatestUserIndex(currentState, latestUserMessageId);
-  if (latestUserIndex <= 0) {
-    const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
-    return openingDialogueMessage ? [openingDialogueMessage] : [];
-  }
-
-  const historyMessages = currentState.conversation.slice(0, latestUserIndex);
-  const leadingAssistantMessages = [];
-  const rounds = [];
-  let pendingUser = null;
-
-  historyMessages.forEach((message) => {
-    if (!message || typeof message !== "object") {
-      return;
-    }
-    if (message.role === "assistant" && !pendingUser && rounds.length === 0) {
-      leadingAssistantMessages.push(message);
-      return;
-    }
-    if (message.role === "user") {
-      if (pendingUser) {
-        rounds.push([pendingUser]);
-      }
-      pendingUser = message;
-      return;
-    }
-    if (message.role === "assistant" && pendingUser) {
-      rounds.push([pendingUser, message]);
-      pendingUser = null;
-    }
-  });
-
-  if (pendingUser) {
-    rounds.push([pendingUser]);
-  }
-
-  const selectedRounds = rounds.slice(-normalizedMaxRounds);
-  const contextMessages = selectedRounds.flat();
-  const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
-
-  // Keep the context-round limit strict when the user sets it to a very small
-  // number. Otherwise "補開場對話" makes the context-round setting look
-  // ineffective in AI logs, because the opening line gets appended back in.
-  if (normalizedMaxRounds <= 1) {
-    if (contextMessages.length === 0 && leadingAssistantMessages.length > 0) {
-      return leadingAssistantMessages;
-    }
-    return contextMessages;
-  }
-
-  if (selectedRounds.length < normalizedMaxRounds && openingDialogueMessage) {
-    const firstMessage = contextMessages[0];
-    const firstContent = safeText(firstMessage?.content);
-    if (firstContent !== openingDialogueMessage.content) {
-      return [openingDialogueMessage, ...contextMessages];
-    }
-  }
-
-  return contextMessages;
-}
-
-function getRecentConversationContextMessages(currentState, latestUserMessageId = "", maxRounds = 10) {
-  const latestUserIndex = findLatestUserIndex(currentState, latestUserMessageId);
-  if (latestUserIndex <= 0) {
-    return [];
-  }
-
-  const historyMessages = currentState.conversation.slice(0, latestUserIndex);
-  const rounds = [];
-  let pendingUser = null;
-
-  historyMessages.forEach((message) => {
-    if (!message || typeof message !== "object") {
-      return;
-    }
-    if (message.role === "user") {
-      if (pendingUser) {
-        rounds.push([pendingUser]);
-      }
-      pendingUser = message;
-      return;
-    }
-    if (message.role === "assistant" && pendingUser) {
-      rounds.push([pendingUser, message]);
-      pendingUser = null;
-    }
-  });
-
-  if (pendingUser) {
-    rounds.push([pendingUser]);
-  }
-
-  return rounds.slice(-Math.max(0, maxRounds)).flat();
 }
 
 function getAllConversationContextMessages(currentState, latestUserMessageId = "") {
@@ -4837,17 +4569,6 @@ function mergeCompressionSummary(currentSummary = "", completionText = "", confi
   return JSON.stringify(current, null, 2);
 }
 
-function formatCompressionSummaryForReasoner(currentSummary = "", currentState = state) {
-  const activeConfig = getActiveModularPromptConfig(currentState);
-  const compressionConfig = normalizeContextCompressionPromptConfig(
-    activeConfig.contextCompression || activeConfig.contextCompressionPrompt,
-    activeConfig.contextCompressionPrompt || getContextCompressionPrompt(),
-    { allowEmptyModels: hasExplicitEmptyCompressionModels(activeConfig.contextCompression) }
-  );
-  const normalized = normalizeCompressionJsonState(currentSummary, compressionConfig);
-  return JSON.stringify({ model: normalized.model }, null, 2);
-}
-
 function formatCompressionProfileSummaryForReasoner(profile, profileState, currentState = state) {
   const compressionConfig = normalizeContextCompressionPromptConfig(
     profile.contextCompression,
@@ -5166,17 +4887,6 @@ function getCompressionKeywordSourceParts(currentState, latestUser) {
     assistant: latestAssistantContent,
     both: [latestUserContent, latestAssistantContent].filter(Boolean).join("\n")
   };
-}
-
-function getCompressionKeywordSourceText(currentState, latestUser, source = "both") {
-  const parts = getCompressionKeywordSourceParts(currentState, latestUser);
-  if (source === "user") {
-    return parts.user;
-  }
-  if (source === "assistant") {
-    return parts.assistant;
-  }
-  return parts.both;
 }
 
 function getCompressionKeywordTriggerMatch(currentState, latestUser, triggers = {}) {
@@ -6279,17 +5989,6 @@ function hasUsageTokens(usage) {
   );
 }
 
-function splitTextBlocks(value = "") {
-  const source = safeText(value).trim();
-  if (!source) {
-    return [];
-  }
-  return source
-    .split(/\n\s*\n+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function buildContinuationMessagesForMinimumLength(state, assistantText, runtimeUserName = "") {
   const baseMessages = buildReasonerHistoryMessages(state, runtimeUserName);
   return [
@@ -7308,6 +7007,114 @@ async function ensureMinimumAssistantLengthStreaming(
   };
 }
 
+function isConversationTurnReady(currentState) {
+  return Boolean(currentState?.aiSessionStarted && hasActiveConversationTarget(currentState));
+}
+
+async function generateOneShotConversationAssistant({ state: currentState, runtimeUserName, input }) {
+  const compressionBefore = normalizeContextCompressionState(currentState.contextCompression);
+  const content = await runReasonerHistoryConversationTurn(currentState, runtimeUserName, {
+    reloadFeedback: safeText(input?.reloadFeedback)
+  });
+  const modelProcessingResult = getLastModelProcessingResult(currentState);
+  const compressionNotice = !isCharacterCardCreationAssistantActive(currentState) &&
+    didContextCompressionAdvance(compressionBefore, currentState.contextCompression);
+  return {
+    content,
+    reasoningContent: "",
+    compressionNotice,
+    modelProcessingResult
+  };
+}
+
+async function generateStreamingConversationAssistant({ state: currentState, runtimeUserName, handlers = {} }) {
+  const onPhaseStatus = typeof handlers.onPhaseStatus === "function" ? handlers.onPhaseStatus : null;
+  const onReasoningDelta = typeof handlers.onReasoningDelta === "function" ? handlers.onReasoningDelta : null;
+  const onContentDelta = typeof handlers.onContentDelta === "function" ? handlers.onContentDelta : null;
+
+  if (isCharacterCardCreationAssistantActive(currentState)) {
+    onPhaseStatus?.("chat");
+    const streamed = await callChatApiCompletionStreamRaw({
+      messages: buildCharacterCardCreationAssistantMessages(currentState, runtimeUserName),
+      purpose: "character_card_creation_assistant_chat",
+      onReasoningDelta,
+      onContentDelta
+    });
+    return {
+      ...streamed,
+      compressionNotice: false,
+      modelProcessingResult: getLastModelProcessingResult(currentState)
+    };
+  }
+
+  const compressionBefore = normalizeContextCompressionState(currentState.contextCompression);
+  const processingResult = await ensureContextCompressionSummary(currentState, runtimeUserName, {
+    onStatus: onPhaseStatus,
+    phase: "before_reasoner",
+    returnDetails: true
+  });
+  const compressionNotice = didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
+  if (processingResult.skipReasoner) {
+    const completionText = formatModelProcessingCompletionMessage(processingResult.processedActions);
+    onContentDelta?.(completionText);
+    return {
+      content: completionText,
+      reasoningContent: "",
+      compressionNotice,
+      modelProcessingResult: processingResult
+    };
+  }
+
+  onPhaseStatus?.("chat");
+  const streamed = await callChatApiCompletionStreamRaw({
+    messages: buildReasonerHistoryMessages(currentState, runtimeUserName),
+    purpose: "reasoner_history_chat",
+    onReasoningDelta,
+    onContentDelta
+  });
+  return {
+    ...streamed,
+    compressionNotice,
+    modelProcessingResult: getLastModelProcessingResult(currentState)
+  };
+}
+
+function createConversationTurnDeps(options = {}) {
+  const streaming = Boolean(options.streaming);
+  const handlers = options.handlers || {};
+  return {
+    isSessionReady: isConversationTurnReady,
+    parseInput: parseRoleplayInput,
+    getPendingAssistantFeedbackForNextUser,
+    prependAssistantFeedbackPrompt,
+    ensureTurnExtra: ensureDiscordPlayerAssignmentForTurn,
+    captureCheckpoint: captureNarrativeCheckpoint,
+    createMessageRecord,
+    appendConversationMessage,
+    markPendingAssistantFeedbackApplied,
+    updateTimeTrackingFromMessage,
+    resolveRuntimeUserName: (currentState, turnExtra = {}) =>
+      resolveUserDisplayName(currentState.userProfile, turnExtra.discordUserName || ""),
+    attachTriggeredLorebooksToUserMessage,
+    generateAssistant: (context) => streaming
+      ? generateStreamingConversationAssistant({ ...context, handlers })
+      : generateOneShotConversationAssistant(context),
+    getLastModelProcessingResult,
+    shouldEnsureMinimumAssistantLength: ({ state: currentState, assistantText, modelProcessingResult }) => (
+      !isCharacterCardCreationAssistantActive(currentState) &&
+      !modelProcessingResult.skipReasoner &&
+      countVisibleCharacters(assistantText) < getMinimumReplyChars()
+    ),
+    ensureMinimumAssistantLength: ({ state: currentState, assistantText, runtimeUserName }) => streaming
+      ? ensureMinimumAssistantLengthStreaming(currentState, assistantText, runtimeUserName, handlers)
+      : ensureMinimumAssistantLength(currentState, assistantText, runtimeUserName),
+    finalizeAssistantOutputContent,
+    updateTimeTrackingAfterAssistantTurn,
+    updateCompressionAfterAssistantMessage,
+    saveState
+  };
+}
+
 async function runConversationTurnStreaming({
   content,
   source,
@@ -7317,125 +7124,27 @@ async function runConversationTurnStreaming({
   onContentDelta
 }) {
   return withStateLock(async () => {
-    if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。");
-    }
-
-    const parsedInput = parseRoleplayInput(content, state);
-    const storedUserContent = parsedInput.rawInput || safeText(content);
-    let modelUserContent = parsedInput.modelContent || storedUserContent;
-    const pendingAssistantFeedback = getPendingAssistantFeedbackForNextUser(state);
-    if (pendingAssistantFeedback) {
-      modelUserContent = prependAssistantFeedbackPrompt(modelUserContent, pendingAssistantFeedback.feedback);
-    }
-    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
-    const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
-    if (!storedUserContent || !modelUserContent) {
-      throw new Error("輸入不可空白。");
-    }
-
-    const userMessage = createMessageRecord({
-      role: "user",
-      content: storedUserContent,
-      source,
-      extra: {
-        ...turnExtra,
-        inputKind: parsedInput.inputKind,
-        baseModelContent: modelUserContent,
-        modelContent: modelUserContent,
-        assistantOutputFeedback: pendingAssistantFeedback?.feedback || "",
-        assistantOutputFeedbackPrompt: pendingAssistantFeedback?.promptPrefix || "",
-        assistantOutputFeedbackFromMessageId: pendingAssistantFeedback?.assistantMessage?.id || "",
-        keepTimeDirective: hasKeepTimeDirective(storedUserContent),
-        stateBeforeTurnSnapshot
-      }
-    });
-    appendConversationMessage(userMessage);
-    markPendingAssistantFeedbackApplied(pendingAssistantFeedback, userMessage);
-    updateTimeTrackingFromMessage(state, userMessage);
-
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
-    attachTriggeredLorebooksToUserMessage(userMessage, state, runtimeUserName);
-
-    let streamed;
-    let compressionNotice = false;
-    if (isCharacterCardCreationAssistantActive(state)) {
-      onPhaseStatus?.("chat");
-      streamed = await callChatApiCompletionStreamRaw({
-        messages: buildCharacterCardCreationAssistantMessages(state, runtimeUserName),
-        purpose: "character_card_creation_assistant_chat",
-        onReasoningDelta,
-        onContentDelta
-      });
-    } else {
-      const compressionBefore = normalizeContextCompressionState(state.contextCompression);
-      const processingResult = await ensureContextCompressionSummary(state, runtimeUserName, {
-        onStatus: onPhaseStatus,
-        phase: "before_reasoner",
-        returnDetails: true
-      });
-      compressionNotice = didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
-      if (processingResult.skipReasoner) {
-        const completionText = formatModelProcessingCompletionMessage(processingResult.processedActions);
-        onContentDelta?.(completionText);
-        streamed = {
-          content: completionText,
-          reasoningContent: ""
-        };
-      } else {
-        onPhaseStatus?.("chat");
-        streamed = await callChatApiCompletionStreamRaw({
-          messages: buildReasonerHistoryMessages(state, runtimeUserName),
-          purpose: "reasoner_history_chat",
+    const result = await runConversationTurnWorkflow(
+      createConversationTurnDeps({
+        streaming: true,
+        handlers: {
+          onPhaseStatus,
           onReasoningDelta,
           onContentDelta
-        });
+        }
+      }),
+      {
+        state,
+        content,
+        source,
+        extra,
+        keepTimeDirective: hasKeepTimeDirective(content),
+        emptyInputMessage: "輸入不可空白。",
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
       }
-    }
-
-    let assistantText = streamed.content;
-    let fullReasoning = streamed.reasoningContent;
-
-    const modelProcessingResult = getLastModelProcessingResult(state);
-    if (
-      !isCharacterCardCreationAssistantActive(state) &&
-      !modelProcessingResult.skipReasoner &&
-      countVisibleCharacters(assistantText) < getMinimumReplyChars()
-    ) {
-      const expanded = await ensureMinimumAssistantLengthStreaming(state, assistantText, runtimeUserName, {
-        onReasoningDelta,
-        onContentDelta
-      });
-      assistantText = expanded.content;
-      fullReasoning = [fullReasoning, expanded.reasoningContent].filter(Boolean).join("\n\n").trim();
-    }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
-      userInput: storedUserContent
-    });
-    assistantText = finalizedAssistantOutput.content;
-    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
-    const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const assistantMessage = createMessageRecord({
-      role: "assistant",
-      content: assistantText,
-      source,
-      extra: {
-        ...turnExtra,
-        reasoningContent: fullReasoning,
-        compressionNotice,
-        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
-        stateAfterTurnSnapshot
-      }
-    });
-    appendConversationMessage(assistantMessage);
-    if (!modelProcessingResult.skipReasoner) {
-      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
-    }
-    saveState(state);
-
+    );
     return {
-      assistantMessage
+      assistantMessage: result.assistantMessage
     };
   });
 }
@@ -7883,11 +7592,6 @@ function splitForDiscord(text, maxLength = 1800) {
   return output.length > 0 ? output : [""];
 }
 
-function detectRewriteMode(currentState) {
-  const userTurnCount = countConversationTurns(currentState);
-  return userTurnCount <= 1 ? "INIT" : "UPDATE";
-}
-
 function removeLatestAssistantTurnForReload(currentState) {
   if (!Array.isArray(currentState.conversation) || currentState.conversation.length === 0) {
     throw new Error("目前沒有可重生成的 AI 對話。");
@@ -7936,46 +7640,27 @@ async function regenerateLatestAssistantReply({
     const latestUserIndex = state.conversation.findIndex((item) => item?.id === latestUser?.id);
     restoreNarrativeStateForReplay(state, latestUserIndex);
     updateTimeTrackingFromMessage(state, latestUser);
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, extra.discordUserName || "");
-    const options = { reloadFeedback };
-    const compressionBefore = normalizeContextCompressionState(state.contextCompression);
-    let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName, options);
-    const modelProcessingResult = getLastModelProcessingResult(state);
-    const compressionNotice = !isCharacterCardCreationAssistantActive(state)
-      && didContextCompressionAdvance(compressionBefore, state.contextCompression);
-
-    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
-      assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
-    }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
-      userInput: latestUser?.content
-    });
-    assistantText = finalizedAssistantOutput.content;
-    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, latestUser?.content);
-    const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const assistantMessage = createMessageRecord({
-      role: "assistant",
-      content: assistantText,
-      source,
-      extra: {
-        ...(removedAssistant?.extra || {}),
-        ...extra,
-        regenerated: true,
+    const result = await runConversationTurnWorkflow(
+      createConversationTurnDeps(),
+      {
+        state,
+        existingUserMessage: latestUser,
+        source,
+        extra,
+        resolveTurnExtra: false,
+        applyPendingAssistantFeedback: false,
         reloadFeedback: safeText(reloadFeedback),
-        compressionNotice,
-        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
-        stateAfterTurnSnapshot
+        assistantExtra: {
+          ...(removedAssistant?.extra || {}),
+          regenerated: true,
+          reloadFeedback: safeText(reloadFeedback)
+        },
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
       }
-    });
-    appendConversationMessage(assistantMessage);
-    if (!modelProcessingResult.skipReasoner) {
-      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
-    }
-    saveState(state);
+    );
 
     return {
-      assistantMessage
+      assistantMessage: result.assistantMessage
     };
   });
 }
@@ -8015,71 +7700,29 @@ async function replayConversationFromMessageNumber({
     restoreNarrativeStateForReplay(state, normalizedMessageNumber - 1);
     state.conversation = state.conversation.slice(0, normalizedMessageNumber - 1);
     syncTurnStateFromConversation(state);
-    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
-    const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const parsedInput = parseRoleplayInput(storedUserContent, state);
-    const modelUserContent = parsedInput.modelContent || storedUserContent;
-    const userMessage = createMessageRecord({
-      role: "user",
-      content: storedUserContent,
-      source,
-      extra: {
-        ...turnExtra,
-        inputKind: parsedInput.inputKind,
-        baseModelContent: modelUserContent,
-        modelContent: modelUserContent,
+    const result = await runConversationTurnWorkflow(
+      createConversationTurnDeps(),
+      {
+        state,
+        content: storedUserContent,
+        source,
+        extra,
+        applyPendingAssistantFeedback: false,
         keepTimeDirective: hasKeepTimeDirective(storedUserContent),
-        replayFromMessageNumber: normalizedMessageNumber,
-        stateBeforeTurnSnapshot
+        userExtra: {
+          replayFromMessageNumber: normalizedMessageNumber
+        },
+        assistantExtra: {
+          replayFromMessageNumber: normalizedMessageNumber,
+          replayGenerated: true
+        },
+        emptyInputMessage: "重寫內容不可空白。",
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
       }
-    });
-    appendConversationMessage(userMessage);
-    updateTimeTrackingFromMessage(state, userMessage);
-    attachTriggeredLorebooksToUserMessage(
-      userMessage,
-      state,
-      resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "")
     );
 
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
-    const compressionBefore = normalizeContextCompressionState(state.contextCompression);
-    let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName);
-    const modelProcessingResult = getLastModelProcessingResult(state);
-    const compressionNotice = !isCharacterCardCreationAssistantActive(state)
-      && didContextCompressionAdvance(compressionBefore, state.contextCompression);
-
-    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
-      assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
-    }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
-      userInput: storedUserContent
-    });
-    assistantText = finalizedAssistantOutput.content;
-    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
-    const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const assistantMessage = createMessageRecord({
-      role: "assistant",
-      content: assistantText,
-      source,
-      extra: {
-        ...turnExtra,
-        replayFromMessageNumber: normalizedMessageNumber,
-        replayGenerated: true,
-        compressionNotice,
-        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
-        stateAfterTurnSnapshot
-      }
-    });
-    appendConversationMessage(assistantMessage);
-    if (!modelProcessingResult.skipReasoner) {
-      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
-    }
-    saveState(state);
-
     return {
-      assistantMessage,
+      assistantMessage: result.assistantMessage,
       backupSession: state.savedSessions[state.savedSessions.length - 1] || null
     };
   });
@@ -8124,72 +7767,30 @@ async function replayConversationFromDiscordMessageId({
     restoreNarrativeStateForReplay(state, targetIndex);
     state.conversation = state.conversation.slice(0, targetIndex);
     syncTurnStateFromConversation(state);
-    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
-    const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const parsedInput = parseRoleplayInput(storedUserContent, state);
-    const modelUserContent = parsedInput.modelContent || storedUserContent;
-
-    const userMessage = createMessageRecord({
-      role: "user",
-      content: storedUserContent,
-      source,
-      extra: {
-        ...turnExtra,
-        inputKind: parsedInput.inputKind,
-        baseModelContent: modelUserContent,
-        modelContent: modelUserContent,
+    const result = await runConversationTurnWorkflow(
+      createConversationTurnDeps(),
+      {
+        state,
+        content: storedUserContent,
+        source,
+        extra,
+        applyPendingAssistantFeedback: false,
         keepTimeDirective: hasKeepTimeDirective(storedUserContent),
-        discordMessageId: normalizedMessageId,
-        replayFromDiscordEdit: true,
-        stateBeforeTurnSnapshot
+        userExtra: {
+          discordMessageId: normalizedMessageId,
+          replayFromDiscordEdit: true
+        },
+        assistantExtra: {
+          discordMessageId: normalizedMessageId,
+          replayFromDiscordEdit: true
+        },
+        emptyInputMessage: "重算內容不可空白。",
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
       }
-    });
-    appendConversationMessage(userMessage);
-    updateTimeTrackingFromMessage(state, userMessage);
-    attachTriggeredLorebooksToUserMessage(
-      userMessage,
-      state,
-      resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "")
     );
 
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
-    const compressionBefore = normalizeContextCompressionState(state.contextCompression);
-    let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName);
-    const modelProcessingResult = getLastModelProcessingResult(state);
-    const compressionNotice = !isCharacterCardCreationAssistantActive(state)
-      && didContextCompressionAdvance(compressionBefore, state.contextCompression);
-    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
-      assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
-    }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
-      userInput: storedUserContent
-    });
-    assistantText = finalizedAssistantOutput.content;
-    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
-    const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const assistantMessage = createMessageRecord({
-      role: "assistant",
-      content: assistantText,
-      source,
-      extra: {
-        ...turnExtra,
-        discordMessageId: normalizedMessageId,
-        replayFromDiscordEdit: true,
-        compressionNotice,
-        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
-        stateAfterTurnSnapshot
-      }
-    });
-    appendConversationMessage(assistantMessage);
-    if (!modelProcessingResult.skipReasoner) {
-      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
-    }
-    saveState(state);
-
     return {
-      assistantMessage,
+      assistantMessage: result.assistantMessage,
       removedDiscordReplyMessageIds,
       backupSession: state.savedSessions[state.savedSessions.length - 1] || null
     };
@@ -8198,80 +7799,20 @@ async function replayConversationFromDiscordMessageId({
 
 async function runConversationTurn({ content, source, extra = {} }) {
   return withStateLock(async () => {
-    if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。");
-    }
-
-    const parsedInput = parseRoleplayInput(content, state);
-    const storedUserContent = parsedInput.rawInput || safeText(content);
-    let modelUserContent = parsedInput.modelContent || storedUserContent;
-    const pendingAssistantFeedback = getPendingAssistantFeedbackForNextUser(state);
-    if (pendingAssistantFeedback) {
-      modelUserContent = prependAssistantFeedbackPrompt(modelUserContent, pendingAssistantFeedback.feedback);
-    }
-    const turnExtra = ensureDiscordPlayerAssignmentForTurn(state, extra);
-    const stateBeforeTurnSnapshot = captureNarrativeCheckpoint(state);
-    if (!storedUserContent || !modelUserContent) {
-      throw new Error("輸入不可空白。");
-    }
-
-    const userMessage = createMessageRecord({
-      role: "user",
-      content: storedUserContent,
-      source,
-      extra: {
-        ...turnExtra,
-        inputKind: parsedInput.inputKind,
-        baseModelContent: modelUserContent,
-        modelContent: modelUserContent,
-        assistantOutputFeedback: pendingAssistantFeedback?.feedback || "",
-        assistantOutputFeedbackPrompt: pendingAssistantFeedback?.promptPrefix || "",
-        assistantOutputFeedbackFromMessageId: pendingAssistantFeedback?.assistantMessage?.id || "",
-        keepTimeDirective: hasKeepTimeDirective(storedUserContent),
-        stateBeforeTurnSnapshot
+    const result = await runConversationTurnWorkflow(
+      createConversationTurnDeps(),
+      {
+        state,
+        content,
+        source,
+        extra,
+        keepTimeDirective: hasKeepTimeDirective(content),
+        emptyInputMessage: "輸入不可空白。",
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
       }
-    });
-    appendConversationMessage(userMessage);
-    markPendingAssistantFeedbackApplied(pendingAssistantFeedback, userMessage);
-    updateTimeTrackingFromMessage(state, userMessage);
-
-    const runtimeUserName = resolveUserDisplayName(state.userProfile, turnExtra.discordUserName || "");
-    attachTriggeredLorebooksToUserMessage(userMessage, state, runtimeUserName);
-    const compressionBefore = normalizeContextCompressionState(state.contextCompression);
-    let assistantText = await runReasonerHistoryConversationTurn(state, runtimeUserName);
-    const modelProcessingResult = getLastModelProcessingResult(state);
-    const compressionNotice = !isCharacterCardCreationAssistantActive(state)
-      && didContextCompressionAdvance(compressionBefore, state.contextCompression);
-
-    if (!isCharacterCardCreationAssistantActive(state) && !modelProcessingResult.skipReasoner) {
-      assistantText = await ensureMinimumAssistantLength(state, assistantText, runtimeUserName);
-    }
-    const finalizedAssistantOutput = finalizeAssistantOutputContent(assistantText, {
-      userInput: storedUserContent
-    });
-    assistantText = finalizedAssistantOutput.content;
-    const timeTrackingUpdate = updateTimeTrackingAfterAssistantTurn(state, assistantText, storedUserContent);
-    const stateAfterTurnSnapshot = captureNarrativeCheckpoint(state);
-
-    const assistantMessage = createMessageRecord({
-      role: "assistant",
-      content: assistantText,
-      source,
-      extra: {
-        ...turnExtra,
-        compressionNotice,
-        autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
-        stateAfterTurnSnapshot
-      }
-    });
-    appendConversationMessage(assistantMessage);
-    if (!modelProcessingResult.skipReasoner) {
-      await updateCompressionAfterAssistantMessage(state, runtimeUserName, assistantMessage);
-    }
-    saveState(state);
-
+    );
     return {
-      assistantMessage
+      assistantMessage: result.assistantMessage
     };
   });
 }

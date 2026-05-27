@@ -1053,14 +1053,6 @@ function normalizeLorebookProbability(value, fallback = 100) {
   return Math.max(0, Math.min(100, Math.floor(normalized)));
 }
 
-function isMultiRoleCard(card) {
-  return normalizeRoleCardMode(card?.mode) === "multi";
-}
-
-function isNoRoleCard(card) {
-  return normalizeRoleCardMode(card?.mode) === "no_role";
-}
-
 function getRoleCardModeLabel(card) {
   return getPromptModeDisplayName(normalizeRoleCardMode(card?.mode));
 }
@@ -3336,14 +3328,6 @@ function getChatCommandMenuItemByForm(formName = "") {
   return CHAT_COMMAND_MENU_ITEMS.find((item) => item.form === formName) || null;
 }
 
-function getChatCommandMenuItemByCommand(commandName = "") {
-  const normalized = String(commandName || "").trim().replace(/^\//u, "").toLowerCase();
-  return CHAT_COMMAND_MENU_ITEMS.find((item) => {
-    const itemCommand = String(item.command || "").trim().replace(/^\//u, "").toLowerCase();
-    return itemCommand === normalized;
-  }) || null;
-}
-
 function getActiveChatCommandField(name = "") {
   if (!activeChatCommandForm) {
     return null;
@@ -3751,15 +3735,6 @@ function closeChatCommandMenu() {
     el.chatCommandMenu.innerHTML = "";
   }
   el.chatPlusButton?.setAttribute("aria-expanded", "false");
-}
-
-function toggleChatCommandMenu() {
-  if (chatCommandMenuOpen) {
-    closeChatCommandMenu();
-    return;
-  }
-  selectedChatCommandIndex = 0;
-  openChatCommandMenu({ showAll: true });
 }
 
 function insertChatCommandTemplate(text = "") {
@@ -4769,15 +4744,6 @@ function getMessageAuthorInfo(message = {}, state = appState) {
     avatar: display.userAvatar,
     badge: message.source === "discord" ? "Discord" : ""
   };
-}
-
-function getMessageDisplayText(message = {}) {
-  const autoTimeWarning = typeof message.autoTimeWarning === "string"
-    ? message.autoTimeWarning.trim()
-    : typeof message.extra?.autoTimeWarning === "string"
-      ? message.extra.autoTimeWarning.trim()
-      : "";
-  return [message.content, autoTimeWarning].filter(Boolean).join("\n\n");
 }
 
 function getMessageStreamingReasoningText(message = {}) {
