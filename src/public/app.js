@@ -4902,10 +4902,13 @@ async function setAssistantMessageFeedback(messageId = "", feedback = "") {
   if (!messageId || !normalizedFeedback) {
     return;
   }
+  const currentMessage = (appState?.conversation || []).find((item) => item?.id === messageId);
+  const currentFeedback = getMessageFeedbackType(currentMessage || {});
+  const shouldClear = currentFeedback === normalizedFeedback;
   try {
     const payload = await request(`/api/messages/${messageId}/feedback`, {
       method: "POST",
-      body: JSON.stringify({ feedback: normalizedFeedback })
+      body: JSON.stringify(shouldClear ? { feedback: "clear" } : { feedback: normalizedFeedback })
     });
     if (payload?.state) {
       appState = payload.state;
@@ -4915,6 +4918,10 @@ async function setAssistantMessageFeedback(messageId = "", feedback = "") {
       refreshAssistantSelector();
     } else {
       await refresh();
+    }
+    if (payload?.cleared) {
+      showToast("已取消表情標記");
+      return;
     }
     showToast(
       payload?.pendingForNextUser

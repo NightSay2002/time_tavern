@@ -7594,6 +7594,11 @@ function normalizeAssistantFeedbackType(value = "") {
   return "";
 }
 
+function isClearAssistantFeedbackValue(value = "") {
+  const normalized = safeText(value).toLowerCase().replace(/\s+/g, "");
+  return ["clear", "none", "off", "cancel", "remove", "取消", "清除"].includes(normalized);
+}
+
 function getAssistantFeedbackPromptPrefix(feedbackType = "") {
   return ASSISTANT_FEEDBACK_PROMPT_PREFIXES[normalizeAssistantFeedbackType(feedbackType)] || "";
 }
@@ -7663,6 +7668,32 @@ function applyFeedbackPrefixToUserMessage(userMessage, feedbackType = "") {
   return userMessage;
 }
 
+function clearFeedbackPrefixFromUserMessage(userMessage) {
+  if (!userMessage || userMessage.role !== "user") {
+    return null;
+  }
+  const fallbackBase = getUserBaseModelContent(userMessage) || safeText(userMessage.content);
+  userMessage.baseModelContent = stripAssistantFeedbackPromptPrefixes(
+    safeText(userMessage.baseModelContent) || fallbackBase
+  );
+  userMessage.modelContent = stripAssistantFeedbackPromptPrefixes(
+    safeText(userMessage.modelContent || userMessage.extra?.modelContent) || userMessage.baseModelContent
+  );
+  userMessage.assistantOutputFeedback = "";
+  userMessage.assistantOutputFeedbackPrompt = "";
+  userMessage.feedbackUpdatedAt = nowIso();
+
+  if (userMessage.extra && typeof userMessage.extra === "object") {
+    userMessage.extra.baseModelContent = userMessage.baseModelContent;
+    userMessage.extra.modelContent = userMessage.modelContent;
+    userMessage.extra.assistantOutputFeedback = "";
+    userMessage.extra.assistantOutputFeedbackPrompt = "";
+    userMessage.extra.feedbackUpdatedAt = userMessage.feedbackUpdatedAt;
+  }
+
+  return userMessage;
+}
+
 function getPendingAssistantFeedbackForNextUser(currentState) {
   const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
@@ -7697,11 +7728,8 @@ function markPendingAssistantFeedbackApplied(pendingFeedback = null, userMessage
 }
 
 function applyAssistantFeedbackToConversation(currentState, { assistantMessageId = "", feedback = "", source = "", userId = "", userName = "" } = {}) {
+  const rawFeedback = safeText(feedback);
   const normalizedFeedback = normalizeAssistantFeedbackType(feedback);
-  if (!normalizedFeedback) {
-    return { ok: false, status: 400, error: "未知的回饋類型。" };
-  }
-
   const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
   const assistantMessage = conversation.find((item) => item?.id === assistantMessageId);
   if (!assistantMessage) {
@@ -7709,6 +7737,42 @@ function applyAssistantFeedbackToConversation(currentState, { assistantMessageId
   }
   if (assistantMessage.role !== "assistant") {
     return { ok: false, status: 400, error: "僅允許標記 AI 正文輸出" };
+  }
+
+  const shouldClear = isClearAssistantFeedbackValue(rawFeedback) ||
+    (normalizedFeedback && normalizeAssistantFeedbackType(assistantMessage.feedback) === normalizedFeedback);
+  if (shouldClear) {
+    const appliedUserMessageId = safeText(assistantMessage.feedbackAppliedToUserMessageId);
+    const appliedUserMessage = appliedUserMessageId
+      ? conversation.find((item) => item?.id === appliedUserMessageId && item.role === "user")
+      : null;
+    if (appliedUserMessage) {
+      clearFeedbackPrefixFromUserMessage(appliedUserMessage);
+    }
+    assistantMessage.feedback = "";
+    assistantMessage.feedbackPrompt = "";
+    assistantMessage.feedbackSource = safeText(source);
+    assistantMessage.feedbackUserId = safeText(userId);
+    assistantMessage.feedbackUserName = safeText(userName);
+    assistantMessage.feedbackPendingForNextUser = false;
+    assistantMessage.feedbackAppliedToUserMessageId = "";
+    assistantMessage.feedbackAppliedAt = "";
+    assistantMessage.feedbackUpdatedAt = nowIso();
+    assistantMessage.updatedAt = assistantMessage.feedbackUpdatedAt;
+    saveState(currentState);
+    return {
+      ok: true,
+      assistantMessage,
+      userMessage: appliedUserMessage,
+      feedback: "",
+      promptPrefix: "",
+      pendingForNextUser: false,
+      cleared: true
+    };
+  }
+
+  if (!normalizedFeedback) {
+    return { ok: false, status: 400, error: "未知的回饋類型。" };
   }
 
   const promptPrefix = getAssistantFeedbackPromptPrefix(normalizedFeedback);
@@ -8831,6 +8895,7 @@ const server = http.createServer(async (req, res) => {
         userMessage: result.userMessage,
         feedback: result.feedback,
         pendingForNextUser: result.pendingForNextUser,
+        cleared: Boolean(result.cleared),
         state: statePayload(state)
       });
       return;
@@ -9309,6 +9374,31 @@ async function applyDiscordReactionFeedback(reaction, user) {
   return applyAssistantFeedbackToConversation(state, {
     assistantMessageId: assistantMessage.id,
     feedback,
+    source: "discord",
+    userId: user?.id,
+    userName: user?.username || user?.globalName || ""
+  });
+}
+
+async function clearDiscordReactionFeedback(reaction, user) {
+  const feedback = normalizeAssistantFeedbackType(reaction?.emoji?.name || reaction?.emoji?.toString?.() || "");
+  if (!feedback || user?.bot) {
+    return null;
+  }
+
+  const discordMessageId = safeText(reaction?.message?.id);
+  const assistantMessage = findAssistantMessageByDiscordReplyId(state, discordMessageId);
+  if (!assistantMessage || normalizeAssistantFeedbackType(assistantMessage.feedback) !== feedback) {
+    return null;
+  }
+  const feedbackUserId = safeText(assistantMessage.feedbackUserId);
+  if (feedbackUserId && feedbackUserId !== safeText(user?.id)) {
+    return null;
+  }
+
+  return applyAssistantFeedbackToConversation(state, {
+    assistantMessageId: assistantMessage.id,
+    feedback: "clear",
     source: "discord",
     userId: user?.id,
     userName: user?.username || user?.globalName || ""
@@ -10428,6 +10518,19 @@ function setupDiscordBot() {
       await applyDiscordReactionFeedback(fullReaction, fullUser);
     } catch (error) {
       console.warn(`Discord 回饋反應處理失敗：${error.message || error}`);
+    }
+  });
+
+  discordClient.on("messageReactionRemove", async (reaction, user) => {
+    try {
+      const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+      const fullUser = user?.partial ? await user.fetch() : user;
+      if (fullUser?.bot) {
+        return;
+      }
+      await clearDiscordReactionFeedback(fullReaction, fullUser);
+    } catch (error) {
+      console.warn(`Discord 回饋反應取消處理失敗：${error.message || error}`);
     }
   });
 
