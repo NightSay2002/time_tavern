@@ -20,6 +20,7 @@
   editAiOutputBtn: document.getElementById("editAiOutputBtn"),
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
   timeTrackingSettingsBtn: document.getElementById("timeTrackingSettingsBtn"),
+  novelAiImageBtn: document.getElementById("novelAiImageBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
   useDefaultsBtn: document.getElementById("useDefaultsBtn"),
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
@@ -406,6 +407,14 @@ const CHAT_COMMAND_MENU_ITEMS = [
     action: "timeSettings"
   },
   {
+    id: "novelai-image",
+    command: "NovelAI 跑圖",
+    title: "NovelAI 跑圖",
+    description: "打開 NovelAI 圖像生成、歷史與收藏相簿。",
+    hint: "面板",
+    action: "novelAiImage"
+  },
+  {
     id: "env-settings",
     command: "環境設定",
     title: "環境設定",
@@ -784,6 +793,40 @@ const ENV_FIELD_GROUPS = [
     ]
   },
   {
+    title: "NovelAI 跑圖",
+    description: "NovelAI API Token 只會存在本地 .env，由後端代為呼叫圖片 API。",
+    fields: [
+      {
+        key: "NOVELAI_API_TOKEN",
+        label: "NovelAI API Token",
+        type: "password",
+        autocomplete: "off",
+        help: "填入 NovelAI Persistent API Token；不會保存到 GitHub 預設。"
+      },
+      {
+        key: "NOVELAI_IMAGE_API_BASE_URL",
+        label: "圖片 API Base URL",
+        type: "text",
+        placeholder: "https://image.novelai.net",
+        help: "一般不用改。圖片生成會呼叫 /ai/generate-image。"
+      },
+      {
+        key: "NOVELAI_PRIMARY_API_BASE_URL",
+        label: "主 API Base URL",
+        type: "text",
+        placeholder: "https://api.novelai.net",
+        help: "一般不用改。餘額會從 NovelAI 訂閱資料讀取。"
+      },
+      {
+        key: "NOVELAI_REQUEST_TIMEOUT_MS",
+        label: "NovelAI 請求逾時",
+        type: "number",
+        placeholder: "600000",
+        help: "單位毫秒。生成大圖時可以保持 600000 或更高。"
+      }
+    ]
+  },
+  {
     title: "回覆行為",
     fields: [
       {
@@ -809,7 +852,8 @@ const ENV_ALIAS_KEYS = {
   WEB_AI_NAME_TEMPLATE: ["CHAT_AI_NAME_TEMPLATE"],
   WEB_USER_AVATAR_IMAGE: ["WEB_USER_AVATAR_URL", "CHAT_USER_AVATAR_URL"],
   WEB_AI_AVATAR_IMAGE: ["WEB_AI_AVATAR_URL", "CHAT_AI_AVATAR_URL"],
-  WEB_BACKGROUND_IMAGE: ["WEB_BACKGROUND_URL"]
+  WEB_BACKGROUND_IMAGE: ["WEB_BACKGROUND_URL"],
+  NOVELAI_API_TOKEN: ["NOVELAI_ACCESS_TOKEN", "NOVELAI_TOKEN", "NAI_API_TOKEN"]
 };
 const ENV_KNOWN_KEYS = new Set(ENV_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key)));
 Object.values(ENV_ALIAS_KEYS).flat().forEach((key) => ENV_KNOWN_KEYS.add(key));
@@ -3784,6 +3828,10 @@ async function startCurrentChatTarget() {
   showToast("請先選擇要開始的角色卡");
 }
 
+function openNovelAiDialog() {
+  window.location.href = "/novelai.html";
+}
+
 async function stopActiveChatGeneration() {
   const payload = await request("/api/chat/stop", { method: "POST" });
   showToast(payload?.message || "已送出停止要求");
@@ -3936,6 +3984,10 @@ async function runChatCommandAction(action = "", args = []) {
   }
   if (action === "timeSettings") {
     await openTimeTrackingDialog();
+    return;
+  }
+  if (action === "novelAiImage") {
+    await openNovelAiDialog();
     return;
   }
   if (action === "envSettings") {
@@ -7884,6 +7936,12 @@ function bindEvents() {
   if (el.timeTrackingSettingsBtn) {
     el.timeTrackingSettingsBtn.addEventListener("click", async () => {
       await openTimeTrackingDialog();
+    });
+  }
+
+  if (el.novelAiImageBtn) {
+    el.novelAiImageBtn.addEventListener("click", () => {
+      openNovelAiDialog();
     });
   }
 

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import os from "node:os";
+import zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCommandOptionType, Client, GatewayIntentBits, MessageFlags, Partials } from "discord.js";
@@ -22,6 +23,8 @@ const APP_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
+const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
+const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
 const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?:$|_|\d)|(?:^|_)TOKEN(?:$|\d)|(?:^|_)API_KEY(?:$|\d)/iu;
 const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "DISCORD_BOT_TOKEN",
@@ -46,6 +49,9 @@ const CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE = 0.9;
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
+const NOVELAI_IMAGE_API_DEFAULT_BASE_URL = "https://image.novelai.net";
+const NOVELAI_PRIMARY_API_DEFAULT_BASE_URL = "https://api.novelai.net";
+const NOVELAI_REQUEST_TIMEOUT_MS = envNumber("NOVELAI_REQUEST_TIMEOUT_MS", 600000);
 const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
 const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
@@ -1881,6 +1887,773 @@ function deleteRoleCard(currentState, cardId) {
   return deleted;
 }
 
+function normalizePlainText(input, fallback = "") {
+  if (typeof input === "string") {
+    return input.trim();
+  }
+  if (input === null || input === undefined) {
+    return fallback;
+  }
+  return String(input).trim();
+}
+
+function clampNumber(value, fallback, min, max) {
+  const number = Number(value);
+  const result = Number.isFinite(number) ? number : fallback;
+  return Math.min(max, Math.max(min, result));
+}
+
+function clampInteger(value, fallback, min, max) {
+  return Math.floor(clampNumber(value, fallback, min, max));
+}
+
+function stripDataUrlPrefix(value = "") {
+  const text = normalizePlainText(value);
+  const match = text.match(/^data:[^;]+;base64,(.+)$/iu);
+  return match ? match[1] : text;
+}
+
+function parseImageDataUrl(dataUrl = "") {
+  const match = normalizePlainText(dataUrl).match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/iu);
+  if (!match) {
+    return null;
+  }
+  return {
+    mimeType: match[1].toLowerCase(),
+    buffer: Buffer.from(match[2].replace(/\s+/g, ""), "base64")
+  };
+}
+
+function getNovelAiToken() {
+  return envFirstText([
+    "NOVELAI_API_TOKEN",
+    "NOVELAI_ACCESS_TOKEN",
+    "NOVELAI_TOKEN",
+    "NAI_API_TOKEN"
+  ], "");
+}
+
+function getNovelAiImageApiBaseUrl() {
+  return envFirstText(["NOVELAI_IMAGE_API_BASE_URL"], NOVELAI_IMAGE_API_DEFAULT_BASE_URL).replace(/\/+$/u, "");
+}
+
+function getNovelAiPrimaryApiBaseUrl() {
+  return envFirstText(["NOVELAI_PRIMARY_API_BASE_URL"], NOVELAI_PRIMARY_API_DEFAULT_BASE_URL).replace(/\/+$/u, "");
+}
+
+function getNovelAiAuthHeaders() {
+  const token = getNovelAiToken();
+  if (!token) {
+    throw new Error("尚未在環境設定加入 NOVELAI_API_TOKEN。");
+  }
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    Origin: "https://novelai.net",
+    Referer: "https://novelai.net/"
+  };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = NOVELAI_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readNovelAiErrorResponse(response) {
+  const text = await response.text().catch(() => "");
+  if (!text) {
+    return `NovelAI 請求失敗 (${response.status})。`;
+  }
+  try {
+    const data = JSON.parse(text);
+    return data?.message || data?.error || data?.detail || text;
+  } catch {
+    return text;
+  }
+}
+
+async function fetchNovelAiJson(pathname, options = {}) {
+  const response = await fetchWithTimeout(`${getNovelAiPrimaryApiBaseUrl()}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      ...getNovelAiAuthHeaders(),
+      ...(options.headers || {})
+    },
+    body: options.body
+  });
+  if (!response.ok) {
+    throw new Error(await readNovelAiErrorResponse(response));
+  }
+  return response.json();
+}
+
+async function getNovelAiStatus() {
+  const configured = Boolean(getNovelAiToken());
+  if (!configured) {
+    return {
+      configured: false,
+      ok: false,
+      error: "尚未設定 NOVELAI_API_TOKEN。"
+    };
+  }
+
+  try {
+    let subscription;
+    try {
+      subscription = await fetchNovelAiJson("/user/subscription");
+    } catch {
+      const userData = await fetchNovelAiJson("/user/data");
+      subscription = userData?.subscription || userData;
+    }
+    const trainingStepsLeft = subscription?.trainingStepsLeft || {};
+    const fixed = Number(trainingStepsLeft.fixedTrainingStepsLeft || 0);
+    const purchased = Number(trainingStepsLeft.purchasedTrainingSteps || 0);
+    return {
+      configured: true,
+      ok: true,
+      remainingAnlas: (Number.isFinite(fixed) ? fixed : 0) + (Number.isFinite(purchased) ? purchased : 0),
+      fixedAnlas: Number.isFinite(fixed) ? fixed : 0,
+      purchasedAnlas: Number.isFinite(purchased) ? purchased : 0,
+      tier: Number(subscription?.tier || 0) || 0,
+      active: Boolean(subscription?.active),
+      expiresAt: subscription?.expiresAt || null,
+      perks: subscription?.perks || {}
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      ok: false,
+      error: error.message || "無法取得 NovelAI 餘額。"
+    };
+  }
+}
+
+function normalizeNovelAiCharacters(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => {
+      const prompt = normalizePlainText(item?.prompt || item?.char_caption || item?.caption);
+      const negativePrompt = normalizePlainText(item?.negativePrompt || item?.negative_prompt || item?.uc);
+      const x = Number(item?.x ?? item?.center?.x ?? item?.centers?.[0]?.x);
+      const y = Number(item?.y ?? item?.center?.y ?? item?.centers?.[0]?.y);
+      return {
+        id: normalizePlainText(item?.id) || `character_${index + 1}`,
+        name: normalizePlainText(item?.name) || `Character ${index + 1}`,
+        prompt,
+        negativePrompt,
+        x: Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0.5,
+        y: Number.isFinite(y) ? Math.min(1, Math.max(0, y)) : 0.5
+      };
+    })
+    .filter((item) => item.prompt || item.negativePrompt);
+}
+
+function normalizeNovelAiReferenceImages(value = [], defaults = {}) {
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => {
+      const image = stripDataUrlPrefix(item?.image || item?.dataUrl || item?.baseImage);
+      return {
+        id: normalizePlainText(item?.id) || `reference_${index + 1}`,
+        name: normalizePlainText(item?.name || item?.fileName) || `Reference ${index + 1}`,
+        image,
+        enabled: item?.enabled !== false,
+        strength: clampNumber(
+          item?.strength ?? item?.referenceStrength,
+          defaults.strength ?? 0.6,
+          defaults.strengthMin ?? 0,
+          defaults.strengthMax ?? 1
+        ),
+        informationExtracted: clampNumber(
+          item?.informationExtracted ?? item?.information_extracted,
+          defaults.informationExtracted ?? 1,
+          0,
+          1
+        ),
+        fidelity: clampNumber(
+          item?.fidelity,
+          defaults.fidelity ?? 1,
+          defaults.fidelityMin ?? -1,
+          defaults.fidelityMax ?? 2
+        )
+      };
+    })
+    .filter((item) => item.image);
+}
+
+function isNovelAiV4Model(model = "") {
+  return /nai-diffusion-4/u.test(normalizePlainText(model));
+}
+
+function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}) {
+  const charCaptions = characters
+    .map((character) => {
+      const caption = normalizePlainText(options.negative ? character.negativePrompt : character.prompt);
+      if (!caption) {
+        return null;
+      }
+      return {
+        char_caption: caption,
+        centers: [
+          {
+            x: Number.isFinite(character.x) ? character.x : 0.5,
+            y: Number.isFinite(character.y) ? character.y : 0.5
+          }
+        ]
+      };
+    })
+    .filter(Boolean);
+  return {
+    caption: {
+      base_caption: baseCaption,
+      char_captions: charCaptions
+    },
+    use_coords: charCaptions.length > 0,
+    use_order: charCaptions.length > 0,
+    legacy_uc: false
+  };
+}
+
+function normalizeNovelAiGenerationRequest(input = {}) {
+  const source = input?.settings && typeof input.settings === "object" ? input.settings : input || {};
+  const model = normalizePlainText(source.model) || "nai-diffusion-4-5-full";
+  const prompt = normalizePlainText(source.prompt || source.input);
+  const negativePrompt = normalizePlainText(source.negativePrompt || source.negative_prompt);
+  const width = clampInteger(source.width, 1024, 64, 2048);
+  const height = clampInteger(source.height, 1024, 64, 2048);
+  const steps = clampInteger(source.steps, 28, 1, 50);
+  const samples = clampInteger(source.samples ?? source.n_samples, 1, 1, 6);
+  const scale = clampNumber(source.scale, 5, 0, 20);
+  const cfgRescale = clampNumber(source.cfgRescale ?? source.cfg_rescale, 0, 0, 1);
+  const ucPreset = clampInteger(source.ucPreset, 0, 0, 99);
+  const sampler = normalizePlainText(source.sampler) || "k_euler_ancestral";
+  const noiseSchedule = normalizePlainText(source.noiseSchedule || source.noise_schedule) || "karras";
+  const imageFormat = normalizePlainText(source.imageFormat || source.image_format) === "webp" ? "webp" : "png";
+  const rawSeed = Number(source.seed);
+  const seed = Number.isFinite(rawSeed) && rawSeed >= 0
+    ? Math.floor(rawSeed) >>> 0
+    : Math.floor(Math.random() * 0xffffffff) >>> 0;
+  const baseImage = stripDataUrlPrefix(source.baseImage || source.image);
+  const strength = clampNumber(source.strength, 0.7, 0, 1);
+  const noise = clampNumber(source.noise, 0, 0, 1);
+  const characters = normalizeNovelAiCharacters(source.characters || source.characterPrompts);
+  const vibeSource = source.vibeTransfer || source.vibe_transfer || {};
+  const preciseSource = source.preciseReference || source.precise_reference || {};
+  const vibeTransfer = {
+    enabled: vibeSource.enabled !== false,
+    strength: clampNumber(vibeSource.strength ?? source.referenceStrength, 0.6, 0, 1),
+    informationExtracted: clampNumber(
+      vibeSource.informationExtracted ?? vibeSource.information_extracted ?? source.referenceInformationExtracted,
+      1,
+      0,
+      1
+    ),
+    images: normalizeNovelAiReferenceImages(vibeSource.images || source.vibeImages, {
+      strength: vibeSource.strength ?? source.referenceStrength ?? 0.6,
+      informationExtracted: vibeSource.informationExtracted ?? vibeSource.information_extracted ?? source.referenceInformationExtracted ?? 1,
+      strengthMin: 0,
+      strengthMax: 1
+    })
+  };
+  const preciseReference = {
+    enabled: preciseSource.enabled !== false,
+    strength: clampNumber(preciseSource.strength, 1, -1, 2),
+    fidelity: clampNumber(preciseSource.fidelity, 1, -1, 2),
+    images: normalizeNovelAiReferenceImages(preciseSource.images || source.preciseImages || source.character_references, {
+      strength: preciseSource.strength ?? 1,
+      fidelity: preciseSource.fidelity ?? 1,
+      strengthMin: -1,
+      strengthMax: 2,
+      fidelityMin: -1,
+      fidelityMax: 2
+    })
+  };
+  const activeVibeImages = vibeTransfer.enabled ? vibeTransfer.images.filter((item) => item.enabled) : [];
+  const activePreciseImages = preciseReference.enabled ? preciseReference.images.filter((item) => item.enabled) : [];
+  if (activeVibeImages.length > 0 && activePreciseImages.length > 0) {
+    throw new Error("Vibe Transfer 與 Precise Reference 目前不能同時使用。");
+  }
+
+  const parameters = {
+    width,
+    height,
+    scale,
+    sampler,
+    steps,
+    n_samples: samples,
+    seed,
+    ucPreset,
+    qualityToggle: source.qualityToggle !== false,
+    dynamic_thresholding: Boolean(source.dynamicThresholding || source.dynamic_thresholding),
+    sm: Boolean(source.sm),
+    sm_dyn: Boolean(source.smDyn || source.sm_dyn),
+    cfg_rescale: cfgRescale,
+    noise_schedule: noiseSchedule,
+    params_version: clampInteger(source.paramsVersion || source.params_version, isNovelAiV4Model(model) ? 3 : 1, 1, 10),
+    image_format: imageFormat,
+    prompt,
+    negative_prompt: negativePrompt
+  };
+
+  if (baseImage) {
+    parameters.image = baseImage;
+    parameters.strength = strength;
+    parameters.noise = noise;
+  }
+
+  if (activeVibeImages.length > 0) {
+    parameters.reference_image_multiple = activeVibeImages.map((item) => item.image);
+    parameters.reference_strength_multiple = activeVibeImages.map((item) => item.strength);
+    parameters.reference_information_extracted_multiple = activeVibeImages.map((item) => item.informationExtracted);
+    parameters.uncond_per_vibe = true;
+    parameters.wonky_vibe_correlation = true;
+  }
+
+  if (activePreciseImages.length > 0) {
+    parameters.character_references = activePreciseImages.map((item) => ({
+      image: item.image,
+      strength: item.strength,
+      fidelity: item.fidelity
+    }));
+    parameters.character_reference_image_multiple = activePreciseImages.map((item) => item.image);
+    parameters.character_reference_strength_multiple = activePreciseImages.map((item) => item.strength);
+    parameters.character_reference_fidelity_multiple = activePreciseImages.map((item) => item.fidelity);
+  }
+
+  if (isNovelAiV4Model(model)) {
+    parameters.v4_prompt = buildNovelAiV4Condition(prompt, characters);
+    parameters.v4_negative_prompt = buildNovelAiV4Condition(negativePrompt, characters, { negative: true });
+  }
+
+  const action = normalizePlainText(source.action) || (baseImage ? "img2img" : "generate");
+  const apiPayload = {
+    action,
+    input: prompt,
+    model,
+    parameters
+  };
+  const settings = {
+    model,
+    prompt,
+    negativePrompt,
+    width,
+    height,
+    steps,
+    samples,
+    scale,
+    cfgRescale,
+    ucPreset,
+    sampler,
+    noiseSchedule,
+    imageFormat,
+    seed,
+    qualityToggle: parameters.qualityToggle,
+    dynamicThresholding: parameters.dynamic_thresholding,
+    sm: parameters.sm,
+    smDyn: parameters.sm_dyn,
+    strength: baseImage ? strength : "",
+    noise: baseImage ? noise : "",
+    hasBaseImage: Boolean(baseImage),
+    characters,
+    vibeTransfer: {
+      enabled: vibeTransfer.enabled,
+      strength: vibeTransfer.strength,
+      informationExtracted: vibeTransfer.informationExtracted,
+      imageCount: activeVibeImages.length,
+      imageSettings: activeVibeImages.map((item) => ({
+        id: item.id,
+        name: item.name,
+        strength: item.strength,
+        informationExtracted: item.informationExtracted
+      }))
+    },
+    preciseReference: {
+      enabled: preciseReference.enabled,
+      strength: preciseReference.strength,
+      fidelity: preciseReference.fidelity,
+      imageCount: activePreciseImages.length,
+      imageSettings: activePreciseImages.map((item) => ({
+        id: item.id,
+        name: item.name,
+        strength: item.strength,
+        fidelity: item.fidelity
+      }))
+    }
+  };
+  return { settings, apiPayload };
+}
+
+function makeNovelAiCorrelationId() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let value = "";
+  for (let i = 0; i < 6; i += 1) {
+    value += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return value;
+}
+
+function getMimeTypeFromFileName(fileName = "") {
+  const lower = normalizePlainText(fileName).toLowerCase();
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  return "image/png";
+}
+
+function getImageExtensionFromMime(mimeType = "") {
+  if (mimeType === "image/webp") {
+    return "webp";
+  }
+  if (mimeType === "image/jpeg") {
+    return "jpg";
+  }
+  return "png";
+}
+
+function findZipEndOfCentralDirectory(buffer) {
+  for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 66000); offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+function extractZipEntries(buffer) {
+  const eocdOffset = findZipEndOfCentralDirectory(buffer);
+  if (eocdOffset < 0) {
+    throw new Error("NovelAI 回傳內容不是有效 ZIP。");
+  }
+  const totalEntries = buffer.readUInt16LE(eocdOffset + 10);
+  const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+  const entries = [];
+  let offset = centralDirectoryOffset;
+  for (let index = 0; index < totalEntries && offset + 46 <= buffer.length; index += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      break;
+    }
+    const method = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.slice(offset + 46, offset + 46 + fileNameLength).toString("utf8");
+    if (buffer.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+      offset += 46 + fileNameLength + extraLength + commentLength;
+      continue;
+    }
+    const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const compressed = buffer.slice(dataStart, dataStart + compressedSize);
+    const data = method === 0
+      ? compressed
+      : method === 8
+        ? zlib.inflateRawSync(compressed, { finishFlush: zlib.constants.Z_SYNC_FLUSH })
+        : null;
+    if (data) {
+      entries.push({
+        fileName,
+        data: uncompressedSize && data.length !== uncompressedSize ? data.slice(0, uncompressedSize) : data
+      });
+    }
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+let pngCrcTable = null;
+
+function getPngCrcTable() {
+  if (pngCrcTable) {
+    return pngCrcTable;
+  }
+  pngCrcTable = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    pngCrcTable[n] = c >>> 0;
+  }
+  return pngCrcTable;
+}
+
+function pngCrc32(buffer) {
+  const table = getPngCrcTable();
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createPngChunk(type, data) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const body = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  const chunk = Buffer.alloc(12 + body.length);
+  chunk.writeUInt32BE(body.length, 0);
+  typeBuffer.copy(chunk, 4);
+  body.copy(chunk, 8);
+  chunk.writeUInt32BE(pngCrc32(Buffer.concat([typeBuffer, body])), 8 + body.length);
+  return chunk;
+}
+
+function createPngInternationalTextChunk(key, value) {
+  const keyword = Buffer.from(normalizePlainText(key).replace(/\0/gu, "").slice(0, 79), "utf8");
+  const text = Buffer.from(normalizePlainText(value), "utf8");
+  const body = Buffer.concat([
+    keyword,
+    Buffer.from([0, 0, 0, 0, 0]),
+    text
+  ]);
+  return createPngChunk("iTXt", body);
+}
+
+function findPngIendOffset(buffer) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (buffer.length < signature.length || !buffer.slice(0, signature.length).equals(signature)) {
+    return -1;
+  }
+  let offset = 8;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.slice(offset + 4, offset + 8).toString("ascii");
+    if (type === "IEND") {
+      return offset;
+    }
+    offset += 12 + length;
+  }
+  return -1;
+}
+
+function injectPngMetadata(buffer, metadata = {}) {
+  const iendOffset = findPngIendOffset(buffer);
+  if (iendOffset < 0) {
+    return buffer;
+  }
+  const entries = Object.entries(metadata)
+    .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])
+    .filter(([key, value]) => key && value);
+  if (entries.length === 0) {
+    return buffer;
+  }
+  const chunks = entries.map(([key, value]) => createPngInternationalTextChunk(key, value));
+  return Buffer.concat([
+    buffer.slice(0, iendOffset),
+    ...chunks,
+    buffer.slice(iendOffset)
+  ]);
+}
+
+function sanitizeNovelAiRequestForMetadata(apiPayload = {}) {
+  const cloned = cloneData(apiPayload, {});
+  const parameters = cloned.parameters && typeof cloned.parameters === "object" ? cloned.parameters : {};
+  if (parameters.image) {
+    parameters.image = "[image omitted]";
+  }
+  [
+    "reference_image_multiple",
+    "character_reference_image_multiple"
+  ].forEach((key) => {
+    if (Array.isArray(parameters[key])) {
+      parameters[key] = `[${parameters[key].length} image(s) omitted]`;
+    }
+  });
+  if (Array.isArray(parameters.character_references)) {
+    parameters.character_references = parameters.character_references.map((item) => ({
+      ...item,
+      image: "[image omitted]"
+    }));
+  }
+  cloned.parameters = parameters;
+  return cloned;
+}
+
+function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
+  const safeRequest = sanitizeNovelAiRequestForMetadata(apiPayload);
+  const fullMetadata = {
+    source: "time_tavern_novelai",
+    version: 1,
+    createdAt: nowIso(),
+    settings,
+    request: safeRequest
+  };
+  return {
+    Title: "NovelAI Image Generation",
+    Description: settings.prompt || "",
+    Software: settings.model || "NovelAI",
+    Source: String(settings.seed ?? ""),
+    Comment: JSON.stringify({
+      prompt: settings.prompt || "",
+      negative_prompt: settings.negativePrompt || "",
+      seed: settings.seed,
+      width: settings.width,
+      height: settings.height,
+      steps: settings.steps,
+      sampler: settings.sampler,
+      scale: settings.scale,
+      cfg_rescale: settings.cfgRescale,
+      ucPreset: settings.ucPreset,
+      noise_schedule: settings.noiseSchedule,
+      model: settings.model,
+      character_prompts: settings.characters || [],
+      vibe_transfer: settings.vibeTransfer || {},
+      precise_reference: settings.preciseReference || {}
+    }),
+    NovelAIMetadata: fullMetadata
+  };
+}
+
+function ensureNovelAiAlbumDir() {
+  ensureDataFile();
+  fs.mkdirSync(NOVELAI_ALBUM_DIR, { recursive: true });
+  if (!fs.existsSync(NOVELAI_ALBUM_INDEX_FILE)) {
+    fs.writeFileSync(NOVELAI_ALBUM_INDEX_FILE, "[]\n", "utf8");
+  }
+}
+
+function readNovelAiAlbumIndex() {
+  ensureNovelAiAlbumDir();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(NOVELAI_ALBUM_INDEX_FILE, "utf8"));
+    return (Array.isArray(parsed) ? parsed : [])
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        id: safeText(item.id),
+        fileName: safeText(item.fileName) || "novelai-image.png",
+        mimeType: safeText(item.mimeType) || "image/png",
+        size: Number(item.size || 0) || 0,
+        metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : {},
+        createdAt: safeText(item.createdAt) || nowIso()
+      }))
+      .filter((item) => item.id);
+  } catch {
+    return [];
+  }
+}
+
+function writeNovelAiAlbumIndex(items = []) {
+  ensureNovelAiAlbumDir();
+  fs.writeFileSync(NOVELAI_ALBUM_INDEX_FILE, `${JSON.stringify(items, null, 2)}\n`, "utf8");
+}
+
+function getNovelAiAlbumItemFilePath(item) {
+  const extension = getImageExtensionFromMime(item?.mimeType || "image/png");
+  return path.join(NOVELAI_ALBUM_DIR, `${safeText(item?.id)}.${extension}`);
+}
+
+function toNovelAiAlbumSummary(item) {
+  return {
+    ...item,
+    imageUrl: `/api/novelai/album/${encodeURIComponent(item.id)}/image`
+  };
+}
+
+function isSafeNovelAiAlbumId(value = "") {
+  return /^[A-Za-z0-9_-]+$/u.test(safeText(value));
+}
+
+async function generateNovelAiImages(body = {}) {
+  const { settings, apiPayload } = normalizeNovelAiGenerationRequest(body);
+  if (!settings.prompt) {
+    throw new Error("Prompt 不可空白。");
+  }
+  const correlationId = makeNovelAiCorrelationId();
+  const response = await fetchWithTimeout(`${getNovelAiImageApiBaseUrl()}/ai/generate-image`, {
+    method: "POST",
+    headers: {
+      ...getNovelAiAuthHeaders(),
+      "x-correlation-id": correlationId
+    },
+    body: JSON.stringify(apiPayload)
+  });
+  if (!response.ok) {
+    throw new Error(await readNovelAiErrorResponse(response));
+  }
+  const zipBuffer = Buffer.from(await response.arrayBuffer());
+  const metadata = buildNovelAiImageMetadata(settings, apiPayload);
+  const images = extractZipEntries(zipBuffer)
+    .filter((entry) => /\.(png|webp|jpe?g)$/iu.test(entry.fileName))
+    .map((entry, index) => {
+      const mimeType = getMimeTypeFromFileName(entry.fileName);
+      return {
+        id: newId("nai_img"),
+        fileName: entry.fileName || `novelai-${index + 1}.${getImageExtensionFromMime(mimeType)}`,
+        mimeType,
+        dataUrl: `data:${mimeType};base64,${entry.data.toString("base64")}`,
+        metadata: metadata.NovelAIMetadata
+      };
+    });
+  if (images.length === 0) {
+    throw new Error("NovelAI 沒有回傳可讀取的圖片。");
+  }
+  return {
+    images,
+    settings,
+    request: apiPayload,
+    correlationId
+  };
+}
+
+function saveNovelAiAlbumItem(body = {}) {
+  const parsed = parseImageDataUrl(body.imageDataUrl || body.image || "");
+  if (!parsed) {
+    throw new Error("收藏圖片格式不正確。");
+  }
+  const id = newId("nai_fav");
+  const extension = getImageExtensionFromMime(parsed.mimeType);
+  const metadata = body.metadata && typeof body.metadata === "object" ? body.metadata : {};
+  const fileName = normalizePlainText(body.fileName) || `novelai-${id}.${extension}`;
+  const finalBuffer = parsed.buffer;
+  const item = {
+    id,
+    fileName,
+    mimeType: parsed.mimeType,
+    size: finalBuffer.length,
+    metadata,
+    createdAt: nowIso()
+  };
+  ensureNovelAiAlbumDir();
+  fs.writeFileSync(getNovelAiAlbumItemFilePath(item), finalBuffer);
+  const items = [item, ...readNovelAiAlbumIndex().filter((existing) => existing.id !== id)];
+  writeNovelAiAlbumIndex(items);
+  return toNovelAiAlbumSummary(item);
+}
+
+function deleteNovelAiAlbumItem(id = "") {
+  if (!isSafeNovelAiAlbumId(id)) {
+    return false;
+  }
+  const items = readNovelAiAlbumIndex();
+  const item = items.find((entry) => entry.id === id);
+  if (!item) {
+    return false;
+  }
+  const nextItems = items.filter((entry) => entry.id !== id);
+  try {
+    const filePath = getNovelAiAlbumItemFilePath(item);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch {
+    // A missing image file should not keep a stale album item alive.
+  }
+  writeNovelAiAlbumIndex(nextItems);
+  return true;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1889,7 +2662,7 @@ function readBody(req) {
       const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       chunks.push(bufferChunk);
       totalLength += bufferChunk.length;
-      if (totalLength > 12 * 1024 * 1024) {
+      if (totalLength > 32 * 1024 * 1024) {
         reject(new Error("請求內容過大"));
       }
     });
@@ -7889,6 +8662,70 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 202, {
         ok: true,
         message: started ? "正在重啟伺服器，請稍候刷新頁面。" : "重啟已在進行中，請稍候刷新頁面。"
+      });
+      return;
+    }
+
+    if (pathname === "/api/novelai/status" && method === "GET") {
+      sendJson(res, 200, await getNovelAiStatus());
+      return;
+    }
+
+    if (pathname === "/api/novelai/generate" && method === "POST") {
+      const body = await readBody(req);
+      sendJson(res, 200, await generateNovelAiImages(body));
+      return;
+    }
+
+    if (pathname === "/api/novelai/album" && method === "GET") {
+      sendJson(res, 200, {
+        items: readNovelAiAlbumIndex().map((item) => toNovelAiAlbumSummary(item))
+      });
+      return;
+    }
+
+    if (pathname === "/api/novelai/album" && method === "POST") {
+      const body = await readBody(req);
+      sendJson(res, 201, {
+        item: saveNovelAiAlbumItem(body)
+      });
+      return;
+    }
+
+    const novelAiAlbumImageMatch = pathname.match(/^\/api\/novelai\/album\/([^/]+)\/image$/);
+    if (novelAiAlbumImageMatch && method === "GET") {
+      const id = decodeURIComponent(novelAiAlbumImageMatch[1]);
+      if (!isSafeNovelAiAlbumId(id)) {
+        sendJson(res, 400, { error: "相簿 ID 不正確。" });
+        return;
+      }
+      const item = readNovelAiAlbumIndex().find((entry) => entry.id === id);
+      if (!item) {
+        sendJson(res, 404, { error: "相簿圖片不存在。" });
+        return;
+      }
+      const filePath = getNovelAiAlbumItemFilePath(item);
+      if (!fs.existsSync(filePath)) {
+        sendJson(res, 404, { error: "相簿圖片檔案不存在。" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": item.mimeType || "image/png",
+        "Cache-Control": "no-store"
+      });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    const novelAiAlbumDeleteMatch = pathname.match(/^\/api\/novelai\/album\/([^/]+)$/);
+    if (novelAiAlbumDeleteMatch && method === "DELETE") {
+      const deleted = deleteNovelAiAlbumItem(decodeURIComponent(novelAiAlbumDeleteMatch[1]));
+      if (!deleted) {
+        sendJson(res, 404, { error: "相簿圖片不存在。" });
+        return;
+      }
+      sendJson(res, 200, {
+        items: readNovelAiAlbumIndex().map((item) => toNovelAiAlbumSummary(item))
       });
       return;
     }
