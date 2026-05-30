@@ -5881,7 +5881,7 @@ function renderCompressionTriggerActionEditor(actions = []) {
     actionLabel.appendChild(actionSelect);
 
     const keywordFollowupLabel = document.createElement("label");
-    keywordFollowupLabel.textContent = "觸發關鍵字後續動作";
+    keywordFollowupLabel.textContent = "觸發後續動作";
     const keywordFollowupSelect = document.createElement("select");
     keywordFollowupSelect.dataset.field = "triggerKeywordFollowupAction";
     [
@@ -5919,7 +5919,7 @@ function renderCompressionTriggerActionEditor(actions = []) {
     const turnsInput = document.createElement("input");
     turnsInput.type = "text";
     turnsInput.value = triggers.turns.join(", ");
-    turnsInput.placeholder = "例如：0, 5, 12";
+    turnsInput.placeholder = "例如：0, 5, 10（每正文上限週期重複）";
     turnsInput.dataset.field = "triggerTurns";
     turnsLabel.appendChild(turnsInput);
 

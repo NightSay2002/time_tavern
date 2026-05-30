@@ -1828,6 +1828,7 @@ function loadSavedSessionIntoRuntime(currentState, sessionId, options = {}) {
   }
 
   applyRuntimeSnapshot(currentState, materializeSavedSessionSnapshot(session));
+  sanitizeImageGenerationCompressionState(currentState);
   currentState.activeSavedSessionId = null;
 
   return session;
@@ -5436,6 +5437,9 @@ function mergeCompressionSummary(currentSummary = "", completionText = "", confi
 }
 
 function formatCompressionProfileSummaryForReasoner(profile, profileState, currentState = state) {
+  if (isImageGenerationCompressionProfile(profile)) {
+    return "";
+  }
   const compressionConfig = normalizeContextCompressionPromptConfig(
     profile.contextCompression,
     getContextCompressionPrompt(),
@@ -5456,6 +5460,42 @@ function formatCompressionProfileSummaryForReasoner(profile, profileState, curre
     `【${profile.name || profile.id}】`,
     JSON.stringify({ model: normalized.model }, null, 2)
   ].join("\n");
+}
+
+function isImageGenerationCompressionProfile(profile = {}) {
+  return getEnabledCompressionTriggerActions(profile).some((triggerAction) =>
+    triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
+    isImageKeywordFollowupAction(triggerAction.keywordFollowupAction)
+  );
+}
+
+function sanitizeImageGenerationCompressionState(currentState = state) {
+  if (!currentState || typeof currentState !== "object") {
+    return false;
+  }
+  const compressionState = normalizeContextCompressionState(currentState.contextCompression);
+  let changed = false;
+  getEnabledCompressionProfiles(currentState).forEach((profile) => {
+    if (!isImageGenerationCompressionProfile(profile)) {
+      return;
+    }
+    const profileId = normalizeCompressionProfileId(profile.id);
+    const profileState = getCompressionProfileState(compressionState, profileId);
+    if (!safeText(profileState.summary)) {
+      return;
+    }
+    const cleanedState = {
+      ...profileState,
+      summary: "",
+      updatedAt: nowIso()
+    };
+    setCompressionProfileState(currentState, profileId, cleanedState);
+    changed = true;
+  });
+  if (!changed) {
+    currentState.contextCompression = compressionState;
+  }
+  return changed;
 }
 
 function formatAllCompressionSummariesForReasoner(currentState = state) {
@@ -6006,6 +6046,26 @@ function getCompressionKeywordTriggerMatch(currentState, latestUser, triggers = 
   };
 }
 
+function getRecurringScheduledTurnTarget(turn, currentTurnNumber, contextLimit) {
+  const normalizedTurn = Math.max(0, Math.floor(Number(turn) || 0));
+  const normalizedCurrentTurn = Math.max(0, Math.floor(Number(currentTurnNumber) || 0));
+  const interval = Math.max(1, Math.floor(Number(contextLimit) || 1));
+  if (normalizedCurrentTurn <= 0) {
+    return 0;
+  }
+  if (normalizedTurn === 0) {
+    if (normalizedCurrentTurn < interval) {
+      return 0;
+    }
+    return Math.floor(normalizedCurrentTurn / interval) * interval;
+  }
+  if (normalizedCurrentTurn < normalizedTurn) {
+    return 0;
+  }
+  const cycles = Math.floor((normalizedCurrentTurn - normalizedTurn) / interval);
+  return normalizedTurn + cycles * interval;
+}
+
 function shouldTriggerCompressionProfile({
   profile,
   triggerAction = null,
@@ -6019,6 +6079,7 @@ function shouldTriggerCompressionProfile({
     defaultRoundLimit: profile.id === STANDARD_COMPRESSION_PROFILE_ID
   });
   const currentTurnNumber = Math.max(0, countConversationTurns(currentState, latestUser?.id || ""));
+  const compressedThroughTurnNumber = Number(profileState.compressedThroughTurnNumber || 0);
   const triggeredBy = [];
 
   if (triggers.roundLimit && uncompressedRounds.length >= contextLimit) {
@@ -6028,26 +6089,27 @@ function shouldTriggerCompressionProfile({
   if (
     triggers.everyTurn &&
     currentTurnNumber > 0 &&
-    Number(profileState.compressedThroughTurnNumber || 0) < currentTurnNumber
+    compressedThroughTurnNumber < currentTurnNumber
   ) {
     triggeredBy.push("每回合觸發");
   }
 
   if (triggers.turns.includes(0)) {
     const alreadyStarted = safeText(profileState.summary) ||
-      Number(profileState.compressedThroughTurnNumber || 0) > 0;
+      compressedThroughTurnNumber > 0;
     if (!alreadyStarted && currentTurnNumber <= 1) {
       triggeredBy.push("開始觸發");
     }
   }
 
-  triggers.turns
-    .filter((turn) => turn > 0)
-    .forEach((turn) => {
-      if (currentTurnNumber >= turn && Number(profileState.compressedThroughTurnNumber || 0) < turn) {
-        triggeredBy.push(`第 ${turn} 回合`);
-      }
-    });
+  const scheduledTurnTargets = [...new Set(
+    triggers.turns
+      .map((turn) => getRecurringScheduledTurnTarget(turn, currentTurnNumber, contextLimit))
+      .filter((turn) => turn > 0 && compressedThroughTurnNumber < turn)
+  )].sort((a, b) => a - b);
+  scheduledTurnTargets.forEach((turn) => {
+    triggeredBy.push(`第 ${turn} 回合`);
+  });
 
   if (getCompressionKeywordTriggerMatch(currentState, latestUser, triggers).matched) {
     triggeredBy.push("觸發關鍵字");
@@ -6169,8 +6231,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         triggeredByKeyword &&
         triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
         keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
-      const shouldRunImageFollowup = triggeredBy.includes("觸發關鍵字") &&
-        triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
+      const shouldRunImageFollowup = triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
         isImageKeywordFollowupAction(keywordFollowupAction);
       const includeLatestUser = includeLatestAssistant ||
         triggeredBy.includes("開始觸發") ||
@@ -6241,8 +6302,12 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
       options.onStatus?.("compression");
 
       if (shouldRunImageFollowup) {
+        const imageProfileState = {
+          ...profileState,
+          summary: ""
+        };
         setCompressionProfileState(currentState, profile.id, {
-          summary: profileState.summary,
+          summary: "",
           compressedThroughTurnNumber,
           updatedAt: nowIso()
         });
@@ -6253,7 +6318,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
           triggerAction,
           triggeredBy,
           messagesToCompress,
-          profileState,
+          profileState: imageProfileState,
           turnExtra: options.turnExtra || {}
         };
         if (isParallelImageKeywordFollowupAction(keywordFollowupAction)) {
@@ -8330,7 +8395,11 @@ function statePayload(state) {
 }
 
 let state = loadState();
-persistCardState(state);
+if (sanitizeImageGenerationCompressionState(state)) {
+  saveState(state);
+} else {
+  persistCardState(state);
+}
 let discordConnected = false;
 let activeDiscordClient = null;
 let restartScheduled = false;
