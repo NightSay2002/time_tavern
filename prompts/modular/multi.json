@@ -131,7 +131,7 @@
       "contextScope": "role_and_text",
       "triggers": {
         "everyTurn": false,
-        "roundLimit": true,
+        "roundLimit": false,
         "keywords": [],
         "keywordSource": "both",
         "turns": []
@@ -162,7 +162,7 @@
           },
           "triggers": {
             "everyTurn": false,
-            "roundLimit": true,
+            "roundLimit": false,
             "keywords": [],
             "keywordSource": "both",
             "turns": []

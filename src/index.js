@@ -3163,9 +3163,10 @@ function normalizeCompressionProfileId(value = "") {
 }
 
 function parseIntegerList(value) {
+  const normalizeListItem = (item) => item === null || item === undefined ? "" : String(item).trim();
   if (Array.isArray(value)) {
     return value
-      .map((item) => safeText(item))
+      .map((item) => normalizeListItem(item))
       .filter(Boolean)
       .map((item) => Math.floor(Number(item)))
       .filter((item) => Number.isFinite(item) && item >= 0);
