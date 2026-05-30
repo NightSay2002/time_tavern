@@ -634,6 +634,36 @@ button {
   resize: vertical;
 }
 
+.compression-image-settings {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255, 209, 246, 0.22);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 209, 246, 0.06);
+}
+
+.compression-image-settings[hidden] {
+  display: none;
+}
+
+.compression-image-settings small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.compression-image-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.compression-image-settings-grid label:last-child {
+  grid-column: 1 / -1;
+}
+
 .compression-trigger-action-list,
 .compression-append-term-list {
   max-height: min(42vh, 360px);
@@ -1319,6 +1349,28 @@ button {
   color: #b9b3d8;
   font-size: 15px;
   font-weight: 700;
+}
+
+.message-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 320px));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.message-image-link {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  border: 1px solid rgba(183, 159, 255, 0.34);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.message-image-link img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .discord-message-menu {
@@ -3518,6 +3570,7 @@ body.novelai-studio-body .novelai-small-preview {
   .compression-profile-grid,
   .compression-trigger-grid,
   .compression-trigger-action-grid,
+  .compression-image-settings-grid,
   .compression-append-term-grid,
   .compression-profile-actions {
     grid-template-columns: 1fr;
@@ -4069,6 +4122,15 @@ body.novelai-bright-body textarea {
   width: auto;
 }
 
+.nai-switch-field {
+  min-height: 40px;
+  justify-content: flex-start;
+  padding: 10px 12px;
+  border: 1px solid rgba(218, 154, 235, 0.58);
+  border-radius: 12px;
+  background: #fff;
+}
+
 .nai-character-list,
 .nai-reference-list {
   display: grid;
@@ -4268,7 +4330,7 @@ body.novelai-bright-body textarea {
 
 .nai-ai-settings summary > span {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   color: #8e6aa2;
   font-size: 12px;

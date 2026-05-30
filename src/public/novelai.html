@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260527-novelai-bright5" />
+    <link rel="stylesheet" href="/styles.css?v=20260530-variety1" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -109,12 +109,13 @@
             <details class="nai-card nai-ai-settings">
               <summary>
                 <strong>AI Settings</strong>
-                <span><b>Steps</b><b>Guidance</b><b>Seed</b><b>Sampler</b></span>
-                <span><em id="novelAiStepsSummary">28</em><em id="novelAiGuidanceSummary">6</em><em id="novelAiSeedSummary">N/A</em><em id="novelAiSamplerSummary">Euler Ancestral</em></span>
+                <span><b>Steps</b><b>Guidance</b><b>Variety+</b><b>Seed</b><b>Sampler</b></span>
+                <span><em id="novelAiStepsSummary">28</em><em id="novelAiGuidanceSummary">6</em><em id="novelAiVarietySummary">On</em><em id="novelAiSeedSummary">N/A</em><em id="novelAiSamplerSummary">Euler Ancestral</em></span>
               </summary>
               <div class="nai-field-grid">
                 <label>Steps<input id="novelAiSteps" type="number" min="1" max="50" step="1" value="28" /></label>
                 <label>Prompt Guidance<input id="novelAiScale" type="number" min="0" max="20" step="0.1" value="6" /></label>
+                <label class="nai-switch nai-switch-field"><input id="novelAiVarietyPlus" type="checkbox" checked /> Variety+</label>
                 <label>Seed<input id="novelAiSeed" type="number" min="-1" step="1" placeholder="N/A" /></label>
                 <label>Sampler<select id="novelAiSampler"></select></label>
                 <label>Prompt Guidance Rescale<input id="novelAiCfgRescale" type="number" min="0" max="1" step="0.01" value="0" /></label>
@@ -184,6 +185,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260528-nai-metadata1"></script>
+    <script type="module" src="/novelai.js?v=20260530-anlas1"></script>
   </body>
 </html>

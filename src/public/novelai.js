@@ -13,6 +13,8 @@ const el = {
   novelAiSamples: document.getElementById("novelAiSamples"),
   novelAiScale: document.getElementById("novelAiScale"),
   novelAiGuidanceSummary: document.getElementById("novelAiGuidanceSummary"),
+  novelAiVarietyPlus: document.getElementById("novelAiVarietyPlus"),
+  novelAiVarietySummary: document.getElementById("novelAiVarietySummary"),
   novelAiCfgRescale: document.getElementById("novelAiCfgRescale"),
   novelAiSeed: document.getElementById("novelAiSeed"),
   novelAiSeedSummary: document.getElementById("novelAiSeedSummary"),
@@ -231,6 +233,35 @@ function clampFiniteNumber(value, fallback, min, max) {
   return Math.min(max, Math.max(min, number));
 }
 
+function boolSetting(value, fallback = false) {
+  if (value === true || value === false) {
+    return value;
+  }
+  if (value === "true" || value === "1" || value === 1) {
+    return true;
+  }
+  if (value === "false" || value === "0" || value === 0) {
+    return false;
+  }
+  return fallback;
+}
+
+function varietySigmaForModel(model = "") {
+  return /nai-diffusion-4-5/u.test(String(model || "")) ? 58 : 19;
+}
+
+function normalizeVarietyPlus(source = {}, comment = {}) {
+  const explicit = source.varietyPlus ?? source.variety_plus ?? source.variety;
+  const skipCfg = source.skipCfgAboveSigma ?? source.skip_cfg_above_sigma ?? comment.skip_cfg_above_sigma;
+  if (explicit !== undefined) {
+    return boolSetting(explicit, true);
+  }
+  if (skipCfg !== undefined) {
+    return skipCfg !== null && skipCfg !== "" && Number(skipCfg) > 0;
+  }
+  return true;
+}
+
 function makeClientId(prefix = "nai_local") {
   if (window.crypto?.randomUUID) {
     return `${prefix}_${window.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -325,6 +356,7 @@ function normalizeSettings(value = {}) {
     steps: finiteNumber(source.steps ?? comment.steps, 28),
     samples: finiteNumber(source.samples ?? source.n_samples ?? comment.samples ?? comment.n_samples, 1),
     scale: finiteNumber(source.scale ?? comment.scale, 6),
+    varietyPlus: normalizeVarietyPlus(source, comment),
     cfgRescale: finiteNumber(source.cfgRescale ?? source.cfg_rescale ?? comment.cfg_rescale, 0),
     seed: finiteNumber(source.seed ?? source.Source ?? comment.seed, -1),
     sampler: String(source.sampler || comment.sampler || "k_euler_ancestral").trim(),
@@ -561,6 +593,7 @@ function getFormSettings() {
     steps: numberValue(el.novelAiSteps, 28, { integer: true, min: 1, max: 50 }),
     samples: numberValue(el.novelAiSamples, 1, { integer: true, min: 1, max: 6 }),
     scale: numberValue(el.novelAiScale, 6, { min: 0, max: 20 }),
+    varietyPlus: el.novelAiVarietyPlus?.checked !== false,
     cfgRescale: numberValue(el.novelAiCfgRescale, 0, { min: 0, max: 1 }),
     seed: seedValue ? numberValue(el.novelAiSeed, -1, { integer: true, min: -1 }) : -1,
     sampler: el.novelAiSampler?.value || "k_euler_ancestral",
@@ -605,6 +638,9 @@ function setFormSettings(settings = {}, options = {}) {
   el.novelAiSteps.value = Math.round(normalized.steps || 28);
   el.novelAiSamples.value = Math.round(normalized.samples || 1);
   el.novelAiScale.value = normalized.scale ?? 6;
+  if (el.novelAiVarietyPlus) {
+    el.novelAiVarietyPlus.checked = normalized.varietyPlus !== false;
+  }
   el.novelAiCfgRescale.value = normalized.cfgRescale ?? 0;
   el.novelAiSeed.value = normalized.seed >= 0 ? Math.floor(normalized.seed) : "";
   setSelectValue(el.novelAiSampler, normalized.sampler);
@@ -646,15 +682,17 @@ function saveSettingsDraft() {
 }
 
 function estimateAnlas(settings = getFormSettings()) {
+  const normalMegapixels = (832 * 1216) / (1024 * 1024);
   const megapixels = Math.max(0.05, (Number(settings.width || 832) * Number(settings.height || 1216)) / (1024 * 1024));
   const stepFactor = Math.max(0.15, Number(settings.steps || 28) / 28);
-  const modelFactor = /4-5/u.test(settings.model || "") ? 1.18 : /4/u.test(settings.model || "") ? 1.08 : 1;
+  const modelFactor = 1;
   const baseImageFactor = settings.baseImage ? 1.15 : 1;
+  const sampleCount = Math.max(1, Number(settings.samples || 1));
   const vibeCount = settings.vibeTransfer.enabled ? activeImageCount(settings.vibeTransfer.images) : 0;
   const preciseCount = settings.preciseReference.enabled ? activeImageCount(settings.preciseReference.images) : 0;
   const extraVibe = vibeCount > 4 ? (vibeCount - 4) * 2 : 0;
   const extraPrecise = preciseCount * 5;
-  return Math.max(1, Math.ceil(megapixels * stepFactor * modelFactor * baseImageFactor * 5 + extraVibe + extraPrecise));
+  return Math.max(1, Math.ceil((20 * (megapixels / normalMegapixels) * stepFactor * modelFactor * baseImageFactor + extraVibe + extraPrecise) * sampleCount));
 }
 
 function renderCostPreview() {
@@ -675,6 +713,7 @@ function updateStudioSummary(settings = getFormSettings()) {
   el.novelAiModelDescription.textContent = NOVELAI_MODEL_DESCRIPTIONS[settings.model] || "自訂 NovelAI 圖像模型。";
   el.novelAiStepsSummary.textContent = String(settings.steps);
   el.novelAiGuidanceSummary.textContent = String(settings.scale);
+  el.novelAiVarietySummary.textContent = settings.varietyPlus ? "On" : "Off";
   el.novelAiSeedSummary.textContent = settings.seed >= 0 ? String(settings.seed) : "N/A";
   el.novelAiSamplerSummary.textContent = getSelectedOptionLabel(el.novelAiSampler).replace(/^k_/u, "");
   el.novelAiStageSize.textContent = `${settings.width} × ${settings.height}`;
@@ -1166,7 +1205,7 @@ function buildNovelAiCompatibleComment(item = {}) {
     dynamic_thresholding_mimic_scale: parameters.dynamic_thresholding_mimic_scale ?? 10,
     sm: parameters.sm ?? false,
     sm_dyn: parameters.sm_dyn ?? false,
-    skip_cfg_above_sigma: parameters.skip_cfg_above_sigma ?? null,
+    skip_cfg_above_sigma: parameters.skip_cfg_above_sigma ?? (settings.varietyPlus ? varietySigmaForModel(settings.model) : null),
     skip_cfg_below_sigma: parameters.skip_cfg_below_sigma ?? 0,
     lora_unet_weights: parameters.lora_unet_weights ?? null,
     lora_clip_weights: parameters.lora_clip_weights ?? null,

@@ -216,6 +216,8 @@ const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
 const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
+const KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER = "image_then_reasoner";
+const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
 const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
@@ -1347,6 +1349,27 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     return KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
   }
   if (
+    normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER ||
+    normalized === "image_parallel" ||
+    normalized === "parallel_image" ||
+    normalized === "generate_image_parallel" ||
+    raw === "建立圖片並行運作" ||
+    raw === "建立圖片並行" ||
+    raw === "並行建立圖片"
+  ) {
+    return KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+  }
+  if (
+    normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
+    normalized === "image_then_continue" ||
+    normalized === "generate_image_continue" ||
+    normalized === "image_continue" ||
+    raw === "建立圖片繼續觸發正文" ||
+    raw === "建立圖片，繼續觸發正文"
+  ) {
+    return KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER;
+  }
+  if (
     normalized === KEYWORD_FOLLOWUP_CONTINUE_REASONER ||
     normalized === "continue" ||
     normalized === "continue_chat" ||
@@ -1357,6 +1380,59 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     return KEYWORD_FOLLOWUP_CONTINUE_REASONER;
   }
   return legacySkipReasoner ? KEYWORD_FOLLOWUP_STOP_AFTER_MODEL : KEYWORD_FOLLOWUP_CONTINUE_REASONER;
+}
+
+function isImageKeywordFollowupAction(value = "") {
+  const normalized = normalizeKeywordFollowupAction(value);
+  return normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
+    normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+}
+
+function getKeywordFollowupActionLabel(value = "", legacySkipReasoner = false) {
+  const normalized = normalizeKeywordFollowupAction(value, legacySkipReasoner);
+  if (normalized === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL) {
+    return "關鍵字後停下";
+  }
+  if (normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER) {
+    return "關鍵字後建立圖片";
+  }
+  if (normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER) {
+    return "關鍵字後並行建立圖片";
+  }
+  return "";
+}
+
+function parseBoundedNumber(value, fallback, min, max) {
+  const number = Number(value);
+  return clamp(Number.isFinite(number) ? number : fallback, min, max);
+}
+
+function parseBoundedInteger(value, fallback, min, max) {
+  return Math.floor(parseBoundedNumber(value, fallback, min, max));
+}
+
+function normalizeModelImageGenerationSettings(input = {}) {
+  const source = input && typeof input === "object"
+    ? input.imageGeneration || input.novelAiImage || input.imageSettings || input
+    : {};
+  const rawSeed = String(source.seed ?? "").trim();
+  const seedNumber = Number(rawSeed);
+  return {
+    model: String(source.model || "nai-diffusion-4-5-curated").trim() || "nai-diffusion-4-5-curated",
+    negativePrompt: String(source.negativePrompt || source.negative_prompt || source.uc || "").trim(),
+    width: parseBoundedInteger(source.width, 832, 64, 2048),
+    height: parseBoundedInteger(source.height, 1216, 64, 2048),
+    steps: parseBoundedInteger(source.steps, 28, 1, 50),
+    samples: parseBoundedInteger(source.samples ?? source.n_samples, 1, 1, 4),
+    scale: parseBoundedNumber(source.scale ?? source.guidance ?? source.promptGuidance, 6, 0, 20),
+    cfgRescale: parseBoundedNumber(source.cfgRescale ?? source.cfg_rescale ?? source.promptGuidanceRescale, 0, 0, 1),
+    sampler: String(source.sampler || "k_euler_ancestral").trim() || "k_euler_ancestral",
+    noiseSchedule: String(source.noiseSchedule || source.noise_schedule || "karras").trim() || "karras",
+    ucPreset: parseBoundedInteger(source.ucPreset, 0, 0, 99),
+    varietyPlus: Boolean(source.varietyPlus || source.skipCfgAboveSigma),
+    imageFormat: String(source.imageFormat || source.image_format || "png").trim().toLowerCase() === "webp" ? "webp" : "png",
+    seed: rawSeed && Number.isFinite(seedNumber) && seedNumber >= 0 ? String(Math.floor(seedNumber) >>> 0) : ""
+  };
 }
 
 function normalizeModelAppendPlayer(value = "") {
@@ -1417,6 +1493,7 @@ function normalizeCompressionTriggerActionConfig(action = {}, index = 0, options
     keywordFollowupAction,
     skipReasoner: processingAction === MODEL_TRIGGER_ACTION_CALL_API &&
       keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL,
+    imageGeneration: normalizeModelImageGenerationSettings(source),
     triggers: normalizeCompressionTriggerConfig(
       source.triggers || source.trigger || source.conditions || source.condition || source,
       { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
@@ -4825,6 +4902,27 @@ function getMessageFeedbackType(message = {}) {
   return normalizeAssistantFeedbackType(message.feedback || message.extra?.feedback);
 }
 
+function getMessageImageAttachments(message = {}) {
+  const source = message?.images || message?.extra?.images || message?.extra?.novelAiImages || [];
+  return (Array.isArray(source) ? source : [])
+    .map((item) => {
+      const imageUrl = String(item?.imageUrl || item?.url || item?.dataUrl || "").trim();
+      if (!imageUrl) {
+        return null;
+      }
+      return {
+        imageUrl,
+        fileName: String(item?.fileName || item?.name || "generated-image.png").trim(),
+        prompt: String(item?.prompt || "").trim()
+      };
+    })
+    .filter(Boolean);
+}
+
+function isImageOnlyMessage(message = {}) {
+  return Boolean(message?.imageOnly || message?.extra?.imageOnly || getMessageImageAttachments(message).length > 0);
+}
+
 function openEditAssistantMessage(messageId = "") {
   if (!messageId) {
     return;
@@ -5077,10 +5175,30 @@ function renderMessages(state, options = {}) {
       timeWarningNotice.textContent = autoTimeWarning;
       content.appendChild(timeWarningNotice);
     }
+    const imageAttachments = getMessageImageAttachments(message);
+    if (imageAttachments.length > 0) {
+      const imageGrid = document.createElement("div");
+      imageGrid.className = "message-image-grid";
+      imageAttachments.forEach((image) => {
+        const link = document.createElement("a");
+        link.className = "message-image-link";
+        link.href = image.imageUrl;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.title = image.prompt || image.fileName;
+        const img = document.createElement("img");
+        img.src = image.imageUrl;
+        img.alt = image.fileName || "generated image";
+        img.loading = "lazy";
+        link.appendChild(img);
+        imageGrid.appendChild(link);
+      });
+      content.appendChild(imageGrid);
+    }
 
     const feedbackControls = document.createElement("div");
     feedbackControls.className = "message-feedback-actions";
-    if (message.role === "assistant" && !message.streaming) {
+    if (message.role === "assistant" && !message.streaming && !isImageOnlyMessage(message)) {
       const currentFeedback = getMessageFeedbackType(message);
       ["like", "dislike"].forEach((feedbackType) => {
         const feedbackBtn = document.createElement("button");
@@ -5101,7 +5219,7 @@ function renderMessages(state, options = {}) {
     }
 
     body.append(header, content);
-    if (message.role === "assistant" && !message.streaming) {
+    if (message.role === "assistant" && !message.streaming && !isImageOnlyMessage(message)) {
       body.appendChild(feedbackControls);
     }
 
@@ -5155,7 +5273,7 @@ function renderMessages(state, options = {}) {
 }
 
 function formatAiLogPurpose(purpose) {
-  if (purpose === "context_compression") {
+  if (String(purpose || "").startsWith("context_compression")) {
     return "模型內容處理";
   }
   if (purpose === "chat_expand") {
@@ -5326,7 +5444,7 @@ function renderStatus(state) {
     el.discordBotLinkBtn.dataset.discordAuthorizeUrl = discordAuthorizeUrl;
   }
 
-  const canEditAiOutput = state.conversation.some((msg) => msg.role === "assistant");
+  const canEditAiOutput = state.conversation.some((msg) => msg.role === "assistant" && !isImageOnlyMessage(msg));
   el.editAiOutputBtn.disabled = !canEditAiOutput;
 }
 
@@ -5614,6 +5732,21 @@ function collectCompressionTriggerActionsFromEditor(options = {}) {
       action: item.querySelector("[data-field='triggerActionProcessing']")?.value || MODEL_TRIGGER_ACTION_CALL_API,
       keywordFollowupAction: item.querySelector("[data-field='triggerKeywordFollowupAction']")?.value ||
         KEYWORD_FOLLOWUP_CONTINUE_REASONER,
+      imageGeneration: {
+        model: item.querySelector("[data-field='imageModel']")?.value || "",
+        negativePrompt: item.querySelector("[data-field='imageNegativePrompt']")?.value || "",
+        width: item.querySelector("[data-field='imageWidth']")?.value || "",
+        height: item.querySelector("[data-field='imageHeight']")?.value || "",
+        steps: item.querySelector("[data-field='imageSteps']")?.value || "",
+        samples: item.querySelector("[data-field='imageSamples']")?.value || "",
+        scale: item.querySelector("[data-field='imageScale']")?.value || "",
+        cfgRescale: item.querySelector("[data-field='imageCfgRescale']")?.value || "",
+        sampler: item.querySelector("[data-field='imageSampler']")?.value || "",
+        noiseSchedule: item.querySelector("[data-field='imageNoiseSchedule']")?.value || "",
+        seed: item.querySelector("[data-field='imageSeed']")?.value || "",
+        varietyPlus: Boolean(item.querySelector("[data-field='imageVarietyPlus']")?.checked),
+        imageFormat: item.querySelector("[data-field='imageFormat']")?.value || "png"
+      },
       triggers: {
         everyTurn: Boolean(item.querySelector("[data-field='triggerEveryTurn']")?.checked),
         roundLimit: Boolean(item.querySelector("[data-field='triggerRoundLimit']")?.checked),
@@ -5644,8 +5777,7 @@ function formatTriggerActionSummary(action = {}, index = 0) {
     action.name || `觸發組合 ${index + 1}`,
     triggerParts.length > 0 ? `(${triggerParts.join(" + ")})` : "(未設定觸發)",
     getModelTriggerActionLabel(action.action),
-    normalizeKeywordFollowupAction(action.keywordFollowupAction, action.skipReasoner) ===
-      KEYWORD_FOLLOWUP_STOP_AFTER_MODEL ? "關鍵字後停下" : ""
+    getKeywordFollowupActionLabel(action.keywordFollowupAction, action.skipReasoner)
   ].filter(Boolean).join(" -> ");
 }
 
@@ -5754,7 +5886,9 @@ function renderCompressionTriggerActionEditor(actions = []) {
     keywordFollowupSelect.dataset.field = "triggerKeywordFollowupAction";
     [
       [KEYWORD_FOLLOWUP_CONTINUE_REASONER, "按照對話繼續觸發正文"],
-      [KEYWORD_FOLLOWUP_STOP_AFTER_MODEL, "停下，只輸出完成訊息"]
+      [KEYWORD_FOLLOWUP_STOP_AFTER_MODEL, "停下，只輸出完成訊息"],
+      [KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER, "建立圖片，然後繼續觸發正文"],
+      [KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER, "建立圖片（並行運作），同時繼續正文"]
     ].forEach(([value, label]) => {
       const option = document.createElement("option");
       option.value = value;
@@ -5815,6 +5949,142 @@ function renderCompressionTriggerActionEditor(actions = []) {
     sourceSelect.value = triggers.keywordSource || "both";
     sourceLabel.appendChild(sourceSelect);
 
+    const imageSettings = normalizeModelImageGenerationSettings(action);
+    const imageSettingsBox = document.createElement("div");
+    imageSettingsBox.className = "compression-image-settings";
+    imageSettingsBox.dataset.imageSettings = "true";
+
+    const imageSettingsTitle = document.createElement("strong");
+    imageSettingsTitle.textContent = "建立圖片設定";
+    const imageSettingsHint = document.createElement("small");
+    imageSettingsHint.textContent = "大模型 call api 的輸出會作為 Base Prompt；以下設定會送到 NovelAI。";
+
+    const createImageField = (labelText, fieldName, value, options = {}) => {
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      const input = options.textarea ? document.createElement("textarea") : document.createElement("input");
+      if (options.textarea) {
+        input.rows = options.rows || 2;
+      } else {
+        input.type = options.type || "text";
+      }
+      if (options.step) {
+        input.step = options.step;
+      }
+      if (options.min !== undefined) {
+        input.min = String(options.min);
+      }
+      if (options.max !== undefined) {
+        input.max = String(options.max);
+      }
+      input.value = value ?? "";
+      input.dataset.field = fieldName;
+      label.appendChild(input);
+      return { label, input };
+    };
+    const createImageSelect = (labelText, fieldName, value, entries) => {
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      const select = document.createElement("select");
+      select.dataset.field = fieldName;
+      entries.forEach(([entryValue, entryLabel]) => {
+        const option = document.createElement("option");
+        option.value = entryValue;
+        option.textContent = entryLabel;
+        select.appendChild(option);
+      });
+      select.value = value;
+      label.appendChild(select);
+      return { label, input: select };
+    };
+
+    const modelField = createImageSelect("NovelAI 模型", "imageModel", imageSettings.model, [
+      ["nai-diffusion-4-5-curated", "NAI Diffusion V4.5 Curated"],
+      ["nai-diffusion-4-5-full", "NAI Diffusion V4.5 Full"],
+      ["nai-diffusion-4-full", "NAI Diffusion V4 Full"]
+    ]);
+    const negativeField = createImageField("Undesired Content", "imageNegativePrompt", imageSettings.negativePrompt, {
+      textarea: true,
+      rows: 3
+    });
+    const initialPreset = imageSettings.width === 832 && imageSettings.height === 1216
+      ? "portrait"
+      : imageSettings.width === 1216 && imageSettings.height === 832
+        ? "landscape"
+        : "custom";
+    const sizePresetField = createImageSelect("Image Settings", "imageSizePreset", initialPreset, [
+      ["portrait", "Normal Portrait 832x1216"],
+      ["landscape", "Normal Landscape 1216x832"],
+      ["custom", "Custom"]
+    ]);
+    const widthField = createImageField("寬度", "imageWidth", imageSettings.width, { type: "number", min: 64, max: 2048 });
+    const heightField = createImageField("高度", "imageHeight", imageSettings.height, { type: "number", min: 64, max: 2048 });
+    sizePresetField.input.addEventListener("change", () => {
+      if (sizePresetField.input.value === "portrait") {
+        widthField.input.value = "832";
+        heightField.input.value = "1216";
+      } else if (sizePresetField.input.value === "landscape") {
+        widthField.input.value = "1216";
+        heightField.input.value = "832";
+      }
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
+    });
+    const stepsField = createImageField("Steps", "imageSteps", imageSettings.steps, { type: "number", min: 1, max: 50 });
+    const samplesField = createImageField("張數", "imageSamples", imageSettings.samples, { type: "number", min: 1, max: 4 });
+    const scaleField = createImageField("Prompt Guidance", "imageScale", imageSettings.scale, { type: "number", min: 0, max: 20, step: "0.1" });
+    const cfgField = createImageField("Prompt Guidance Rescale", "imageCfgRescale", imageSettings.cfgRescale, {
+      type: "number",
+      min: 0,
+      max: 1,
+      step: "0.05"
+    });
+    const samplerField = createImageSelect("Sampler", "imageSampler", imageSettings.sampler, [
+      ["k_euler_ancestral", "Euler Ancestral"],
+      ["k_euler", "Euler"],
+      ["k_dpmpp_2m", "DPM++ 2M"],
+      ["k_dpmpp_sde", "DPM++ SDE"]
+    ]);
+    const noiseField = createImageSelect("Noise Schedule", "imageNoiseSchedule", imageSettings.noiseSchedule, [
+      ["karras", "Karras"],
+      ["native", "Native"],
+      ["exponential", "Exponential"],
+      ["polyexponential", "Polyexponential"]
+    ]);
+    const seedField = createImageField("Seed（空白=random）", "imageSeed", imageSettings.seed, { type: "text" });
+    const formatField = createImageSelect("格式", "imageFormat", imageSettings.imageFormat, [
+      ["png", "PNG"],
+      ["webp", "WebP"]
+    ]);
+    const varietyLabel = document.createElement("label");
+    varietyLabel.className = "checkbox-label";
+    const varietyInput = document.createElement("input");
+    varietyInput.type = "checkbox";
+    varietyInput.checked = Boolean(imageSettings.varietyPlus);
+    varietyInput.dataset.field = "imageVarietyPlus";
+    varietyLabel.append(varietyInput, document.createTextNode("Variety+"));
+
+    const imageSettingsGrid = document.createElement("div");
+    imageSettingsGrid.className = "compression-image-settings-grid";
+    imageSettingsGrid.append(
+      modelField.label,
+      sizePresetField.label,
+      widthField.label,
+      heightField.label,
+      stepsField.label,
+      samplesField.label,
+      scaleField.label,
+      cfgField.label,
+      samplerField.label,
+      noiseField.label,
+      seedField.label,
+      formatField.label,
+      varietyLabel,
+      negativeField.label
+    );
+    imageSettingsBox.append(imageSettingsTitle, imageSettingsHint, imageSettingsGrid);
+    imageSettingsBox.hidden = !isImageKeywordFollowupAction(keywordFollowupSelect.value);
+
     const editor = document.createElement("div");
     editor.className = "compression-trigger-action-grid";
     editor.append(
@@ -5826,7 +6096,8 @@ function renderCompressionTriggerActionEditor(actions = []) {
       roundLabel,
       turnsLabel,
       keywordLabel,
-      sourceLabel
+      sourceLabel,
+      imageSettingsBox
     );
 
     editor.querySelectorAll("input, textarea, select").forEach((field) => {
@@ -5838,6 +6109,9 @@ function renderCompressionTriggerActionEditor(actions = []) {
         syncSelectedCompressionProfileFromEditor();
         clearModularPromptPreview();
       });
+    });
+    keywordFollowupSelect.addEventListener("change", () => {
+      imageSettingsBox.hidden = !isImageKeywordFollowupAction(keywordFollowupSelect.value);
     });
 
     item.append(header, editor);
@@ -6848,7 +7122,7 @@ function openRoleCardDialog(card = null) {
 }
 
 function refreshAssistantSelector() {
-  const assistantMessages = (appState?.conversation || []).filter((msg) => msg.role === "assistant");
+  const assistantMessages = (appState?.conversation || []).filter((msg) => msg.role === "assistant" && !isImageOnlyMessage(msg));
   el.assistantMessageSelect.innerHTML = "";
 
   assistantMessages.forEach((msg, index) => {
@@ -6936,6 +7210,27 @@ async function refresh() {
   applyMobilePage();
   resizeChatInput();
   playDailyWelcomeAudio(state);
+}
+
+function scheduleBackgroundImageRefresh(previousImageCount = 0) {
+  let attempts = 0;
+  const maxAttempts = 8;
+  const poll = async () => {
+    attempts += 1;
+    try {
+      await refresh();
+      const currentImageCount = (appState?.conversation || []).filter((message) => isImageOnlyMessage(message)).length;
+      if (currentImageCount > previousImageCount || attempts >= maxAttempts) {
+        return;
+      }
+    } catch {
+      if (attempts >= maxAttempts) {
+        return;
+      }
+    }
+    window.setTimeout(poll, 2500);
+  };
+  window.setTimeout(poll, 1500);
 }
 
 function getCompressionProfileStateFromRuntime(compression = {}, profileId = STANDARD_COMPRESSION_PROFILE_ID) {
@@ -7827,12 +8122,16 @@ function bindEvents() {
       await requestChatStream(content, {
         onEvent: (streamEvent) => {
           if (streamEvent.type === "done" && streamEvent.state) {
+            const previousImageCount = (appState?.conversation || []).filter((message) => isImageOnlyMessage(message)).length;
             appState = streamEvent.state;
             renderMessages(appState);
             renderAiLogs(appState);
             renderStatus(appState);
             refreshAssistantSelector();
             realignMobileChat({ scroll: true });
+            if (streamEvent.backgroundImageGeneration) {
+              scheduleBackgroundImageRefresh(previousImageCount);
+            }
             return;
           }
           applyChatStreamEventToMessage(streamEvent, streamingAssistantMessage);

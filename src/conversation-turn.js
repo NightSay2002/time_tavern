@@ -115,7 +115,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
     input,
     turnExtra
   });
-  const modelProcessingResult = generation?.modelProcessingResult || deps.getLastModelProcessingResult?.(currentState) || {};
+  let modelProcessingResult = generation?.modelProcessingResult || deps.getLastModelProcessingResult?.(currentState) || {};
   let assistantText = safeText(generation?.content);
   let fullReasoning = safeText(generation?.reasoningContent);
 
@@ -169,7 +169,10 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
 
   requireDependency(deps, "appendConversationMessage")(assistantMessage);
   if (!modelProcessingResult.skipReasoner) {
-    await deps.updateCompressionAfterAssistantMessage?.(currentState, runtimeUserName, assistantMessage);
+    const afterProcessingResult = await deps.updateCompressionAfterAssistantMessage?.(currentState, runtimeUserName, assistantMessage, turnExtra);
+    if (afterProcessingResult?.didProcess) {
+      modelProcessingResult = afterProcessingResult;
+    }
   }
   requireDependency(deps, "saveState")(currentState);
 

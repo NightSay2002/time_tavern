@@ -7,7 +7,7 @@ import os from "node:os";
 import zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ApplicationCommandOptionType, Client, GatewayIntentBits, MessageFlags, Partials } from "discord.js";
+import { ApplicationCommandOptionType, AttachmentBuilder, Client, GatewayIntentBits, MessageFlags, Partials } from "discord.js";
 import { runConversationTurnWorkflow } from "./conversation-turn.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -60,6 +60,8 @@ const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
 const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
+const KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER = "image_then_reasoner";
+const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const KEYWORD_PROXIMITY_CHARS = 10;
 const TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS = 5;
@@ -2091,6 +2093,35 @@ function isNovelAiV4Model(model = "") {
   return /nai-diffusion-4/u.test(normalizePlainText(model));
 }
 
+function novelAiVarietySigmaForModel(model = "") {
+  return /nai-diffusion-4-5/u.test(normalizePlainText(model)) ? 58 : 19;
+}
+
+function normalizeNovelAiBoolean(value, fallback = false) {
+  if (value === true || value === false) {
+    return value;
+  }
+  if (value === "true" || value === "1" || value === 1) {
+    return true;
+  }
+  if (value === "false" || value === "0" || value === 0) {
+    return false;
+  }
+  return fallback;
+}
+
+function normalizeNovelAiVarietyPlus(source = {}) {
+  const explicit = source.varietyPlus ?? source.variety_plus ?? source.variety;
+  const skipCfg = source.skipCfgAboveSigma ?? source.skip_cfg_above_sigma;
+  if (explicit !== undefined) {
+    return normalizeNovelAiBoolean(explicit, true);
+  }
+  if (skipCfg !== undefined) {
+    return skipCfg !== null && skipCfg !== "" && Number(skipCfg) > 0;
+  }
+  return true;
+}
+
 function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}) {
   const charCaptions = characters
     .map((character) => {
@@ -2130,6 +2161,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const steps = clampInteger(source.steps, 28, 1, 50);
   const samples = clampInteger(source.samples ?? source.n_samples, 1, 1, 6);
   const scale = clampNumber(source.scale, 5, 0, 20);
+  const varietyPlus = normalizeNovelAiVarietyPlus(source);
   const cfgRescale = clampNumber(source.cfgRescale ?? source.cfg_rescale, 0, 0, 1);
   const ucPreset = clampInteger(source.ucPreset, 0, 0, 99);
   const sampler = normalizePlainText(source.sampler) || "k_euler_ancestral";
@@ -2194,6 +2226,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     sm: Boolean(source.sm),
     sm_dyn: Boolean(source.smDyn || source.sm_dyn),
     cfg_rescale: cfgRescale,
+    skip_cfg_above_sigma: varietyPlus ? novelAiVarietySigmaForModel(model) : null,
     noise_schedule: noiseSchedule,
     params_version: clampInteger(source.paramsVersion || source.params_version, isNovelAiV4Model(model) ? 3 : 1, 1, 10),
     image_format: imageFormat,
@@ -2247,6 +2280,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     steps,
     samples,
     scale,
+    varietyPlus,
     cfgRescale,
     ucPreset,
     sampler,
@@ -2505,6 +2539,7 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
       sampler: settings.sampler,
       scale: settings.scale,
       cfg_rescale: settings.cfgRescale,
+      skip_cfg_above_sigma: settings.varietyPlus ? novelAiVarietySigmaForModel(settings.model) : null,
       ucPreset: settings.ucPreset,
       noise_schedule: settings.noiseSchedule,
       model: settings.model,
@@ -3219,6 +3254,27 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     return KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
   }
   if (
+    normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER ||
+    normalized === "image_parallel" ||
+    normalized === "parallel_image" ||
+    normalized === "generate_image_parallel" ||
+    raw === "建立圖片並行運作" ||
+    raw === "建立圖片並行" ||
+    raw === "並行建立圖片"
+  ) {
+    return KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+  }
+  if (
+    normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
+    normalized === "image_then_continue" ||
+    normalized === "generate_image_continue" ||
+    normalized === "image_continue" ||
+    raw === "建立圖片繼續觸發正文" ||
+    raw === "建立圖片，繼續觸發正文"
+  ) {
+    return KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER;
+  }
+  if (
     normalized === KEYWORD_FOLLOWUP_CONTINUE_REASONER ||
     normalized === "continue" ||
     normalized === "continue_chat" ||
@@ -3229,6 +3285,42 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     return KEYWORD_FOLLOWUP_CONTINUE_REASONER;
   }
   return legacySkipReasoner ? KEYWORD_FOLLOWUP_STOP_AFTER_MODEL : KEYWORD_FOLLOWUP_CONTINUE_REASONER;
+}
+
+function isImageKeywordFollowupAction(value = "") {
+  const normalized = normalizeKeywordFollowupAction(value);
+  return normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
+    normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+}
+
+function isParallelImageKeywordFollowupAction(value = "") {
+  return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+}
+
+function normalizeModelImageGenerationSettings(input = {}) {
+  const source = input && typeof input === "object"
+    ? input.imageGeneration || input.novelAiImage || input.imageSettings || input
+    : {};
+  const width = clampInteger(source.width, 832, 64, 2048);
+  const height = clampInteger(source.height, 1216, 64, 2048);
+  const rawSeed = safeText(source.seed);
+  const seedNumber = Number(rawSeed);
+  return {
+    model: normalizePlainText(source.model) || "nai-diffusion-4-5-curated",
+    negativePrompt: normalizePlainText(source.negativePrompt || source.negative_prompt || source.uc),
+    width,
+    height,
+    steps: clampInteger(source.steps, 28, 1, 50),
+    samples: clampInteger(source.samples ?? source.n_samples, 1, 1, 4),
+    scale: clampNumber(source.scale ?? source.guidance ?? source.promptGuidance, 6, 0, 20),
+    cfgRescale: clampNumber(source.cfgRescale ?? source.cfg_rescale ?? source.promptGuidanceRescale, 0, 0, 1),
+    sampler: normalizePlainText(source.sampler) || "k_euler_ancestral",
+    noiseSchedule: normalizePlainText(source.noiseSchedule || source.noise_schedule) || "karras",
+    ucPreset: clampInteger(source.ucPreset, 0, 0, 99),
+    varietyPlus: normalizeNovelAiBoolean(source.varietyPlus ?? source.skipCfgAboveSigma, false),
+    imageFormat: normalizePlainText(source.imageFormat || source.image_format) === "webp" ? "webp" : "png",
+    seed: rawSeed && Number.isFinite(seedNumber) && seedNumber >= 0 ? Math.floor(seedNumber) >>> 0 : ""
+  };
 }
 
 function normalizeModelAppendTermConfig(input = {}, index = 0) {
@@ -3279,6 +3371,7 @@ function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options 
     keywordFollowupAction,
     skipReasoner: action === MODEL_TRIGGER_ACTION_CALL_API &&
       keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL,
+    imageGeneration: normalizeModelImageGenerationSettings(source),
     triggers
   };
 }
@@ -4878,7 +4971,7 @@ function createUiActions(state) {
     {
       key: "editAiOutput",
       label: "編輯AI的輸出對話",
-      enabled: state.conversation.some((message) => message.role === "assistant")
+      enabled: state.conversation.some((message) => message.role === "assistant" && !isModelInvisibleMessage(message))
     }
   ];
 }
@@ -4919,7 +5012,7 @@ function getPreviousAssistantMessage(currentState, latestUserMessageId = "") {
 
   for (let i = latestUserIndex - 1; i >= 0; i -= 1) {
     const item = currentState.conversation[i];
-    if (item?.role === "assistant") {
+    if (item?.role === "assistant" && !isModelInvisibleMessage(item)) {
       return item;
     }
   }
@@ -4980,7 +5073,7 @@ function getStoredOpeningDialogueMessage(currentState) {
     if (message.role === "user") {
       break;
     }
-    if (message.role === "assistant" && safeText(message.content)) {
+    if (message.role === "assistant" && safeText(message.content) && !isModelInvisibleMessage(message)) {
       leadingAssistantMessages.push(message);
     }
   }
@@ -5013,7 +5106,7 @@ function getAllConversationContextMessages(currentState, latestUserMessageId = "
   }
   return currentState.conversation
     .slice(0, latestUserIndex)
-    .filter((item) => item && typeof item === "object");
+    .filter((item) => item && typeof item === "object" && !isModelInvisibleMessage(item));
 }
 
 function getDialogueContextRounds(currentState = null) {
@@ -5118,7 +5211,7 @@ function getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUserMess
       pendingUser = message;
       return;
     }
-    if (message.role === "assistant" && pendingUser) {
+    if (message.role === "assistant" && pendingUser && !isModelInvisibleMessage(message)) {
       rounds.push([pendingUser, message]);
       pendingUser = null;
     }
@@ -5467,6 +5560,11 @@ function getLastModelProcessingResult(currentState = state) {
   };
 }
 
+function hasPendingModelImageGeneration(result = {}) {
+  return (Array.isArray(result?.processedActions) ? result.processedActions : [])
+    .some((item) => item?.imageGeneration?.pending);
+}
+
 function formatCompressionContextBlock(messages = []) {
   const content = (Array.isArray(messages) ? messages : [])
     .map((message, index) => {
@@ -5490,6 +5588,224 @@ function buildCompressionRoleCardContextMessage(currentState = state, runtimeUse
 
 function shouldCompressionProfileReadRoleCard(profile = {}) {
   return normalizeCompressionContextScope(profile.contextScope) === COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT;
+}
+
+function buildModelTriggerApiMessages({
+  currentState = state,
+  runtimeUserName = "",
+  profile = {},
+  triggerAction = {},
+  triggeredBy = [],
+  messagesToCompress = [],
+  profileState = {}
+}) {
+  const roleCardContextMessage = shouldCompressionProfileReadRoleCard(profile)
+    ? buildCompressionRoleCardContextMessage(currentState, runtimeUserName)
+    : "";
+  return [
+    {
+      role: "user",
+      content: [
+        `【大模型】${profile.name} (${profile.id})`,
+        `【觸發組合】${triggerAction.name} (${triggerAction.id})`,
+        `【觸發原因】${triggeredBy.join("、")}`,
+        "【模型規則】",
+        buildContextCompressionInstructionPrompt(currentState, profile)
+      ].join("\n")
+    },
+    ...(roleCardContextMessage
+      ? [{
+          role: "user",
+          content: roleCardContextMessage
+        }]
+      : []),
+    {
+      role: "user",
+      content: formatCompressionContextBlock(messagesToCompress)
+    },
+    {
+      role: "user",
+      content: buildCurrentCompressionContentMessage(profileState.summary)
+    }
+  ];
+}
+
+function getModelTriggerApiPurpose(profile = {}, suffix = "") {
+  const basePurpose = normalizeCompressionProfileId(profile.id) === STANDARD_COMPRESSION_PROFILE_ID
+    ? "context_compression"
+    : `context_compression:${normalizeCompressionProfileId(profile.id)}`;
+  return suffix ? `${basePurpose}:${suffix}` : basePurpose;
+}
+
+function createModelImageMessageContent(profile = {}, triggerAction = {}, status = "success", detail = "") {
+  const name = getModelTriggerCompletionName(profile, triggerAction);
+  if (status === "error") {
+    return `【${name}】圖片生成失敗：${safeText(detail) || "未知錯誤"}`;
+  }
+  return `【${name}】圖片生成完成`;
+}
+
+function createModelImageMessage({
+  profile = {},
+  triggerAction = {},
+  turnExtra = {},
+  images = [],
+  prompt = "",
+  status = "success",
+  detail = ""
+}) {
+  return createMessageRecord({
+    role: "assistant",
+    content: createModelImageMessageContent(profile, triggerAction, status, detail),
+    source: "model_image",
+    extra: {
+      ...turnExtra,
+      imageOnly: true,
+      excludeFromModel: true,
+      modelImageGeneration: true,
+      modelImageStatus: status,
+      profileId: profile.id,
+      profileName: profile.name || profile.id,
+      triggerActionId: triggerAction.id,
+      triggerActionName: triggerAction.name || "",
+      basePrompt: safeText(prompt),
+      images
+    }
+  });
+}
+
+async function sendDiscordModelImageMessage(turnExtra = {}, imageMessage = null, generatedImages = []) {
+  const channelId = safeText(turnExtra.discordChannelId || turnExtra.channelId);
+  if (!channelId || !activeDiscordClient || !imageMessage) {
+    return [];
+  }
+  try {
+    const channel = await activeDiscordClient.channels.fetch(channelId);
+    if (!channel || typeof channel.send !== "function") {
+      return [];
+    }
+    const files = (Array.isArray(generatedImages) ? generatedImages : [])
+      .map((image) => {
+        const parsed = parseImageDataUrl(image?.dataUrl || "");
+        if (!parsed) {
+          return null;
+        }
+        return new AttachmentBuilder(parsed.buffer, {
+          name: safeText(image.fileName) || `novelai-${Date.now()}.${getImageExtensionFromMime(parsed.mimeType)}`
+        });
+      })
+      .filter(Boolean);
+    const sent = await channel.send({
+      content: safeText(imageMessage.content) || "圖片生成完成",
+      ...(files.length > 0 ? { files } : {})
+    });
+    rememberDiscordReplyMessageIds(imageMessage, sent ? [sent] : []);
+    return sent ? [sent] : [];
+  } catch (error) {
+    console.warn(`Discord 圖片訊息發送失敗：${safeText(error?.message) || error}`);
+    return [];
+  }
+}
+
+function saveGeneratedNovelAiImagesForMessage(generatedImages = [], prompt = "") {
+  return (Array.isArray(generatedImages) ? generatedImages : []).map((image, index) => {
+    const item = saveNovelAiAlbumItem({
+      imageDataUrl: image.dataUrl,
+      fileName: image.fileName || `model-image-${index + 1}.png`,
+      metadata: image.metadata || {}
+    });
+    return {
+      id: item.id,
+      fileName: item.fileName,
+      mimeType: item.mimeType,
+      imageUrl: item.imageUrl,
+      prompt: safeText(prompt),
+      metadata: image.metadata || {}
+    };
+  });
+}
+
+async function buildModelImageGenerationResult({
+  currentState = state,
+  runtimeUserName = "",
+  profile = {},
+  triggerAction = {},
+  triggeredBy = [],
+  messagesToCompress = [],
+  profileState = {}
+}) {
+  const promptCompletion = await callChatApiCompletionRaw({
+    messages: buildModelTriggerApiMessages({
+      currentState,
+      runtimeUserName,
+      profile,
+      triggerAction,
+      triggeredBy,
+      messagesToCompress,
+      profileState
+    }),
+    purpose: getModelTriggerApiPurpose(profile, "image_prompt")
+  });
+  const basePrompt = safeText(promptCompletion.content);
+  if (!basePrompt) {
+    throw new Error("大模型沒有輸出 Base Prompt。");
+  }
+  const settings = {
+    ...normalizeModelImageGenerationSettings(triggerAction),
+    prompt: basePrompt
+  };
+  const generated = await generateNovelAiImages({ settings });
+  const images = saveGeneratedNovelAiImagesForMessage(generated.images, basePrompt);
+  return {
+    prompt: basePrompt,
+    images,
+    generatedImages: generated.images
+  };
+}
+
+async function appendModelImageGenerationMessage(result = {}, context = {}) {
+  const message = createModelImageMessage({
+    profile: context.profile,
+    triggerAction: context.triggerAction,
+    turnExtra: context.turnExtra,
+    images: result.images || [],
+    prompt: result.prompt || "",
+    status: result.status || "success",
+    detail: result.detail || ""
+  });
+  appendConversationMessage(message);
+  saveState(state);
+  await sendDiscordModelImageMessage(context.turnExtra, message, result.generatedImages || []);
+  saveState(state);
+  return message;
+}
+
+async function runModelImageGenerationTask(context = {}) {
+  try {
+    const result = await buildModelImageGenerationResult(context);
+    return appendModelImageGenerationMessage(result, context);
+  } catch (error) {
+    return appendModelImageGenerationMessage({
+      status: "error",
+      detail: error?.message || "未知錯誤",
+      images: [],
+      generatedImages: []
+    }, context);
+  }
+}
+
+function queueParallelModelImageGeneration(context = {}) {
+  void buildModelImageGenerationResult(context)
+    .then((result) => withStateLock(() => appendModelImageGenerationMessage(result, context)))
+    .catch((error) => withStateLock(() => appendModelImageGenerationMessage({
+      status: "error",
+      detail: error?.message || "未知錯誤",
+      images: [],
+      generatedImages: []
+    }, context)))
+    .catch((error) => {
+      console.warn(`並行圖片生成收尾失敗：${safeText(error?.message) || error}`);
+    });
 }
 
 function normalizeKeywordSearchText(text = "") {
@@ -5816,7 +6132,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
       const currentCompressionState = normalizeContextCompressionState(currentState.contextCompression);
       const profileState = getCompressionProfileState(currentCompressionState, profile.id);
       const uncompressedRounds = rounds.filter((round) => getRoundTurnNumber(round) > profileState.compressedThroughTurnNumber);
-      const triggeredBy = shouldTriggerCompressionProfile({
+      let triggeredBy = shouldTriggerCompressionProfile({
         profile,
         triggerAction,
         profileState,
@@ -5837,17 +6153,29 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
       const keywordMatch = triggeredByKeyword
         ? getCompressionKeywordTriggerMatch(currentState, latestUser, triggers)
         : { matchedAssistant: false };
+      if (phase === "after_assistant" && triggeredByKeyword && !keywordMatch.matchedAssistant) {
+        triggeredBy = triggeredBy.filter((item) => item !== "觸發關鍵字");
+        if (triggeredBy.length === 0) {
+          continue;
+        }
+      }
       const includeLatestAssistant = Boolean(keywordMatch.matchedAssistant);
       const triggeredEveryTurn = triggeredBy.includes("每回合觸發");
+      const keywordFollowupAction = normalizeKeywordFollowupAction(
+        triggerAction.keywordFollowupAction,
+        triggerAction.skipReasoner
+      );
       const skipReasonerAfterKeyword = phase === "before_reasoner" &&
         triggeredByKeyword &&
         triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
-        normalizeKeywordFollowupAction(triggerAction.keywordFollowupAction, triggerAction.skipReasoner) ===
-          KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
+        keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
+      const shouldRunImageFollowup = triggeredBy.includes("觸發關鍵字") &&
+        triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
+        isImageKeywordFollowupAction(keywordFollowupAction);
       const includeLatestUser = includeLatestAssistant ||
         triggeredBy.includes("開始觸發") ||
         triggeredEveryTurn ||
-        (triggeredByKeyword && triggers.keywordSource !== "assistant");
+        (triggeredBy.includes("觸發關鍵字") && triggers.keywordSource !== "assistant");
       const messagesToCompress = buildMessagesToCompressForProfile({
         currentState,
         runtimeUserName,
@@ -5874,6 +6202,13 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         actionId: triggerAction.id,
         actionName: getModelTriggerCompletionName(profile, triggerAction),
         action: triggerAction.action,
+        keywordFollowupAction,
+        imageGeneration: shouldRunImageFollowup
+          ? {
+              pending: keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER,
+              parallel: keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER
+            }
+          : null,
         skipReasoner: skipReasonerAfterKeyword,
         triggeredBy
       };
@@ -5904,39 +6239,44 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         }
       );
       options.onStatus?.("compression");
-      const roleCardContextMessage = shouldCompressionProfileReadRoleCard(profile)
-        ? buildCompressionRoleCardContextMessage(currentState, runtimeUserName)
-        : "";
+
+      if (shouldRunImageFollowup) {
+        setCompressionProfileState(currentState, profile.id, {
+          summary: profileState.summary,
+          compressedThroughTurnNumber,
+          updatedAt: nowIso()
+        });
+        const imageContext = {
+          currentState,
+          runtimeUserName,
+          profile,
+          triggerAction,
+          triggeredBy,
+          messagesToCompress,
+          profileState,
+          turnExtra: options.turnExtra || {}
+        };
+        if (isParallelImageKeywordFollowupAction(keywordFollowupAction)) {
+          queueParallelModelImageGeneration(imageContext);
+        } else {
+          await runModelImageGenerationTask(imageContext);
+        }
+        processedActions.push(processedAction);
+        didCompress = true;
+        continue;
+      }
+
       const completion = await callChatApiCompletionRaw({
-        messages: [
-          {
-            role: "user",
-            content: [
-              `【大模型】${profile.name} (${profile.id})`,
-              `【觸發組合】${triggerAction.name} (${triggerAction.id})`,
-              `【觸發原因】${triggeredBy.join("、")}`,
-              "【模型規則】",
-              buildContextCompressionInstructionPrompt(currentState, profile)
-            ].join("\n")
-          },
-          ...(roleCardContextMessage
-            ? [{
-                role: "user",
-                content: roleCardContextMessage
-              }]
-            : []),
-          {
-            role: "user",
-            content: formatCompressionContextBlock(messagesToCompress)
-          },
-          {
-            role: "user",
-            content: buildCurrentCompressionContentMessage(profileState.summary)
-          }
-        ],
-        purpose: profile.id === STANDARD_COMPRESSION_PROFILE_ID
-          ? "context_compression"
-          : `context_compression:${profile.id}`
+        messages: buildModelTriggerApiMessages({
+          currentState,
+          runtimeUserName,
+          profile,
+          triggerAction,
+          triggeredBy,
+          messagesToCompress,
+          profileState
+        }),
+        purpose: getModelTriggerApiPurpose(profile)
       });
 
       setCompressionProfileState(currentState, profile.id, {
@@ -5966,20 +6306,29 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
   return returnDetails ? result : currentState.contextCompression;
 }
 
-async function updateCompressionAfterAssistantMessage(currentState, runtimeUserName = "", assistantMessage = null) {
+async function updateCompressionAfterAssistantMessage(currentState, runtimeUserName = "", assistantMessage = null, turnExtra = {}) {
   if (isCharacterCardCreationAssistantActive(currentState)) {
     return false;
   }
   const compressionBefore = normalizeContextCompressionState(currentState.contextCompression);
-  const compressionAfter = await ensureContextCompressionSummary(currentState, runtimeUserName, {
-    phase: "after_assistant"
+  const processingResult = await ensureContextCompressionSummary(currentState, runtimeUserName, {
+    phase: "after_assistant",
+    turnExtra,
+    returnDetails: true
   });
-  const didAdvance = didContextCompressionAdvance(compressionBefore, compressionAfter);
+  const imageOnlyProcessing = Array.isArray(processingResult.processedActions) &&
+    processingResult.processedActions.length > 0 &&
+    processingResult.processedActions.every((item) => isImageKeywordFollowupAction(item.keywordFollowupAction));
+  const didAdvance = !imageOnlyProcessing &&
+    didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
   if (didAdvance && assistantMessage?.extra) {
     assistantMessage.extra.compressionNotice = true;
     assistantMessage.extra.stateAfterTurnSnapshot = captureNarrativeCheckpoint(currentState);
   }
-  return didAdvance;
+  return {
+    ...processingResult,
+    didAdvance
+  };
 }
 
 function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUserName = "", config = null) {
@@ -6087,8 +6436,15 @@ function buildModularPromptPreview(currentState, mode = "single", configInput = 
   };
 }
 
+function isModelInvisibleMessage(message = {}) {
+  return Boolean(message?.excludeFromModel || message?.imageOnly || message?.extra?.excludeFromModel || message?.extra?.imageOnly);
+}
+
 function getMessageModelContent(message) {
   if (!message || typeof message !== "object") {
+    return "";
+  }
+  if (isModelInvisibleMessage(message)) {
     return "";
   }
 
@@ -6112,7 +6468,7 @@ function getMessageModelContent(message) {
 function getLatestAssistantContent(currentState) {
   for (let i = currentState.conversation.length - 1; i >= 0; i -= 1) {
     const item = currentState.conversation[i];
-    if (item.role === "assistant") {
+    if (item.role === "assistant" && !isModelInvisibleMessage(item)) {
       return safeText(item.content);
     }
   }
@@ -6128,7 +6484,7 @@ function getLatestAssistantMessageAfterUser(currentState, latestUser = null) {
     return null;
   }
   for (let i = conversation.length - 1; i > userIndex; i -= 1) {
-    if (conversation[i]?.role === "assistant") {
+    if (conversation[i]?.role === "assistant" && !isModelInvisibleMessage(conversation[i])) {
       return conversation[i];
     }
   }
@@ -7784,13 +8140,18 @@ function isConversationTurnReady(currentState) {
   return Boolean(currentState?.aiSessionStarted && hasActiveConversationTarget(currentState));
 }
 
-async function generateOneShotConversationAssistant({ state: currentState, runtimeUserName, input }) {
+async function generateOneShotConversationAssistant({ state: currentState, runtimeUserName, input, turnExtra = {} }) {
   const compressionBefore = normalizeContextCompressionState(currentState.contextCompression);
   const content = await runReasonerHistoryConversationTurn(currentState, runtimeUserName, {
-    reloadFeedback: safeText(input?.reloadFeedback)
+    reloadFeedback: safeText(input?.reloadFeedback),
+    turnExtra
   });
   const modelProcessingResult = getLastModelProcessingResult(currentState);
-  const compressionNotice = !isCharacterCardCreationAssistantActive(currentState) &&
+  const imageOnlyProcessing = Array.isArray(modelProcessingResult.processedActions) &&
+    modelProcessingResult.processedActions.length > 0 &&
+    modelProcessingResult.processedActions.every((item) => isImageKeywordFollowupAction(item.keywordFollowupAction));
+  const compressionNotice = !imageOnlyProcessing &&
+    !isCharacterCardCreationAssistantActive(currentState) &&
     didContextCompressionAdvance(compressionBefore, currentState.contextCompression);
   return {
     content,
@@ -7800,7 +8161,7 @@ async function generateOneShotConversationAssistant({ state: currentState, runti
   };
 }
 
-async function generateStreamingConversationAssistant({ state: currentState, runtimeUserName, handlers = {} }) {
+async function generateStreamingConversationAssistant({ state: currentState, runtimeUserName, turnExtra = {}, handlers = {} }) {
   const onPhaseStatus = typeof handlers.onPhaseStatus === "function" ? handlers.onPhaseStatus : null;
   const onReasoningDelta = typeof handlers.onReasoningDelta === "function" ? handlers.onReasoningDelta : null;
   const onContentDelta = typeof handlers.onContentDelta === "function" ? handlers.onContentDelta : null;
@@ -7824,9 +8185,14 @@ async function generateStreamingConversationAssistant({ state: currentState, run
   const processingResult = await ensureContextCompressionSummary(currentState, runtimeUserName, {
     onStatus: onPhaseStatus,
     phase: "before_reasoner",
-    returnDetails: true
+    returnDetails: true,
+    turnExtra
   });
-  const compressionNotice = didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
+  const imageOnlyProcessing = Array.isArray(processingResult.processedActions) &&
+    processingResult.processedActions.length > 0 &&
+    processingResult.processedActions.every((item) => isImageKeywordFollowupAction(item.keywordFollowupAction));
+  const compressionNotice = !imageOnlyProcessing &&
+    didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
   if (processingResult.skipReasoner) {
     const completionText = formatModelProcessingCompletionMessage(processingResult.processedActions);
     onContentDelta?.(completionText);
@@ -7917,7 +8283,8 @@ async function runConversationTurnStreaming({
       }
     );
     return {
-      assistantMessage: result.assistantMessage
+      assistantMessage: result.assistantMessage,
+      modelProcessingResult: result.modelProcessingResult
     };
   });
 }
@@ -8232,7 +8599,7 @@ function applyAssistantFeedbackToConversation(currentState, { assistantMessageId
   if (!assistantMessage) {
     return { ok: false, status: 404, error: "訊息不存在" };
   }
-  if (assistantMessage.role !== "assistant") {
+  if (assistantMessage.role !== "assistant" || isModelInvisibleMessage(assistantMessage)) {
     return { ok: false, status: 400, error: "僅允許標記 AI 正文輸出" };
   }
 
@@ -8304,7 +8671,7 @@ function findAssistantMessageByDiscordReplyId(currentState, discordReplyMessageI
     return null;
   }
   return (Array.isArray(currentState?.conversation) ? currentState.conversation : [])
-    .find((item) => item?.role === "assistant" && getDiscordReplyMessageIds(item).includes(normalizedId)) || null;
+    .find((item) => item?.role === "assistant" && !isModelInvisibleMessage(item) && getDiscordReplyMessageIds(item).includes(normalizedId)) || null;
 }
 
 function normalizeAiLog(entry) {
@@ -8370,9 +8737,16 @@ function removeLatestAssistantTurnForReload(currentState) {
     throw new Error("目前沒有可重生成的 AI 對話。");
   }
 
-  const lastIndex = currentState.conversation.length - 1;
-  const latestAssistant = currentState.conversation[lastIndex];
-  if (!latestAssistant || latestAssistant.role !== "assistant") {
+  let latestAssistantIndex = -1;
+  for (let index = currentState.conversation.length - 1; index >= 0; index -= 1) {
+    const item = currentState.conversation[index];
+    if (item?.role === "assistant" && !isModelInvisibleMessage(item)) {
+      latestAssistantIndex = index;
+      break;
+    }
+  }
+  const latestAssistant = latestAssistantIndex >= 0 ? currentState.conversation[latestAssistantIndex] : null;
+  if (!latestAssistant) {
     throw new Error("目前最新一則不是 AI 回覆，無法執行重生成。");
   }
   if (latestAssistant.source === "opening") {
@@ -8380,7 +8754,7 @@ function removeLatestAssistantTurnForReload(currentState) {
   }
 
   let latestUserIndex = -1;
-  for (let index = lastIndex - 1; index >= 0; index -= 1) {
+  for (let index = latestAssistantIndex - 1; index >= 0; index -= 1) {
     if (currentState.conversation[index]?.role === "user") {
       latestUserIndex = index;
       break;
@@ -8391,7 +8765,7 @@ function removeLatestAssistantTurnForReload(currentState) {
     throw new Error("找不到對應的上一則使用者輸入，無法重生成。");
   }
 
-  const [removedAssistant] = currentState.conversation.splice(lastIndex, 1);
+  const [removedAssistant] = currentState.conversation.splice(latestAssistantIndex);
   const latestUser = currentState.conversation[latestUserIndex];
   return {
     latestUser,
@@ -9472,6 +9846,7 @@ const server = http.createServer(async (req, res) => {
         writeNdjsonEvent(res, {
           type: "done",
           assistantMessage: result.assistantMessage,
+          backgroundImageGeneration: hasPendingModelImageGeneration(result.modelProcessingResult),
           state: statePayload(state)
         });
       } catch (error) {
