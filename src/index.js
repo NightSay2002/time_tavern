@@ -52,6 +52,7 @@ const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX
 const NOVELAI_IMAGE_API_DEFAULT_BASE_URL = "https://image.novelai.net";
 const NOVELAI_PRIMARY_API_DEFAULT_BASE_URL = "https://api.novelai.net";
 const NOVELAI_REQUEST_TIMEOUT_MS = envNumber("NOVELAI_REQUEST_TIMEOUT_MS", 600000);
+const MODEL_IMAGE_PROMPT_CONTEXT_ROUNDS = envNumber("MODEL_IMAGE_PROMPT_CONTEXT_ROUNDS", 5);
 const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
 const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
@@ -5329,6 +5330,74 @@ function buildContextCompressionInstructionPrompt(currentState = state, config =
   ].filter(Boolean).join("\n");
 }
 
+function buildCompactContextCompressionInstructionPrompt(
+  currentState = state,
+  runtimeUserName = "",
+  config = null,
+  options = {}
+) {
+  const compressionConfig = resolveContextCompressionPromptConfig(currentState, config);
+  const templateVariables = createTemplateVariables(currentState, runtimeUserName);
+  const isCustomProfileConfig = config &&
+    typeof config === "object" &&
+    config.contextCompression &&
+    normalizeCompressionProfileId(config.id) !== STANDARD_COMPRESSION_PROFILE_ID;
+  const mainRules = finalizePromptTemplate(
+    compressionConfig.mainRules || (isCustomProfileConfig ? "" : getContextCompressionPrompt()),
+    templateVariables
+  );
+
+  if (options.imagePrompt === true) {
+    const moduleRules = compressionConfig.models
+      .map((model) => [
+        finalizePromptTemplate(model.addRules || "", templateVariables),
+        finalizePromptTemplate(model.deleteRules || "", templateVariables)
+      ].filter(Boolean).join("\n"))
+      .filter(Boolean)
+      .join("\n\n");
+    return [
+      mainRules,
+      moduleRules,
+      "只輸出可直接送去 NovelAI 的 Base Prompt；不要輸出標題、解釋、JSON 或 Markdown。"
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (compressionConfig.models.length === 0) {
+    return [
+      mainRules,
+      "直接輸出更新後的完整壓縮文本，禁止輸出 JSON。",
+      "請把目前模型內容與本次上下文合併成可供正文長期承接的純文本。",
+      "如果舊內容已被新資訊取代、完成或失效，請在輸出的完整文本中自然移除或改寫。"
+    ].filter(Boolean).join("\n");
+  }
+
+  const modelRules = compressionConfig.models.map((model, index) => [
+    `模塊 ${index + 1}: ${model.name || model.id}`,
+    `id:${model.id}`,
+    "新增模塊規則:",
+    finalizePromptTemplate(model.addRules || "", templateVariables) || "無",
+    "刪除模塊規則:",
+    finalizePromptTemplate(model.deleteRules || "", templateVariables) || "無",
+    `輸出欄位:model.${model.id}`,
+    `刪除欄位:delete.${model.id}`
+  ].join("\n")).join("\n\n");
+  const outputShape = {
+    model: Object.fromEntries(compressionConfig.models.map((model) => [model.id, []])),
+    delete: Object.fromEntries(compressionConfig.models.map((model) => [model.id, []]))
+  };
+  return [
+    mainRules,
+    modelRules,
+    "只能輸出一個合法 JSON 物件，禁止輸出 JSON 以外的任何文字。",
+    "所有模型欄位都必須存在；沒有新增或刪除內容時輸出空陣列。",
+    "model.<id> 只放本次需要新增保存的內容；delete.<id> 只放已失效、已完成、被新版取代或重複的舊內容。",
+    "不可把本次剛新增到 model.<id> 的內容又放進 delete.<id>。",
+    "後端會把 model.<id> 追加到既有模型內容，不會整體覆蓋；請避免重複輸出既有內容。",
+    "JSON 格式範例:",
+    JSON.stringify(outputShape, null, 2)
+  ].filter(Boolean).join("\n\n");
+}
+
 function normalizeCompressionItemText(value) {
   if (typeof value === "string") {
     return safeText(value);
@@ -5635,8 +5704,6 @@ function buildModelTriggerApiMessages({
   currentState = state,
   runtimeUserName = "",
   profile = {},
-  triggerAction = {},
-  triggeredBy = [],
   messagesToCompress = [],
   profileState = {}
 }) {
@@ -5646,13 +5713,7 @@ function buildModelTriggerApiMessages({
   return [
     {
       role: "user",
-      content: [
-        `【大模型】${profile.name} (${profile.id})`,
-        `【觸發組合】${triggerAction.name} (${triggerAction.id})`,
-        `【觸發原因】${triggeredBy.join("、")}`,
-        "【模型規則】",
-        buildContextCompressionInstructionPrompt(currentState, profile)
-      ].join("\n")
+      content: buildCompactContextCompressionInstructionPrompt(currentState, runtimeUserName, profile)
     },
     ...(roleCardContextMessage
       ? [{
@@ -5667,6 +5728,87 @@ function buildModelTriggerApiMessages({
     {
       role: "user",
       content: buildCurrentCompressionContentMessage(profileState.summary)
+    }
+  ];
+}
+
+function buildModelImagePromptInstructionPrompt(currentState = state, runtimeUserName = "", profile = {}) {
+  return buildCompactContextCompressionInstructionPrompt(currentState, runtimeUserName, profile, {
+    imagePrompt: true
+  });
+}
+
+function buildRecentModelImageContextMessages({
+  currentState = state,
+  runtimeUserName = "",
+  latestUser = null,
+  includeLatestAssistant = false,
+  contextRounds = MODEL_IMAGE_PROMPT_CONTEXT_ROUNDS
+}) {
+  const normalizedContextRounds = Math.max(1, Math.floor(Number(contextRounds) || MODEL_IMAGE_PROMPT_CONTEXT_ROUNDS));
+  const completedRoundLimit = Math.max(0, normalizedContextRounds - (latestUser ? 1 : 0));
+  const completedRounds = latestUser
+    ? getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUser.id)
+    : [];
+  const messages = completedRounds
+    .slice(completedRoundLimit > 0 ? -completedRoundLimit : completedRounds.length)
+    .flat();
+
+  if (latestUser) {
+    const latestUserContent = getCurrentUserModelContent(latestUser, currentState, runtimeUserName);
+    if (latestUserContent) {
+      messages.push({
+        role: "user",
+        content: latestUserContent,
+        requestContentPrepared: true
+      });
+    }
+  }
+
+  if (includeLatestAssistant) {
+    const latestAssistant = getLatestAssistantMessageAfterUser(currentState, latestUser);
+    const latestAssistantContent = latestAssistant ? getMessageModelContent(latestAssistant) : "";
+    if (latestAssistantContent) {
+      messages.push({
+        role: "assistant",
+        content: latestAssistantContent
+      });
+    }
+  }
+
+  return messages;
+}
+
+function buildModelImagePromptApiMessages({
+  currentState = state,
+  runtimeUserName = "",
+  profile = {},
+  includeLatestAssistant = false
+}) {
+  const latestUser = getLatestUserMessage(currentState);
+  const roleCardContextMessage = shouldCompressionProfileReadRoleCard(profile)
+    ? buildCompressionRoleCardContextMessage(currentState, runtimeUserName)
+    : "";
+  const contextMessages = buildRecentModelImageContextMessages({
+    currentState,
+    runtimeUserName,
+    latestUser,
+    includeLatestAssistant
+  });
+  return [
+    {
+      role: "system",
+      content: buildModelImagePromptInstructionPrompt(currentState, runtimeUserName, profile)
+    },
+    ...(roleCardContextMessage
+      ? [{
+          role: "user",
+          content: roleCardContextMessage
+        }]
+      : []),
+    {
+      role: "user",
+      content: formatCompressionContextBlock(contextMessages)
     }
   ];
 }
@@ -5771,19 +5913,14 @@ async function buildModelImageGenerationResult({
   runtimeUserName = "",
   profile = {},
   triggerAction = {},
-  triggeredBy = [],
-  messagesToCompress = [],
-  profileState = {}
+  includeLatestAssistant = false
 }) {
   const promptCompletion = await callChatApiCompletionRaw({
-    messages: buildModelTriggerApiMessages({
+    messages: buildModelImagePromptApiMessages({
       currentState,
       runtimeUserName,
       profile,
-      triggerAction,
-      triggeredBy,
-      messagesToCompress,
-      profileState
+      includeLatestAssistant
     }),
     purpose: getModelTriggerApiPurpose(profile, "image_prompt")
   });
@@ -6235,6 +6372,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
       const shouldRunImageFollowup = triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
         isImageKeywordFollowupAction(keywordFollowupAction);
       const includeLatestUser = includeLatestAssistant ||
+        shouldRunImageFollowup ||
         triggeredBy.includes("開始觸發") ||
         triggeredEveryTurn ||
         (triggeredBy.includes("觸發關鍵字") && triggers.keywordSource !== "assistant");
@@ -6318,6 +6456,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
           profile,
           triggerAction,
           triggeredBy,
+          includeLatestAssistant,
           messagesToCompress,
           profileState: imageProfileState,
           turnExtra: options.turnExtra || {}
@@ -6692,6 +6831,10 @@ function isContextCompressionPurpose(purpose = "") {
   return safeText(purpose).startsWith("context_compression");
 }
 
+function isModelImagePromptPurpose(purpose = "") {
+  return isContextCompressionPurpose(purpose) && safeText(purpose).split(":").includes("image_prompt");
+}
+
 function getPrimaryChatApiKey() {
   const provider = getChatApiProvider();
   const providerKeys = provider === "openai"
@@ -6824,13 +6967,42 @@ function getChatApiMaxTokensCap(model = "") {
 
 function shouldRetryChatApiLength(purpose = "chat") {
   return (
+    isContextCompressionPurpose(purpose) ||
     purpose === "reasoner_history_chat" ||
     purpose === "chat_expand" ||
     purpose === "character_card_creation_assistant_chat"
   );
 }
 
-function buildChatApiLengthRetryMessages(messages, partialContent = "") {
+function buildChatApiLengthRetryMessages(messages, partialContent = "", purpose = "chat") {
+  if (isModelImagePromptPurpose(purpose)) {
+    return [
+      ...messages,
+      {
+        role: "user",
+        content: [
+          "上一輪因輸出長度限制未完整輸出。",
+          "請重新生成一版更短、更直接的 NovelAI Base Prompt。",
+          "只輸出 prompt 本文；不要輸出標題、解釋、JSON 或 Markdown。"
+        ].join("\n")
+      }
+    ];
+  }
+
+  if (isContextCompressionPurpose(purpose)) {
+    return [
+      ...messages,
+      {
+        role: "user",
+        content: [
+          "上一輪因輸出長度限制未完整輸出。",
+          "請根據同一上下文重新生成完整模型內容，遵守原本要求的輸出格式。",
+          "不要輸出解釋，不要加額外標題。"
+        ].join("\n")
+      }
+    ];
+  }
+
   const partial = safeText(partialContent).trim();
   if (partial) {
     return [
@@ -6861,9 +7033,18 @@ function buildChatApiLengthRetryMessages(messages, partialContent = "") {
 function resolveChatApiMaxTokens({ purpose = "reasoner_history_chat", maxTokens, model = "" } = {}) {
   const resolvedModel = safeText(model) || getChatApiModel(purpose);
   const modelCap = getChatApiMaxTokensCap(resolvedModel);
+  const isCompressionPurpose = isContextCompressionPurpose(purpose);
 
   if (Number.isFinite(maxTokens) && maxTokens > 0) {
     return Math.min(Math.floor(maxTokens), modelCap);
+  }
+
+  if (isModelImagePromptPurpose(purpose)) {
+    const imagePromptMaxTokens = envFirstNumber(
+      ["MODEL_IMAGE_PROMPT_MAX_TOKENS", "NOVELAI_IMAGE_PROMPT_MAX_TOKENS"],
+      12000
+    );
+    return Math.min(Math.max(1024, Math.floor(imagePromptMaxTokens)), modelCap);
   }
 
   const envMaxTokens = envFirstNumber(
@@ -6876,7 +7057,7 @@ function resolveChatApiMaxTokens({ purpose = "reasoner_history_chat", maxTokens,
     preferredEnvMaxTokens > 0 &&
     (
       purpose === "reasoner_history_chat" ||
-      purpose === "context_compression" ||
+      isCompressionPurpose ||
       purpose === "chat_expand" ||
       purpose === "character_card_creation_assistant_chat"
     )
@@ -6886,7 +7067,7 @@ function resolveChatApiMaxTokens({ purpose = "reasoner_history_chat", maxTokens,
 
   if (
     purpose === "reasoner_history_chat" ||
-    purpose === "context_compression" ||
+    isCompressionPurpose ||
     purpose === "chat_expand" ||
     purpose === "character_card_creation_assistant_chat"
   ) {
@@ -7643,7 +7824,7 @@ async function callChatApiCompletionRaw({
     });
 
     const next = await callChatApiCompletionRaw({
-      messages: buildChatApiLengthRetryMessages(messages, trimmed),
+      messages: buildChatApiLengthRetryMessages(messages, trimmed, purpose),
       temperature: resolvedTemperature,
       maxTokens: resolvedMaxTokens,
       purpose,
@@ -7994,7 +8175,7 @@ async function callChatApiCompletionStreamRaw({
     let next;
     try {
       next = await callChatApiCompletionStreamRaw({
-        messages: buildChatApiLengthRetryMessages(messages, streamed.content),
+        messages: buildChatApiLengthRetryMessages(messages, streamed.content, purpose),
         temperature: resolvedTemperature,
         maxTokens: resolvedMaxTokens,
         purpose,

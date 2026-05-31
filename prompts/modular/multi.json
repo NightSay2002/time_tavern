@@ -128,13 +128,17 @@
       "name": "跑圖",
       "enabled": true,
       "locked": false,
-      "contextScope": "role_and_text",
+      "contextScope": "text_only",
       "triggers": {
         "everyTurn": false,
         "roundLimit": false,
         "keywords": [],
         "keywordSource": "both",
-        "turns": []
+        "turns": [
+          5,
+          10,
+          15
+        ]
       },
       "triggerActions": [
         {
@@ -165,7 +169,11 @@
             "roundLimit": false,
             "keywords": [],
             "keywordSource": "both",
-            "turns": []
+            "turns": [
+              5,
+              10,
+              15
+            ]
           }
         }
       ],
