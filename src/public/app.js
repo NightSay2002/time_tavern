@@ -1156,7 +1156,12 @@ function normalizeRoleCardCustomSection(section = {}) {
     id: String(source.id || `section_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).trim(),
     name: String(source.name || source.title || "").trim(),
     content: String(source.content || source.text || "").trim(),
-    enabled: source.enabled !== false
+    enabled: source.enabled !== false,
+    includeInImagePrompt: source.includeInImagePrompt === true ||
+      source.imagePrompt === true ||
+      source.drawPrompt === true ||
+      source.includeInDrawing === true ||
+      source.useForImagePrompt === true
   };
 }
 
@@ -6714,7 +6719,8 @@ function collectRoleCardCustomSectionsFromEditor(options = {}) {
       id: item.dataset.customSectionId || "",
       name: item.querySelector("[data-field='sectionName']")?.value || "",
       content: item.querySelector("[data-field='sectionContent']")?.value || "",
-      enabled: Boolean(item.querySelector("[data-field='sectionEnabled']")?.checked)
+      enabled: item.dataset.sectionEnabled !== "false",
+      includeInImagePrompt: item.dataset.sectionIncludeInImagePrompt === "true"
     }));
   return keepEmpty ? sections : sections.filter((item) => item.name || item.content);
 }
@@ -6738,12 +6744,18 @@ function renderRoleCardCustomSectionEditor(sections = []) {
     const item = document.createElement("div");
     item.className = "role-card custom-section-card";
     item.dataset.customSectionId = section.id;
+    item.dataset.sectionEnabled = section.enabled !== false ? "true" : "false";
+    item.dataset.sectionIncludeInImagePrompt = section.includeInImagePrompt ? "true" : "false";
 
     const title = document.createElement("div");
     title.className = "inline-actions";
 
     const label = document.createElement("strong");
-    label.textContent = `${section.name || `自定義內容 ${index + 1}`}${section.enabled === false ? "｜停用" : ""}`;
+    label.textContent = [
+      section.name || `自定義內容 ${index + 1}`,
+      section.enabled === false ? "停用" : "",
+      section.includeInImagePrompt ? "加入繪圖" : ""
+    ].filter(Boolean).join("｜");
     label.style.flex = "1";
 
     const enabledBtn = document.createElement("button");
@@ -6753,6 +6765,16 @@ function renderRoleCardCustomSectionEditor(sections = []) {
     enabledBtn.addEventListener("click", () => {
       roleCardCustomSectionsDraft = collectRoleCardCustomSectionsFromEditor({ keepEmpty: true })
         .map((item) => item.id === section.id ? { ...item, enabled: item.enabled === false } : item);
+      renderRoleCardCustomSectionEditor(roleCardCustomSectionsDraft);
+    });
+
+    const imagePromptBtn = document.createElement("button");
+    imagePromptBtn.type = "button";
+    imagePromptBtn.className = section.includeInImagePrompt ? "secondary" : "muted";
+    imagePromptBtn.textContent = section.includeInImagePrompt ? "繪圖啟用" : "加入繪圖";
+    imagePromptBtn.addEventListener("click", () => {
+      roleCardCustomSectionsDraft = collectRoleCardCustomSectionsFromEditor({ keepEmpty: true })
+        .map((item) => item.id === section.id ? { ...item, includeInImagePrompt: !item.includeInImagePrompt } : item);
       renderRoleCardCustomSectionEditor(roleCardCustomSectionsDraft);
     });
 
@@ -6766,16 +6788,7 @@ function renderRoleCardCustomSectionEditor(sections = []) {
       renderRoleCardCustomSectionEditor(roleCardCustomSectionsDraft);
     });
 
-    title.append(label, enabledBtn, deleteBtn);
-
-    const enabledLabel = document.createElement("label");
-    enabledLabel.textContent = "啟用";
-    const enabledInput = document.createElement("input");
-    enabledInput.type = "checkbox";
-    enabledInput.checked = section.enabled !== false;
-    enabledInput.dataset.field = "sectionEnabled";
-    enabledLabel.prepend(enabledInput);
-    enabledLabel.hidden = true;
+    title.append(label, enabledBtn, imagePromptBtn, deleteBtn);
 
     const nameLabel = document.createElement("label");
     nameLabel.textContent = "自定義名字";
@@ -6795,7 +6808,7 @@ function renderRoleCardCustomSectionEditor(sections = []) {
     contentInput.dataset.field = "sectionContent";
     contentLabel.appendChild(contentInput);
 
-    item.append(title, enabledLabel, nameLabel, contentLabel);
+    item.append(title, nameLabel, contentLabel);
     el.roleCardCustomSectionList.appendChild(item);
   });
 }

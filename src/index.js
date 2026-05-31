@@ -2124,6 +2124,17 @@ function normalizeNovelAiVarietyPlus(source = {}) {
   return true;
 }
 
+function normalizeNovelAiRandomPromptMetadata(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const cloned = cloneData(value, {});
+  if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
+    return null;
+  }
+  return cloned;
+}
+
 function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}) {
   const charCaptions = characters
     .map((character) => {
@@ -2157,6 +2168,8 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const source = input?.settings && typeof input.settings === "object" ? input.settings : input || {};
   const model = normalizePlainText(source.model) || "nai-diffusion-4-5-full";
   const prompt = normalizePlainText(source.prompt || source.input);
+  const promptTemplate = normalizePlainText(source.promptTemplate || source.prompt_template);
+  const randomPrompt = normalizeNovelAiRandomPromptMetadata(source.randomPrompt || source.random_prompt);
   const negativePrompt = normalizePlainText(source.negativePrompt || source.negative_prompt);
   const width = clampInteger(source.width, 1024, 64, 2048);
   const height = clampInteger(source.height, 1024, 64, 2048);
@@ -2276,6 +2289,8 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const settings = {
     model,
     prompt,
+    promptTemplate,
+    randomPrompt,
     negativePrompt,
     width,
     height,
@@ -2533,6 +2548,7 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
     Source: String(settings.seed ?? ""),
     Comment: JSON.stringify({
       prompt: settings.prompt || "",
+      prompt_template: settings.promptTemplate || "",
       negative_prompt: settings.negativePrompt || "",
       seed: settings.seed,
       width: settings.width,
@@ -2547,7 +2563,8 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
       model: settings.model,
       character_prompts: settings.characters || [],
       vibe_transfer: settings.vibeTransfer || {},
-      precise_reference: settings.preciseReference || {}
+      precise_reference: settings.preciseReference || {},
+      random_prompt: settings.randomPrompt || null
     }),
     NovelAIMetadata: fullMetadata
   };
@@ -3036,6 +3053,11 @@ function normalizeRoleCardCustomSection(input) {
     name: safeText(raw.name || raw.title || raw.key || raw.label),
     content: safeText(raw.content || raw.text || raw.value),
     enabled: raw.enabled !== false,
+    includeInImagePrompt: raw.includeInImagePrompt === true ||
+      raw.imagePrompt === true ||
+      raw.drawPrompt === true ||
+      raw.includeInDrawing === true ||
+      raw.useForImagePrompt === true,
     createdAt: safeText(raw.createdAt) || nowIso(),
     updatedAt: safeText(raw.updatedAt) || nowIso()
   };
@@ -5696,6 +5718,44 @@ function buildCompressionRoleCardContextMessage(currentState = state, runtimeUse
   return ["【角色卡資料】", roleContext].filter(Boolean).join("\n");
 }
 
+function formatRoleCardImagePromptCustomSections(roleCard = {}, index = 0) {
+  if (!roleCard) {
+    return "";
+  }
+  const sections = normalizeRoleCardCustomSections(roleCard.customSections, roleCard)
+    .filter((section) => section.enabled !== false && section.includeInImagePrompt === true)
+    .filter((section) => safeText(section.name) || safeText(section.content));
+  if (sections.length === 0) {
+    return "";
+  }
+  return [
+    roleCard.name ? `角色:${roleCard.name}` : `角色 ${index + 1}`,
+    ...sections.map((section) => `${section.name || "自定義內容"}:${section.content}`)
+  ].filter(Boolean).join("\n");
+}
+
+function buildImagePromptRoleCardContextMessage(currentState = state, runtimeUserName = "", profile = {}) {
+  const resolvedUserName = resolveUserDisplayName(currentState.userProfile, runtimeUserName);
+  const activeRoleCard = getActiveRoleCard(currentState);
+  const cards = Array.isArray(activeRoleCard)
+    ? activeRoleCard.filter(Boolean)
+    : [activeRoleCard].filter(Boolean);
+  const drawingBlocks = cards
+    .map((card, index) => {
+      const renderedCard = renderRoleCardWithUser(card, resolvedUserName);
+      return formatRoleCardImagePromptCustomSections(renderedCard, index);
+    })
+    .filter(Boolean);
+
+  if (drawingBlocks.length > 0) {
+    return ["繪圖角色卡資料", drawingBlocks.join("\n\n")].join("\n");
+  }
+
+  return shouldCompressionProfileReadRoleCard(profile)
+    ? buildCompressionRoleCardContextMessage(currentState, runtimeUserName)
+    : "";
+}
+
 function shouldCompressionProfileReadRoleCard(profile = {}) {
   return normalizeCompressionContextScope(profile.contextScope) === COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT;
 }
@@ -5786,9 +5846,7 @@ function buildModelImagePromptApiMessages({
   includeLatestAssistant = false
 }) {
   const latestUser = getLatestUserMessage(currentState);
-  const roleCardContextMessage = shouldCompressionProfileReadRoleCard(profile)
-    ? buildCompressionRoleCardContextMessage(currentState, runtimeUserName)
-    : "";
+  const roleCardContextMessage = buildImagePromptRoleCardContextMessage(currentState, runtimeUserName, profile);
   const contextMessages = buildRecentModelImageContextMessages({
     currentState,
     runtimeUserName,

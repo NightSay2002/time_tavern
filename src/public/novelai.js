@@ -5,6 +5,8 @@ const el = {
   novelAiModel: document.getElementById("novelAiModel"),
   novelAiModelDescription: document.getElementById("novelAiModelDescription"),
   novelAiPrompt: document.getElementById("novelAiPrompt"),
+  novelAiRandomPromptList: document.getElementById("novelAiRandomPromptList"),
+  novelAiAddRandomPromptBtn: document.getElementById("novelAiAddRandomPromptBtn"),
   novelAiNegativePrompt: document.getElementById("novelAiNegativePrompt"),
   novelAiWidth: document.getElementById("novelAiWidth"),
   novelAiHeight: document.getElementById("novelAiHeight"),
@@ -36,6 +38,9 @@ const el = {
   novelAiImportMetadataBtn: document.getElementById("novelAiImportMetadataBtn"),
   novelAiMetadataStatus: document.getElementById("novelAiMetadataStatus"),
   novelAiCostPreview: document.getElementById("novelAiCostPreview"),
+  novelAiLoopCount: document.getElementById("novelAiLoopCount"),
+  novelAiLoopGenerateBtn: document.getElementById("novelAiLoopGenerateBtn"),
+  novelAiLoopGenerateLabel: document.getElementById("novelAiLoopGenerateLabel"),
   novelAiGenerateBtn: document.getElementById("novelAiGenerateBtn"),
   novelAiGenerateLabel: document.getElementById("novelAiGenerateLabel"),
   novelAiOutputGrid: document.getElementById("novelAiOutputGrid"),
@@ -56,8 +61,13 @@ let novelAiPreciseImages = [];
 let novelAiCurrentImages = [];
 let novelAiPendingDropFiles = [];
 let novelAiDragDepth = 0;
+let novelAiRandomPromptSnippets = [];
+let novelAiLoopRunning = false;
+let novelAiLoopStopRequested = false;
+let novelAiLoopDelayTimer = null;
 
 const NOVELAI_SETTINGS_STORAGE_KEY = "time_tavern_novelai_settings";
+const NOVELAI_RANDOM_PROMPT_STORAGE_KEY = "time_tavern_novelai_random_prompt_snippets";
 const NOVELAI_HISTORY_DB_NAME = "time_tavern_novelai";
 const NOVELAI_HISTORY_STORE = "history";
 const NOVELAI_HISTORY_LIMIT = 80;
@@ -144,6 +154,15 @@ function showToast(message, type = "ok") {
 function truncateText(text = "", maxLength = 140) {
   const compact = String(text || "").replace(/\s+/g, " ").trim();
   return compact.length <= maxLength ? compact : `${compact.slice(0, Math.max(1, maxLength - 3))}...`;
+}
+
+function escapeHtml(value = "") {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function sanitizeDownloadFileName(value = "novelai-image") {
@@ -334,6 +353,114 @@ function normalizeCharacters(value = []) {
     .filter((item) => item.prompt || item.negativePrompt || item.name);
 }
 
+function clampIntegerValue(value, fallback = 0, min = 0, max = 99) {
+  const number = Number(value);
+  const resolved = Number.isFinite(number) ? Math.floor(number) : fallback;
+  return Math.min(max, Math.max(min, resolved));
+}
+
+function clampNumberValue(value, fallback = 0, min = 0, max = 99) {
+  const number = Number(value);
+  const resolved = Number.isFinite(number) ? number : fallback;
+  return Math.min(max, Math.max(min, resolved));
+}
+
+function splitPromptLines(value = "") {
+  return String(value || "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function normalizePromptItemList(value = "") {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => splitPromptLines(item))
+      .filter(Boolean);
+  }
+  return splitPromptLines(value);
+}
+
+function normalizeRandomPromptSnippet(snippet = {}, index = 0) {
+  const source = snippet && typeof snippet === "object" ? snippet : {};
+  const name = String(source.name || source.title || source.key || `片段 ${index + 1}`).trim();
+  const min = clampIntegerValue(source.min ?? source.minPick ?? source.pickMin, 1, 0, 999);
+  const max = clampIntegerValue(source.max ?? source.maxPick ?? source.pickMax, Math.max(1, min), 0, 999);
+  const fixedItems = normalizePromptItemList(source.fixedItems ?? source.fixed_items ?? source.fixedText ?? source.fixed ?? source.staticText ?? "");
+  const randomItems = normalizePromptItemList(source.randomItems ?? source.random_items ?? source.randomText ?? source.random ?? source.choices ?? "");
+  const weightMin = clampNumberValue(source.weightMin ?? source.numericWeightMin ?? source.promptWeightMin, 0, 0, 5);
+  const weightMax = clampNumberValue(source.weightMax ?? source.numericWeightMax ?? source.promptWeightMax, weightMin, 0, 5);
+  return {
+    id: String(source.id || makeClientId("nai_random")).trim(),
+    name,
+    fixedItems,
+    randomItems,
+    fixedText: fixedItems.join("\n"),
+    randomText: randomItems.join("\n"),
+    min: Math.min(min, max),
+    max: Math.max(min, max),
+    squareMax: clampIntegerValue(source.squareMax ?? source.bracketMax ?? source.weakMax, 0, 0, 12),
+    curlyMax: clampIntegerValue(source.curlyMax ?? source.braceMax ?? source.strongMax, 0, 0, 12),
+    weightMin: Math.min(weightMin, weightMax),
+    weightMax: Math.max(weightMin, weightMax)
+  };
+}
+
+function normalizeRandomPromptSnippets(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => normalizeRandomPromptSnippet(item, index))
+    .filter((item) => item.name || item.fixedItems.length || item.randomItems.length);
+}
+
+function normalizeRandomPromptMetadata(value = {}, fallbackSnippets = []) {
+  const source = value && typeof value === "object" ? value : {};
+  const snippets = normalizeRandomPromptSnippets(source.snippets || source.randomPromptSnippets || fallbackSnippets);
+  const expansions = Array.isArray(source.expansions)
+    ? source.expansions.map((item) => ({
+      name: String(item?.name || "").trim(),
+      placeholder: String(item?.placeholder || "").trim(),
+      fixed: normalizePromptItemList(item?.fixed || item?.fixedItems || item?.fixedText || ""),
+      selected: normalizePromptItemList(item?.selected || ""),
+      weightedSelected: normalizePromptItemList(item?.weightedSelected || ""),
+      result: String(item?.result || "").trim()
+    })).filter((item) => item.name || item.placeholder || item.result)
+    : [];
+  return {
+    promptTemplate: String(source.promptTemplate || "").trim(),
+    finalPrompt: String(source.finalPrompt || "").trim(),
+    snippets,
+    expansions
+  };
+}
+
+function loadRandomPromptSnippets() {
+  return normalizeRandomPromptSnippets(
+    safeParseJson(window.localStorage?.getItem(NOVELAI_RANDOM_PROMPT_STORAGE_KEY) || "[]")
+  );
+}
+
+function saveRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
+  try {
+    window.localStorage?.setItem(NOVELAI_RANDOM_PROMPT_STORAGE_KEY, JSON.stringify(normalizeRandomPromptSnippets(snippets)));
+  } catch {
+    // Random prompt snippets are optional draft data.
+  }
+}
+
+function createRandomPromptSnippet(index = 0) {
+  return normalizeRandomPromptSnippet({
+    name: `隨機片段 ${index + 1}`,
+    fixedText: "",
+    randomText: "",
+    min: 1,
+    max: 1,
+    squareMax: 0,
+    curlyMax: 0,
+    weightMin: 0,
+    weightMax: 0
+  }, index);
+}
+
 function normalizeSettings(value = {}) {
   const source = value?.settings && typeof value.settings === "object" ? value.settings : value || {};
   const comment = source?.Comment && typeof source.Comment === "object" ? source.Comment : {};
@@ -341,12 +468,20 @@ function normalizeSettings(value = {}) {
   const sourcePrecise = source.preciseReference || source.precise_reference || {};
   const promptCharacters = source.characters || source.characterPrompts || source.character_prompts ||
     comment.character_prompts || metadataCharacters(comment, source);
+  const randomPrompt = normalizeRandomPromptMetadata(
+    source.randomPrompt || source.random_prompt || comment.random_prompt,
+    source.randomPromptSnippets || source.random_prompt_snippets
+  );
+  const promptTemplate = String(source.promptTemplate || source.prompt_template || randomPrompt.promptTemplate || "").trim();
   return {
     model: String(source.model || source.Software || comment.model || "nai-diffusion-4-5-full").trim(),
     prompt: String(
       source.prompt ?? source.input ?? source.Description ?? comment.prompt ??
       comment?.v4_prompt?.caption?.base_caption ?? ""
     ).trim(),
+    promptTemplate,
+    randomPrompt,
+    randomPromptSnippets: randomPrompt.snippets,
     negativePrompt: String(
       source.negativePrompt ?? source.negative_prompt ?? source.uc ?? comment.negative_prompt ?? comment.uc ??
       comment?.v4_negative_prompt?.caption?.base_caption ?? ""
@@ -361,6 +496,7 @@ function normalizeSettings(value = {}) {
     seed: finiteNumber(source.seed ?? source.Source ?? comment.seed, -1),
     sampler: String(source.sampler || comment.sampler || "k_euler_ancestral").trim(),
     noiseSchedule: String(source.noiseSchedule || source.noise_schedule || comment.noise_schedule || "karras").trim(),
+    loopCount: clampIntegerValue(source.loopCount ?? source.loop_count, 1, 0, 9999),
     baseImage: String(source.baseImage || source.image || "").trim(),
     strength: source.strength === "" || source.strength === undefined ? 0.7 : finiteNumber(source.strength, 0.7),
     noise: source.noise === "" || source.noise === undefined ? 0 : finiteNumber(source.noise, 0),
@@ -484,6 +620,108 @@ function renderCharacters(characters = novelAiCharactersDraft) {
   });
 }
 
+function collectRandomPromptSnippets() {
+  return Array.from(el.novelAiRandomPromptList?.querySelectorAll(".nai-random-prompt-card") || [])
+    .map((card, index) => normalizeRandomPromptSnippet({
+      id: card.dataset.randomPromptId || "",
+      name: card.querySelector('[data-random-prompt-field="name"]')?.value || "",
+      fixedItems: Array.from(card.querySelectorAll('[data-random-prompt-item="fixed"]')).map((input) => input.value),
+      randomItems: Array.from(card.querySelectorAll('[data-random-prompt-item="random"]')).map((input) => input.value),
+      min: card.querySelector('[data-random-prompt-field="min"]')?.value || 0,
+      max: card.querySelector('[data-random-prompt-field="max"]')?.value || 0,
+      squareMax: card.querySelector('[data-random-prompt-field="squareMax"]')?.value || 0,
+      curlyMax: card.querySelector('[data-random-prompt-field="curlyMax"]')?.value || 0,
+      weightMin: card.querySelector('[data-random-prompt-field="weightMin"]')?.value || 0,
+      weightMax: card.querySelector('[data-random-prompt-field="weightMax"]')?.value || 0
+    }, index));
+}
+
+function renderRandomPromptItemRows(items = [], type = "fixed") {
+  const action = type === "fixed" ? "remove-fixed-item" : "remove-random-item";
+  const emptyText = type === "fixed" ? "尚未添加固定輸入。" : "尚未添加隨機輸入。";
+  if (!items.length) {
+    return `<p class="nai-empty-inline">${emptyText}</p>`;
+  }
+  return items.map((item, index) => `
+    <div class="nai-random-prompt-item-row">
+      <input type="text" data-random-prompt-item="${type}" data-random-prompt-item-index="${index}" value="${escapeHtml(item)}" />
+      <button type="button" class="nai-danger-button" data-random-prompt-action="${action}" data-random-prompt-item-index="${index}">刪除</button>
+    </div>
+  `).join("");
+}
+
+function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
+  const items = normalizeRandomPromptSnippets(snippets);
+  novelAiRandomPromptSnippets = items;
+  if (!el.novelAiRandomPromptList) {
+    return;
+  }
+  el.novelAiRandomPromptList.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "nai-empty-inline";
+    empty.textContent = "還沒有 Random Prompt 片段。";
+    el.novelAiRandomPromptList.appendChild(empty);
+    return;
+  }
+  items.forEach((snippet, index) => {
+    const card = document.createElement("section");
+    card.className = "nai-random-prompt-card";
+    card.dataset.randomPromptId = snippet.id || `random_${index + 1}`;
+    card.innerHTML = `
+      <div class="nai-random-prompt-header">
+        <button type="button" class="secondary" data-random-prompt-action="insert"></button>
+        <button type="button" class="nai-danger-button" data-random-prompt-action="remove">刪除</button>
+      </div>
+      <label>名字<input type="text" data-random-prompt-field="name" /></label>
+      <div class="nai-random-prompt-entry">
+        <label>固定輸入<textarea rows="2" data-random-prompt-draft="fixed" placeholder="artist:rurudo,artist:sho_(sho_lwlw)"></textarea></label>
+        <button type="button" class="secondary" data-random-prompt-action="add-fixed">固定輸入添加</button>
+        <div class="nai-random-prompt-items" data-random-prompt-items="fixed">
+          ${renderRandomPromptItemRows(snippet.fixedItems, "fixed")}
+        </div>
+      </div>
+      <div class="nai-random-prompt-entry">
+        <label>隨機輸入<textarea rows="3" data-random-prompt-draft="random" placeholder="artist:rurudo,artist:sho_(sho_lwlw)&#10;artist:onineko&#10;artist:ciloranko"></textarea></label>
+        <button type="button" class="secondary" data-random-prompt-action="add-random">隨機輸入添加</button>
+        <div class="nai-random-prompt-items" data-random-prompt-items="random">
+          ${renderRandomPromptItemRows(snippet.randomItems, "random")}
+        </div>
+      </div>
+      <div class="nai-random-prompt-grid">
+        <label>抽選最少<input type="number" min="0" step="1" data-random-prompt-field="min" /></label>
+        <label>抽選最多<input type="number" min="0" step="1" data-random-prompt-field="max" /></label>
+        <label>[] max<input type="number" min="0" max="12" step="1" data-random-prompt-field="squareMax" /></label>
+        <label>{} max<input type="number" min="0" max="12" step="1" data-random-prompt-field="curlyMax" /></label>
+        <label>數值權重最少<input type="number" min="0" max="5" step="0.1" data-random-prompt-field="weightMin" /></label>
+        <label>數值權重最多<input type="number" min="0" max="5" step="0.1" data-random-prompt-field="weightMax" /></label>
+      </div>
+    `;
+    card.querySelector('[data-random-prompt-action="insert"]').textContent = snippet.name || `片段 ${index + 1}`;
+    card.querySelector('[data-random-prompt-field="name"]').value = snippet.name || "";
+    card.querySelector('[data-random-prompt-field="min"]').value = snippet.min;
+    card.querySelector('[data-random-prompt-field="max"]').value = snippet.max;
+    card.querySelector('[data-random-prompt-field="squareMax"]').value = snippet.squareMax;
+    card.querySelector('[data-random-prompt-field="curlyMax"]').value = snippet.curlyMax;
+    card.querySelector('[data-random-prompt-field="weightMin"]').value = snippet.weightMin;
+    card.querySelector('[data-random-prompt-field="weightMax"]').value = snippet.weightMax;
+    el.novelAiRandomPromptList.appendChild(card);
+  });
+}
+
+function insertTextAtCursor(textarea, text = "") {
+  if (!textarea) {
+    return;
+  }
+  const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+  const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : textarea.value.length;
+  textarea.value = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
+  const nextCursor = start + text.length;
+  textarea.focus();
+  textarea.setSelectionRange(nextCursor, nextCursor);
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function renderBaseImagePreview(dataUrl = "") {
   const value = String(dataUrl || "").trim();
   el.novelAiBaseImage.value = value;
@@ -582,11 +820,127 @@ function activeImageCount(images = []) {
   return images.filter((item) => item.enabled !== false && item.image).length;
 }
 
+function randomIntInclusive(min, max) {
+  const low = Math.ceil(Math.min(min, max));
+  const high = Math.floor(Math.max(min, max));
+  return low + Math.floor(Math.random() * (high - low + 1));
+}
+
+function shufflePromptItems(items = []) {
+  const output = [...items];
+  for (let index = output.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [output[index], output[swapIndex]] = [output[swapIndex], output[index]];
+  }
+  return output;
+}
+
+function randomNumberInRange(min, max) {
+  const low = Math.min(min, max);
+  const high = Math.max(min, max);
+  return low + Math.random() * (high - low);
+}
+
+function formatPromptWeight(value) {
+  return (Math.round(Number(value || 0) * 10) / 10).toFixed(1);
+}
+
+function splitPromptChain(text = "") {
+  return String(text || "")
+    .split(/[，,]/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function applyRandomPromptWeightToToken(text = "", snippet = {}) {
+  let output = String(text || "").trim();
+  const squareMax = clampIntegerValue(snippet.squareMax, 0, 0, 12);
+  const curlyMax = clampIntegerValue(snippet.curlyMax, 0, 0, 12);
+  const weightMin = clampNumberValue(snippet.weightMin, 0, 0, 5);
+  const weightMax = clampNumberValue(snippet.weightMax, weightMin, 0, 5);
+  const weightTypes = [
+    "none",
+    ...(squareMax > 0 ? ["square"] : []),
+    ...(curlyMax > 0 ? ["curly"] : []),
+    ...(Math.max(weightMin, weightMax) > 0 ? ["numeric"] : [])
+  ];
+  const weightType = weightTypes[randomIntInclusive(0, weightTypes.length - 1)] || "none";
+  if (weightType === "square") {
+    const squareCount = randomIntInclusive(1, squareMax);
+    output = `${"[".repeat(squareCount)}${output}${"]".repeat(squareCount)}`;
+  }
+  if (weightType === "curly") {
+    const curlyCount = randomIntInclusive(1, curlyMax);
+    output = `${"{".repeat(curlyCount)}${output}${"}".repeat(curlyCount)}`;
+  }
+  if (weightType === "numeric") {
+    output = `${formatPromptWeight(randomNumberInRange(weightMin, weightMax))}::${output}::`;
+  }
+  return output;
+}
+
+function applyRandomPromptWeight(text = "", snippet = {}) {
+  return splitPromptChain(text)
+    .map((item) => applyRandomPromptWeightToToken(item, snippet))
+    .join(",");
+}
+
+function cleanExpandedPrompt(prompt = "") {
+  return String(prompt || "")
+    .replace(/\r?\n+/gu, ",")
+    .replace(/[，,]\s*[，,]+/gu, ",")
+    .replace(/\s*[,，]\s*/gu, ",")
+    .replace(/^,+|,+$/gu, "")
+    .trim();
+}
+
+function expandRandomPromptTemplate(promptTemplate = "", snippets = []) {
+  const template = String(promptTemplate || "").trim();
+  const normalizedSnippets = normalizeRandomPromptSnippets(snippets);
+  const snippetMap = new Map(normalizedSnippets.map((snippet) => [snippet.name, snippet]));
+  const expansions = [];
+  const expanded = template.replace(/\{\{\s*([^}]+?)\s*\}\}/gu, (placeholder, rawName) => {
+    const name = String(rawName || "").trim();
+    const snippet = snippetMap.get(name);
+    if (!snippet) {
+      throw new Error(`Random Prompt 找不到片段：${name}`);
+    }
+    const fixed = normalizePromptItemList(snippet.fixedItems);
+    const randomItems = normalizePromptItemList(snippet.randomItems);
+    const min = Math.min(randomItems.length, clampIntegerValue(snippet.min, 0, 0, randomItems.length));
+    const max = Math.min(randomItems.length, clampIntegerValue(snippet.max, min, 0, randomItems.length));
+    const count = randomItems.length > 0 ? randomIntInclusive(Math.min(min, max), Math.max(min, max)) : 0;
+    const selected = shufflePromptItems(randomItems).slice(0, count);
+    const weightedSelected = selected.map((item) => applyRandomPromptWeight(item, snippet));
+    const parts = [...fixed, ...weightedSelected].filter(Boolean);
+    const result = cleanExpandedPrompt(parts.join(","));
+    expansions.push({
+      name,
+      placeholder,
+      fixed,
+      selected,
+      weightedSelected,
+      result
+    });
+    return result;
+  });
+  const finalPrompt = cleanExpandedPrompt(expanded);
+  return {
+    promptTemplate: template,
+    finalPrompt,
+    snippets: normalizedSnippets,
+    expansions
+  };
+}
+
 function getFormSettings() {
   const seedValue = String(el.novelAiSeed?.value || "").trim();
+  const randomPromptSnippets = collectRandomPromptSnippets();
   return {
     model: el.novelAiModel?.value || "nai-diffusion-4-5-full",
     prompt: String(el.novelAiPrompt?.value || "").trim(),
+    promptTemplate: String(el.novelAiPrompt?.value || "").trim(),
+    randomPromptSnippets,
     negativePrompt: String(el.novelAiNegativePrompt?.value || "").trim(),
     width: numberValue(el.novelAiWidth, 832, { integer: true, min: 64, max: 2048 }),
     height: numberValue(el.novelAiHeight, 1216, { integer: true, min: 64, max: 2048 }),
@@ -598,6 +952,7 @@ function getFormSettings() {
     seed: seedValue ? numberValue(el.novelAiSeed, -1, { integer: true, min: -1 }) : -1,
     sampler: el.novelAiSampler?.value || "k_euler_ancestral",
     noiseSchedule: el.novelAiNoiseSchedule?.value || "karras",
+    loopCount: numberValue(el.novelAiLoopCount, 1, { integer: true, min: 0, max: 9999 }),
     sizePreset: getSelectedSizePreset(),
     qualityToggle: true,
     baseImage: String(el.novelAiBaseImage?.value || "").trim(),
@@ -627,10 +982,21 @@ function getFormSettings() {
   };
 }
 
+function getGenerationSettings() {
+  const settings = getFormSettings();
+  const expansion = expandRandomPromptTemplate(settings.promptTemplate || settings.prompt, settings.randomPromptSnippets);
+  return {
+    ...settings,
+    prompt: expansion.finalPrompt,
+    promptTemplate: expansion.promptTemplate,
+    randomPrompt: expansion
+  };
+}
+
 function setFormSettings(settings = {}, options = {}) {
   const normalized = normalizeSettings(settings);
   setSelectValue(el.novelAiModel, normalized.model);
-  el.novelAiPrompt.value = normalized.prompt;
+  el.novelAiPrompt.value = normalized.promptTemplate || normalized.prompt;
   el.novelAiNegativePrompt.value = normalized.negativePrompt;
   el.novelAiWidth.value = Math.round(normalized.width || 832);
   el.novelAiHeight.value = Math.round(normalized.height || 1216);
@@ -645,6 +1011,9 @@ function setFormSettings(settings = {}, options = {}) {
   el.novelAiSeed.value = normalized.seed >= 0 ? Math.floor(normalized.seed) : "";
   setSelectValue(el.novelAiSampler, normalized.sampler);
   setSelectValue(el.novelAiNoiseSchedule, normalized.noiseSchedule);
+  if (el.novelAiLoopCount) {
+    el.novelAiLoopCount.value = String(normalized.loopCount ?? 1);
+  }
   el.novelAiStrength.value = normalized.strength ?? 0.7;
   el.novelAiNoise.value = normalized.noise ?? 0;
   if (options.includeReferenceImages) {
@@ -656,11 +1025,17 @@ function setFormSettings(settings = {}, options = {}) {
   } else if (options.clearBaseImage) {
     renderBaseImagePreview("");
   }
+  const incomingSnippets = normalizeRandomPromptSnippets(normalized.randomPromptSnippets);
+  if (incomingSnippets.length > 0 || options.replaceRandomPromptSnippets) {
+    novelAiRandomPromptSnippets = incomingSnippets;
+  }
+  renderRandomPromptSnippets(novelAiRandomPromptSnippets);
   renderCharacters(normalized.characters);
   renderAllReferences();
   updateRangeValues();
   renderCostPreview();
   if (options.save !== false) {
+    saveRandomPromptSnippets();
     saveSettingsDraft();
   }
 }
@@ -675,7 +1050,9 @@ function saveSettingsDraft() {
     settings.baseImage = "";
     settings.vibeTransfer.images = [];
     settings.preciseReference.images = [];
+    settings.randomPromptSnippets = normalizeRandomPromptSnippets(settings.randomPromptSnippets);
     window.localStorage?.setItem(NOVELAI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    saveRandomPromptSnippets(settings.randomPromptSnippets);
   } catch {
     // Draft saving is optional.
   }
@@ -705,6 +1082,18 @@ function renderCostPreview() {
   updateStudioSummary(settings);
 }
 
+function renderGenerationControls(state = "idle") {
+  if (!el.novelAiGenerateBtn || !el.novelAiLoopGenerateBtn) {
+    return;
+  }
+  const singleRunning = state === "single";
+  const loopRunning = state === "loop";
+  el.novelAiGenerateBtn.disabled = singleRunning || loopRunning;
+  el.novelAiLoopGenerateBtn.disabled = singleRunning;
+  el.novelAiGenerateLabel.textContent = singleRunning ? "生成中..." : "Generate";
+  el.novelAiLoopGenerateLabel.textContent = loopRunning ? "Stop Loop" : "Loop Generate";
+}
+
 function getSelectedOptionLabel(select) {
   return select?.selectedOptions?.[0]?.textContent || select?.value || "";
 }
@@ -717,8 +1106,8 @@ function updateStudioSummary(settings = getFormSettings()) {
   el.novelAiSeedSummary.textContent = settings.seed >= 0 ? String(settings.seed) : "N/A";
   el.novelAiSamplerSummary.textContent = getSelectedOptionLabel(el.novelAiSampler).replace(/^k_/u, "");
   el.novelAiStageSize.textContent = `${settings.width} × ${settings.height}`;
-  if (!el.novelAiGenerateBtn.disabled) {
-    el.novelAiGenerateLabel.textContent = "Generate";
+  if (!el.novelAiGenerateBtn.disabled && !novelAiLoopRunning) {
+    renderGenerationControls("idle");
   }
 }
 
@@ -1153,6 +1542,7 @@ function buildNovelAiCompatibleComment(item = {}) {
   const parameters = request.parameters && typeof request.parameters === "object" ? request.parameters : {};
   return {
     prompt: settings.prompt || "",
+    prompt_template: settings.promptTemplate || "",
     steps: settings.steps,
     height: settings.height,
     width: settings.width,
@@ -1219,6 +1609,7 @@ function buildNovelAiCompatibleComment(item = {}) {
     stream: parameters.stream ?? "msgpack",
     version: 1,
     uc: settings.negativePrompt || "",
+    random_prompt: settings.randomPrompt || null,
     request_type: parameters.request_type || "PromptGenerateRequest"
   };
 }
@@ -1590,24 +1981,61 @@ function handleReferenceListAction(type, event) {
   saveSettingsDraft();
 }
 
-async function generateImages() {
-  const settings = getFormSettings();
+function getRandomDelayMs(min = 1000, max = 5000) {
+  return randomIntInclusive(min, max);
+}
+
+function waitForLoopDelay(ms) {
+  return new Promise((resolve) => {
+    novelAiLoopDelayTimer = window.setTimeout(() => {
+      novelAiLoopDelayTimer = null;
+      resolve();
+    }, Math.max(0, ms));
+  });
+}
+
+function stopLoopGenerate() {
+  novelAiLoopStopRequested = true;
+  if (novelAiLoopDelayTimer) {
+    window.clearTimeout(novelAiLoopDelayTimer);
+    novelAiLoopDelayTimer = null;
+  }
+}
+
+function getValidatedGenerationSettings() {
+  let settings;
+  try {
+    settings = getGenerationSettings();
+  } catch (error) {
+    showToast(error.message || "Random Prompt 展開失敗", "error");
+    return null;
+  }
   if (!settings.prompt) {
     showToast("請先填入 Base Prompt。", "error");
     el.novelAiPrompt?.focus();
-    return;
+    return null;
   }
   if (
     settings.vibeTransfer.enabled && activeImageCount(settings.vibeTransfer.images) &&
     settings.preciseReference.enabled && activeImageCount(settings.preciseReference.images)
   ) {
     showToast("Vibe Transfer 與 Precise Reference 目前不能同時使用。", "error");
-    return;
+    return null;
+  }
+  return settings;
+}
+
+async function runNovelAiGenerationOnce(options = {}) {
+  const {
+    busyMessage = "NovelAI 正在生成圖片...",
+    showSuccessToast = true
+  } = options;
+  const settings = getValidatedGenerationSettings();
+  if (!settings) {
+    return { ok: false, skipped: true, count: 0 };
   }
   try {
-    el.novelAiGenerateBtn.disabled = true;
-    el.novelAiGenerateLabel.textContent = "生成中...";
-    renderEmpty(el.novelAiOutputGrid, "NovelAI 正在生成圖片...");
+    renderEmpty(el.novelAiOutputGrid, busyMessage);
     saveSettingsDraft();
     const payload = await request("/api/novelai/generate", {
       method: "POST",
@@ -1632,13 +2060,70 @@ async function generateImages() {
     await saveHistoryItems(generatedImages);
     await renderHistory();
     await refreshStatus();
-    showToast(`已生成 ${generatedImages.length} 張圖片`);
+    if (showSuccessToast) {
+      showToast(`已生成 ${generatedImages.length} 張圖片`);
+    }
+    return { ok: true, skipped: false, count: generatedImages.length };
   } catch (error) {
     renderMainImage(novelAiCurrentImages[0] || null);
     showToast(error.message || "NovelAI 生成失敗", "error");
+    return { ok: false, skipped: false, count: 0, error };
+  }
+}
+
+async function generateImages() {
+  if (novelAiLoopRunning) {
+    return;
+  }
+  renderGenerationControls("single");
+  try {
+    await runNovelAiGenerationOnce();
   } finally {
-    el.novelAiGenerateBtn.disabled = false;
+    renderGenerationControls("idle");
     renderCostPreview();
+  }
+}
+
+async function loopGenerateImages() {
+  if (novelAiLoopRunning) {
+    stopLoopGenerate();
+    showToast("Loop Generate 會在目前這張完成後停止。");
+    return;
+  }
+  const requestedCount = numberValue(el.novelAiLoopCount, 1, { integer: true, min: 0, max: 9999 });
+  const infinite = requestedCount === 0;
+  let completed = 0;
+  novelAiLoopRunning = true;
+  novelAiLoopStopRequested = false;
+  renderGenerationControls("loop");
+  showToast(infinite ? "Loop Generate 已開始：會一直生成到停止。" : `Loop Generate 已開始：共 ${requestedCount} 張。`);
+  try {
+    while (!novelAiLoopStopRequested && (infinite || completed < requestedCount)) {
+      const nextIndex = completed + 1;
+      const totalText = infinite ? "∞" : String(requestedCount);
+      const result = await runNovelAiGenerationOnce({
+        busyMessage: `Loop Generate 第 ${nextIndex}/${totalText} 張，NovelAI 正在生成圖片...`,
+        showSuccessToast: false
+      });
+      if (!result.ok) {
+        break;
+      }
+      completed += 1;
+      if (novelAiLoopStopRequested || (!infinite && completed >= requestedCount)) {
+        break;
+      }
+      await waitForLoopDelay(getRandomDelayMs(1000, 5000));
+    }
+  } finally {
+    const stopped = novelAiLoopStopRequested;
+    stopLoopGenerate();
+    novelAiLoopRunning = false;
+    novelAiLoopStopRequested = false;
+    renderGenerationControls("idle");
+    renderCostPreview();
+    if (completed > 0) {
+      showToast(stopped ? `Loop Generate 已停止，已完成 ${completed} 張。` : `Loop Generate 已完成 ${completed} 張。`);
+    }
   }
 }
 
@@ -1660,6 +2145,7 @@ function bindEvents() {
     event.preventDefault();
     await generateImages();
   });
+  el.novelAiLoopGenerateBtn.addEventListener("click", loopGenerateImages);
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
   el.novelAiRefreshAlbumBtn.addEventListener("click", renderHistory);
   el.novelAiBaseImagePreview.addEventListener("click", () => el.novelAiBaseImageFile.click());
@@ -1686,6 +2172,66 @@ function bindEvents() {
     const current = collectCharacters();
     current.push({ id: makeClientId("nai_char"), name: `Character ${current.length + 1}`, prompt: "", negativePrompt: "", enabled: true, x: 0.5, y: 0.5 });
     renderCharacters(current);
+    saveSettingsDraft();
+  });
+  el.novelAiAddRandomPromptBtn.addEventListener("click", () => {
+    const current = collectRandomPromptSnippets();
+    current.push(createRandomPromptSnippet(current.length));
+    renderRandomPromptSnippets(current);
+    saveSettingsDraft();
+  });
+  el.novelAiRandomPromptList.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-random-prompt-action]");
+    if (!button) {
+      return;
+    }
+    const card = button.closest(".nai-random-prompt-card");
+    const cards = Array.from(el.novelAiRandomPromptList.querySelectorAll(".nai-random-prompt-card"));
+    const current = collectRandomPromptSnippets();
+    const index = cards.indexOf(card);
+    if (index < 0) {
+      return;
+    }
+    const action = button.dataset.randomPromptAction;
+    if (action === "remove") {
+      current.splice(index, 1);
+      renderRandomPromptSnippets(current);
+    } else if (action === "insert") {
+      const name = current[index]?.name || `片段 ${index + 1}`;
+      insertTextAtCursor(el.novelAiPrompt, `{{${name}}}`);
+    } else if (action === "add-fixed" || action === "add-random") {
+      const type = action === "add-fixed" ? "fixed" : "random";
+      const draft = card.querySelector(`[data-random-prompt-draft="${type}"]`);
+      const additions = normalizePromptItemList(draft?.value || "");
+      if (!additions.length) {
+        showToast(type === "fixed" ? "請先輸入固定 prompt。" : "請先輸入隨機 prompt。", "error");
+        return;
+      }
+      const targetKey = type === "fixed" ? "fixedItems" : "randomItems";
+      current[index][targetKey] = [...(current[index][targetKey] || []), ...additions];
+      renderRandomPromptSnippets(current);
+    } else if (action === "remove-fixed-item" || action === "remove-random-item") {
+      const type = action === "remove-fixed-item" ? "fixed" : "random";
+      const targetKey = type === "fixed" ? "fixedItems" : "randomItems";
+      const itemIndex = clampIntegerValue(button.dataset.randomPromptItemIndex, -1, -1, 9999);
+      if (itemIndex >= 0) {
+        current[index][targetKey] = [...(current[index][targetKey] || [])];
+        current[index][targetKey].splice(itemIndex, 1);
+        renderRandomPromptSnippets(current);
+      }
+    }
+    saveSettingsDraft();
+  });
+  el.novelAiRandomPromptList.addEventListener("input", (event) => {
+    const target = event?.target?.closest?.("[data-random-prompt-field], [data-random-prompt-item]");
+    if (target?.dataset.randomPromptField === "name") {
+      const card = target.closest(".nai-random-prompt-card");
+      const insertButton = card?.querySelector('[data-random-prompt-action="insert"]');
+      if (insertButton) {
+        insertButton.textContent = target.value.trim() || "未命名片段";
+      }
+    }
+    novelAiRandomPromptSnippets = collectRandomPromptSnippets();
     saveSettingsDraft();
   });
   el.novelAiCharacterList.addEventListener("click", (event) => {
@@ -1796,7 +2342,9 @@ async function boot() {
   fillSelect(el.novelAiModel, NOVELAI_MODEL_OPTIONS, "nai-diffusion-4-5-full");
   fillSelect(el.novelAiSampler, NOVELAI_SAMPLER_OPTIONS, "k_euler_ancestral");
   fillSelect(el.novelAiNoiseSchedule, NOVELAI_NOISE_SCHEDULE_OPTIONS, "karras");
+  novelAiRandomPromptSnippets = loadRandomPromptSnippets();
   setFormSettings(loadSettingsDraft(), { save: false, clearBaseImage: true });
+  renderRandomPromptSnippets(novelAiRandomPromptSnippets);
   renderMainImage(null);
   bindEvents();
   await Promise.allSettled([refreshStatus(), renderHistory()]);

@@ -4132,12 +4132,14 @@ body.novelai-bright-body textarea {
 }
 
 .nai-character-list,
-.nai-reference-list {
+.nai-reference-list,
+.nai-random-prompt-list {
   display: grid;
   gap: 10px;
 }
 
-.nai-character-card {
+.nai-character-card,
+.nai-random-prompt-card {
   display: grid;
   gap: 9px;
   padding: 10px;
@@ -4158,7 +4160,23 @@ body.novelai-bright-body textarea {
   gap: 5px;
 }
 
+.nai-random-prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nai-random-prompt-header button:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .nai-character-header button,
+.nai-random-prompt-header button,
+.nai-random-prompt-entry button,
+.nai-random-prompt-item-row button,
 .nai-title-row button,
 .nai-metadata-card button,
 .nai-reference-item button,
@@ -4201,6 +4219,48 @@ body.novelai-bright-body textarea {
 .nai-position-grid button.active {
   background: linear-gradient(135deg, #ff8fd6, #9cc6ff);
   color: #fff;
+}
+
+.nai-random-prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.nai-random-prompt-entry {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(218, 154, 235, 0.36);
+  border-radius: 12px;
+  background: rgba(255, 247, 254, 0.74);
+}
+
+.nai-random-prompt-entry > button {
+  justify-self: start;
+}
+
+.nai-random-prompt-items {
+  display: grid;
+  gap: 6px;
+}
+
+.nai-random-prompt-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.nai-random-prompt-item-row input {
+  min-width: 0;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid rgba(218, 154, 235, 0.58);
+  border-radius: 10px;
+  background: #fff;
+  color: #3b164f;
 }
 
 .nai-reference-item {
@@ -4347,15 +4407,15 @@ body.novelai-bright-body textarea {
 
 .nai-generate-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 140px;
-  gap: 10px;
+  grid-template-columns: 1fr;
+  gap: 8px;
   align-items: center;
   padding: 12px;
   border-top: 1px solid rgba(216, 148, 232, 0.26);
   background: #fffafe;
 }
 
-.nai-generate-bar > div {
+.nai-generate-size {
   min-width: 0;
   display: grid;
   gap: 3px;
@@ -4364,18 +4424,60 @@ body.novelai-bright-body textarea {
   font-weight: 800;
 }
 
+.nai-generate-actions {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(84px, 112px) minmax(118px, 1.1fr) minmax(92px, 0.9fr);
+  gap: 8px;
+  align-items: center;
+}
+
 .nai-generate-bar strong {
   color: #c83ab5;
   font-size: 16px;
 }
 
+.nai-loop-count-label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px;
+  align-items: center;
+  color: #7b5c8f;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.nai-loop-count-label input {
+  min-width: 0;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 8px;
+  border: 1px solid #e7b7f2;
+  border-radius: 12px;
+  background: #fff;
+  color: #3b164f;
+  font-weight: 900;
+}
+
+#novelAiLoopGenerateBtn,
 #novelAiGenerateBtn {
   min-height: 48px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #ff7ecf, #8bb9ff);
   color: #fff;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 950;
+}
+
+#novelAiLoopGenerateBtn {
+  background: linear-gradient(135deg, #9d70ff, #5ea2ff);
+  box-shadow: 0 12px 24px rgba(91, 109, 219, 0.22);
+}
+
+#novelAiGenerateBtn {
+  background: linear-gradient(135deg, #ff7ecf, #8bb9ff);
+  font-size: 17px;
   box-shadow: 0 12px 24px rgba(208, 84, 185, 0.24);
 }
 
@@ -4715,9 +4817,12 @@ body.is-novelai-drop-active .nai-drop-overlay {
   .nai-character-header,
   .nai-reference-item,
   .nai-generate-bar,
+  .nai-generate-actions,
   .nai-range-row,
   .nai-size-custom,
-  .nai-field-grid {
+  .nai-field-grid,
+  .nai-random-prompt-grid,
+  .nai-random-prompt-item-row {
     grid-template-columns: 1fr;
   }
 

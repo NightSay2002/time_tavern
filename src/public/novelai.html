@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260530-variety1" />
+    <link rel="stylesheet" href="/styles.css?v=20260531-random-prompt-groups1" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -35,6 +35,15 @@
                 <strong>Base Prompt</strong>
               </div>
               <textarea id="novelAiPrompt" rows="8" placeholder="1girl, masterpiece, best quality"></textarea>
+            </section>
+
+            <section class="nai-card">
+              <div class="nai-card-title nai-title-row">
+                <strong>Random Prompt</strong>
+                <button id="novelAiAddRandomPromptBtn" type="button" class="secondary">新增</button>
+              </div>
+              <p class="nai-card-hint">點擊名字會插入 {{名字}}；Generate 時才會抽選並展開。</p>
+              <div id="novelAiRandomPromptList" class="nai-random-prompt-list"></div>
             </section>
 
             <section class="nai-card">
@@ -134,11 +143,18 @@
           </div>
 
           <footer class="nai-generate-bar">
-            <div>
+            <div class="nai-generate-size">
               <span id="novelAiStageSize">832 × 1216</span>
-              <strong id="novelAiCostPreview">約 - Anlas</strong>
             </div>
-            <button id="novelAiGenerateBtn" type="submit"><span id="novelAiGenerateLabel">Generate</span></button>
+            <div class="nai-generate-actions">
+              <strong id="novelAiCostPreview">約 - Anlas</strong>
+              <label class="nai-loop-count-label">
+                <span>生成數量</span>
+                <input id="novelAiLoopCount" type="number" min="0" step="1" value="1" title="0 代表一直生成，直到停止。" />
+              </label>
+              <button id="novelAiLoopGenerateBtn" type="button"><span id="novelAiLoopGenerateLabel">Loop Generate</span></button>
+              <button id="novelAiGenerateBtn" type="submit"><span id="novelAiGenerateLabel">Generate</span></button>
+            </div>
           </footer>
         </form>
       </aside>
@@ -185,6 +201,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260530-anlas1"></script>
+    <script type="module" src="/novelai.js?v=20260531-random-prompt-groups1"></script>
   </body>
 </html>
