@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260531-random-prompt-groups1" />
+    <link rel="stylesheet" href="/styles.css?v=20260531-random-textarea1" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -35,6 +35,15 @@
                 <strong>Base Prompt</strong>
               </div>
               <textarea id="novelAiPrompt" rows="8" placeholder="1girl, masterpiece, best quality"></textarea>
+            </section>
+
+            <section class="nai-card">
+              <div class="nai-card-title nai-title-row">
+                <strong>Fixed Prompt</strong>
+                <button id="novelAiAddFixedPromptBtn" type="button" class="secondary">新增</button>
+              </div>
+              <p class="nai-card-hint">常用服裝、姿勢、場景 prompt；點擊名字會直接插入 Base Prompt。</p>
+              <div id="novelAiFixedPromptList" class="nai-fixed-prompt-list"></div>
             </section>
 
             <section class="nai-card">
@@ -201,6 +210,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260531-random-prompt-groups1"></script>
+    <script type="module" src="/novelai.js?v=20260531-random-textarea1"></script>
   </body>
 </html>

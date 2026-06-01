@@ -5,6 +5,8 @@ const el = {
   novelAiModel: document.getElementById("novelAiModel"),
   novelAiModelDescription: document.getElementById("novelAiModelDescription"),
   novelAiPrompt: document.getElementById("novelAiPrompt"),
+  novelAiFixedPromptList: document.getElementById("novelAiFixedPromptList"),
+  novelAiAddFixedPromptBtn: document.getElementById("novelAiAddFixedPromptBtn"),
   novelAiRandomPromptList: document.getElementById("novelAiRandomPromptList"),
   novelAiAddRandomPromptBtn: document.getElementById("novelAiAddRandomPromptBtn"),
   novelAiNegativePrompt: document.getElementById("novelAiNegativePrompt"),
@@ -61,12 +63,14 @@ let novelAiPreciseImages = [];
 let novelAiCurrentImages = [];
 let novelAiPendingDropFiles = [];
 let novelAiDragDepth = 0;
+let novelAiFixedPromptSnippets = [];
 let novelAiRandomPromptSnippets = [];
 let novelAiLoopRunning = false;
 let novelAiLoopStopRequested = false;
 let novelAiLoopDelayTimer = null;
 
 const NOVELAI_SETTINGS_STORAGE_KEY = "time_tavern_novelai_settings";
+const NOVELAI_FIXED_PROMPT_STORAGE_KEY = "time_tavern_novelai_fixed_prompt_snippets";
 const NOVELAI_RANDOM_PROMPT_STORAGE_KEY = "time_tavern_novelai_random_prompt_snippets";
 const NOVELAI_HISTORY_DB_NAME = "time_tavern_novelai";
 const NOVELAI_HISTORY_STORE = "history";
@@ -381,21 +385,45 @@ function normalizePromptItemList(value = "") {
   return splitPromptLines(value);
 }
 
+function normalizeFixedPromptSnippet(snippet = {}, index = 0) {
+  const source = snippet && typeof snippet === "object" ? snippet : {};
+  const promptItems = normalizePromptItemList(source.prompt ?? source.text ?? source.content ?? source.fixedText ?? source.fixedItems ?? "");
+  return {
+    id: String(source.id || makeClientId("nai_fixed")).trim(),
+    name: String(source.name || source.title || source.key || `固定片段 ${index + 1}`).trim(),
+    prompt: cleanExpandedPrompt(promptItems.join(","))
+  };
+}
+
+function normalizeFixedPromptSnippets(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => normalizeFixedPromptSnippet(item, index))
+    .filter((item) => item.name || item.prompt);
+}
+
+function legacyFixedPromptSnippetsFromRandomSnippets(snippets = []) {
+  return normalizeRandomPromptSnippets(snippets)
+    .flatMap((snippet) => normalizePromptItemList(snippet.legacyFixedItems).map((prompt, index, list) => ({
+      id: `${snippet.id || makeClientId("nai_fixed")}_fixed_${index + 1}`,
+      name: list.length > 1 ? `${snippet.name || "固定片段"} ${index + 1}` : `${snippet.name || "固定片段"} 固定`,
+      prompt
+    })));
+}
+
 function normalizeRandomPromptSnippet(snippet = {}, index = 0) {
   const source = snippet && typeof snippet === "object" ? snippet : {};
   const name = String(source.name || source.title || source.key || `片段 ${index + 1}`).trim();
   const min = clampIntegerValue(source.min ?? source.minPick ?? source.pickMin, 1, 0, 999);
   const max = clampIntegerValue(source.max ?? source.maxPick ?? source.pickMax, Math.max(1, min), 0, 999);
-  const fixedItems = normalizePromptItemList(source.fixedItems ?? source.fixed_items ?? source.fixedText ?? source.fixed ?? source.staticText ?? "");
   const randomItems = normalizePromptItemList(source.randomItems ?? source.random_items ?? source.randomText ?? source.random ?? source.choices ?? "");
+  const legacyFixedItems = normalizePromptItemList(source.fixedItems ?? source.fixed_items ?? source.fixedText ?? source.fixed ?? source.staticText ?? "");
   const weightMin = clampNumberValue(source.weightMin ?? source.numericWeightMin ?? source.promptWeightMin, 0, 0, 5);
   const weightMax = clampNumberValue(source.weightMax ?? source.numericWeightMax ?? source.promptWeightMax, weightMin, 0, 5);
   return {
     id: String(source.id || makeClientId("nai_random")).trim(),
     name,
-    fixedItems,
+    legacyFixedItems,
     randomItems,
-    fixedText: fixedItems.join("\n"),
     randomText: randomItems.join("\n"),
     min: Math.min(min, max),
     max: Math.max(min, max),
@@ -409,7 +437,7 @@ function normalizeRandomPromptSnippet(snippet = {}, index = 0) {
 function normalizeRandomPromptSnippets(value = []) {
   return (Array.isArray(value) ? value : [])
     .map((item, index) => normalizeRandomPromptSnippet(item, index))
-    .filter((item) => item.name || item.fixedItems.length || item.randomItems.length);
+    .filter((item) => item.name || item.randomItems.length);
 }
 
 function normalizeRandomPromptMetadata(value = {}, fallbackSnippets = []) {
@@ -419,7 +447,6 @@ function normalizeRandomPromptMetadata(value = {}, fallbackSnippets = []) {
     ? source.expansions.map((item) => ({
       name: String(item?.name || "").trim(),
       placeholder: String(item?.placeholder || "").trim(),
-      fixed: normalizePromptItemList(item?.fixed || item?.fixedItems || item?.fixedText || ""),
       selected: normalizePromptItemList(item?.selected || ""),
       weightedSelected: normalizePromptItemList(item?.weightedSelected || ""),
       result: String(item?.result || "").trim()
@@ -439,6 +466,22 @@ function loadRandomPromptSnippets() {
   );
 }
 
+function loadFixedPromptSnippets(legacyRandomSnippets = []) {
+  const raw = window.localStorage?.getItem(NOVELAI_FIXED_PROMPT_STORAGE_KEY);
+  if (raw !== null && raw !== undefined) {
+    return normalizeFixedPromptSnippets(safeParseJson(raw || "[]"));
+  }
+  return normalizeFixedPromptSnippets(legacyFixedPromptSnippetsFromRandomSnippets(legacyRandomSnippets));
+}
+
+function saveFixedPromptSnippets(snippets = novelAiFixedPromptSnippets) {
+  try {
+    window.localStorage?.setItem(NOVELAI_FIXED_PROMPT_STORAGE_KEY, JSON.stringify(normalizeFixedPromptSnippets(snippets)));
+  } catch {
+    // Fixed prompt snippets are optional draft data.
+  }
+}
+
 function saveRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
   try {
     window.localStorage?.setItem(NOVELAI_RANDOM_PROMPT_STORAGE_KEY, JSON.stringify(normalizeRandomPromptSnippets(snippets)));
@@ -450,7 +493,6 @@ function saveRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
 function createRandomPromptSnippet(index = 0) {
   return normalizeRandomPromptSnippet({
     name: `隨機片段 ${index + 1}`,
-    fixedText: "",
     randomText: "",
     min: 1,
     max: 1,
@@ -458,6 +500,13 @@ function createRandomPromptSnippet(index = 0) {
     curlyMax: 0,
     weightMin: 0,
     weightMax: 0
+  }, index);
+}
+
+function createFixedPromptSnippet(index = 0) {
+  return normalizeFixedPromptSnippet({
+    name: `固定片段 ${index + 1}`,
+    prompt: ""
   }, index);
 }
 
@@ -472,6 +521,9 @@ function normalizeSettings(value = {}) {
     source.randomPrompt || source.random_prompt || comment.random_prompt,
     source.randomPromptSnippets || source.random_prompt_snippets
   );
+  const fixedPromptSnippets = normalizeFixedPromptSnippets(
+    source.fixedPromptSnippets || source.fixed_prompt_snippets || comment.fixed_prompt_snippets || []
+  );
   const promptTemplate = String(source.promptTemplate || source.prompt_template || randomPrompt.promptTemplate || "").trim();
   return {
     model: String(source.model || source.Software || comment.model || "nai-diffusion-4-5-full").trim(),
@@ -480,6 +532,7 @@ function normalizeSettings(value = {}) {
       comment?.v4_prompt?.caption?.base_caption ?? ""
     ).trim(),
     promptTemplate,
+    fixedPromptSnippets,
     randomPrompt,
     randomPromptSnippets: randomPrompt.snippets,
     negativePrompt: String(
@@ -620,13 +673,54 @@ function renderCharacters(characters = novelAiCharactersDraft) {
   });
 }
 
+function collectFixedPromptSnippets() {
+  return Array.from(el.novelAiFixedPromptList?.querySelectorAll(".nai-fixed-prompt-card") || [])
+    .map((card, index) => normalizeFixedPromptSnippet({
+      id: card.dataset.fixedPromptId || "",
+      name: card.querySelector('[data-fixed-prompt-field="name"]')?.value || "",
+      prompt: card.querySelector('[data-fixed-prompt-field="prompt"]')?.value || ""
+    }, index));
+}
+
+function renderFixedPromptSnippets(snippets = novelAiFixedPromptSnippets) {
+  const items = normalizeFixedPromptSnippets(snippets);
+  novelAiFixedPromptSnippets = items;
+  if (!el.novelAiFixedPromptList) {
+    return;
+  }
+  el.novelAiFixedPromptList.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "nai-empty-inline";
+    empty.textContent = "還沒有 Fixed Prompt 片段。";
+    el.novelAiFixedPromptList.appendChild(empty);
+    return;
+  }
+  items.forEach((snippet, index) => {
+    const card = document.createElement("section");
+    card.className = "nai-fixed-prompt-card";
+    card.dataset.fixedPromptId = snippet.id || `fixed_${index + 1}`;
+    card.innerHTML = `
+      <div class="nai-random-prompt-header">
+        <button type="button" class="secondary" data-fixed-prompt-action="insert"></button>
+        <button type="button" class="nai-danger-button" data-fixed-prompt-action="remove">刪除</button>
+      </div>
+      <label>名字<input type="text" data-fixed-prompt-field="name" /></label>
+      <label>Prompt<textarea rows="3" data-fixed-prompt-field="prompt" placeholder="black dress, white ribbon"></textarea></label>
+    `;
+    card.querySelector('[data-fixed-prompt-action="insert"]').textContent = snippet.name || `固定片段 ${index + 1}`;
+    card.querySelector('[data-fixed-prompt-field="name"]').value = snippet.name || "";
+    card.querySelector('[data-fixed-prompt-field="prompt"]').value = snippet.prompt || "";
+    el.novelAiFixedPromptList.appendChild(card);
+  });
+}
+
 function collectRandomPromptSnippets() {
   return Array.from(el.novelAiRandomPromptList?.querySelectorAll(".nai-random-prompt-card") || [])
     .map((card, index) => normalizeRandomPromptSnippet({
       id: card.dataset.randomPromptId || "",
       name: card.querySelector('[data-random-prompt-field="name"]')?.value || "",
-      fixedItems: Array.from(card.querySelectorAll('[data-random-prompt-item="fixed"]')).map((input) => input.value),
-      randomItems: Array.from(card.querySelectorAll('[data-random-prompt-item="random"]')).map((input) => input.value),
+      randomText: card.querySelector('[data-random-prompt-field="randomText"]')?.value || "",
       min: card.querySelector('[data-random-prompt-field="min"]')?.value || 0,
       max: card.querySelector('[data-random-prompt-field="max"]')?.value || 0,
       squareMax: card.querySelector('[data-random-prompt-field="squareMax"]')?.value || 0,
@@ -634,20 +728,6 @@ function collectRandomPromptSnippets() {
       weightMin: card.querySelector('[data-random-prompt-field="weightMin"]')?.value || 0,
       weightMax: card.querySelector('[data-random-prompt-field="weightMax"]')?.value || 0
     }, index));
-}
-
-function renderRandomPromptItemRows(items = [], type = "fixed") {
-  const action = type === "fixed" ? "remove-fixed-item" : "remove-random-item";
-  const emptyText = type === "fixed" ? "尚未添加固定輸入。" : "尚未添加隨機輸入。";
-  if (!items.length) {
-    return `<p class="nai-empty-inline">${emptyText}</p>`;
-  }
-  return items.map((item, index) => `
-    <div class="nai-random-prompt-item-row">
-      <input type="text" data-random-prompt-item="${type}" data-random-prompt-item-index="${index}" value="${escapeHtml(item)}" />
-      <button type="button" class="nai-danger-button" data-random-prompt-action="${action}" data-random-prompt-item-index="${index}">刪除</button>
-    </div>
-  `).join("");
 }
 
 function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
@@ -675,18 +755,7 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
       </div>
       <label>名字<input type="text" data-random-prompt-field="name" /></label>
       <div class="nai-random-prompt-entry">
-        <label>固定輸入<textarea rows="2" data-random-prompt-draft="fixed" placeholder="artist:rurudo,artist:sho_(sho_lwlw)"></textarea></label>
-        <button type="button" class="secondary" data-random-prompt-action="add-fixed">固定輸入添加</button>
-        <div class="nai-random-prompt-items" data-random-prompt-items="fixed">
-          ${renderRandomPromptItemRows(snippet.fixedItems, "fixed")}
-        </div>
-      </div>
-      <div class="nai-random-prompt-entry">
-        <label>隨機輸入<textarea rows="3" data-random-prompt-draft="random" placeholder="artist:rurudo,artist:sho_(sho_lwlw)&#10;artist:onineko&#10;artist:ciloranko"></textarea></label>
-        <button type="button" class="secondary" data-random-prompt-action="add-random">隨機輸入添加</button>
-        <div class="nai-random-prompt-items" data-random-prompt-items="random">
-          ${renderRandomPromptItemRows(snippet.randomItems, "random")}
-        </div>
+        <label>隨機輸入<textarea rows="5" data-random-prompt-field="randomText" placeholder="artist:rurudo,artist:sho_(sho_lwlw)&#10;artist:onineko&#10;artist:ciloranko"></textarea></label>
       </div>
       <div class="nai-random-prompt-grid">
         <label>抽選最少<input type="number" min="0" step="1" data-random-prompt-field="min" /></label>
@@ -699,6 +768,7 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
     `;
     card.querySelector('[data-random-prompt-action="insert"]').textContent = snippet.name || `片段 ${index + 1}`;
     card.querySelector('[data-random-prompt-field="name"]').value = snippet.name || "";
+    card.querySelector('[data-random-prompt-field="randomText"]').value = snippet.randomText || "";
     card.querySelector('[data-random-prompt-field="min"]').value = snippet.min;
     card.querySelector('[data-random-prompt-field="max"]').value = snippet.max;
     card.querySelector('[data-random-prompt-field="squareMax"]').value = snippet.squareMax;
@@ -905,19 +975,17 @@ function expandRandomPromptTemplate(promptTemplate = "", snippets = []) {
     if (!snippet) {
       throw new Error(`Random Prompt 找不到片段：${name}`);
     }
-    const fixed = normalizePromptItemList(snippet.fixedItems);
     const randomItems = normalizePromptItemList(snippet.randomItems);
     const min = Math.min(randomItems.length, clampIntegerValue(snippet.min, 0, 0, randomItems.length));
     const max = Math.min(randomItems.length, clampIntegerValue(snippet.max, min, 0, randomItems.length));
     const count = randomItems.length > 0 ? randomIntInclusive(Math.min(min, max), Math.max(min, max)) : 0;
     const selected = shufflePromptItems(randomItems).slice(0, count);
     const weightedSelected = selected.map((item) => applyRandomPromptWeight(item, snippet));
-    const parts = [...fixed, ...weightedSelected].filter(Boolean);
+    const parts = [...weightedSelected].filter(Boolean);
     const result = cleanExpandedPrompt(parts.join(","));
     expansions.push({
       name,
       placeholder,
-      fixed,
       selected,
       weightedSelected,
       result
@@ -935,11 +1003,13 @@ function expandRandomPromptTemplate(promptTemplate = "", snippets = []) {
 
 function getFormSettings() {
   const seedValue = String(el.novelAiSeed?.value || "").trim();
+  const fixedPromptSnippets = collectFixedPromptSnippets();
   const randomPromptSnippets = collectRandomPromptSnippets();
   return {
     model: el.novelAiModel?.value || "nai-diffusion-4-5-full",
     prompt: String(el.novelAiPrompt?.value || "").trim(),
     promptTemplate: String(el.novelAiPrompt?.value || "").trim(),
+    fixedPromptSnippets,
     randomPromptSnippets,
     negativePrompt: String(el.novelAiNegativePrompt?.value || "").trim(),
     width: numberValue(el.novelAiWidth, 832, { integer: true, min: 64, max: 2048 }),
@@ -1025,9 +1095,14 @@ function setFormSettings(settings = {}, options = {}) {
   } else if (options.clearBaseImage) {
     renderBaseImagePreview("");
   }
-  const incomingSnippets = normalizeRandomPromptSnippets(normalized.randomPromptSnippets);
-  if (incomingSnippets.length > 0 || options.replaceRandomPromptSnippets) {
-    novelAiRandomPromptSnippets = incomingSnippets;
+  const incomingFixedSnippets = normalizeFixedPromptSnippets(normalized.fixedPromptSnippets);
+  if (incomingFixedSnippets.length > 0 || options.replaceFixedPromptSnippets) {
+    novelAiFixedPromptSnippets = incomingFixedSnippets;
+  }
+  renderFixedPromptSnippets(novelAiFixedPromptSnippets);
+  const incomingRandomSnippets = normalizeRandomPromptSnippets(normalized.randomPromptSnippets);
+  if (incomingRandomSnippets.length > 0 || options.replaceRandomPromptSnippets) {
+    novelAiRandomPromptSnippets = incomingRandomSnippets;
   }
   renderRandomPromptSnippets(novelAiRandomPromptSnippets);
   renderCharacters(normalized.characters);
@@ -1035,6 +1110,7 @@ function setFormSettings(settings = {}, options = {}) {
   updateRangeValues();
   renderCostPreview();
   if (options.save !== false) {
+    saveFixedPromptSnippets();
     saveRandomPromptSnippets();
     saveSettingsDraft();
   }
@@ -1050,8 +1126,10 @@ function saveSettingsDraft() {
     settings.baseImage = "";
     settings.vibeTransfer.images = [];
     settings.preciseReference.images = [];
+    settings.fixedPromptSnippets = normalizeFixedPromptSnippets(settings.fixedPromptSnippets);
     settings.randomPromptSnippets = normalizeRandomPromptSnippets(settings.randomPromptSnippets);
     window.localStorage?.setItem(NOVELAI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    saveFixedPromptSnippets(settings.fixedPromptSnippets);
     saveRandomPromptSnippets(settings.randomPromptSnippets);
   } catch {
     // Draft saving is optional.
@@ -1609,6 +1687,7 @@ function buildNovelAiCompatibleComment(item = {}) {
     stream: parameters.stream ?? "msgpack",
     version: 1,
     uc: settings.negativePrompt || "",
+    fixed_prompt_snippets: settings.fixedPromptSnippets || [],
     random_prompt: settings.randomPrompt || null,
     request_type: parameters.request_type || "PromptGenerateRequest"
   };
@@ -2174,6 +2253,49 @@ function bindEvents() {
     renderCharacters(current);
     saveSettingsDraft();
   });
+  el.novelAiAddFixedPromptBtn.addEventListener("click", () => {
+    const current = collectFixedPromptSnippets();
+    current.push(createFixedPromptSnippet(current.length));
+    renderFixedPromptSnippets(current);
+    saveSettingsDraft();
+  });
+  el.novelAiFixedPromptList.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-fixed-prompt-action]");
+    if (!button) {
+      return;
+    }
+    const card = button.closest(".nai-fixed-prompt-card");
+    const cards = Array.from(el.novelAiFixedPromptList.querySelectorAll(".nai-fixed-prompt-card"));
+    const current = collectFixedPromptSnippets();
+    const index = cards.indexOf(card);
+    if (index < 0) {
+      return;
+    }
+    if (button.dataset.fixedPromptAction === "remove") {
+      current.splice(index, 1);
+      renderFixedPromptSnippets(current);
+    } else if (button.dataset.fixedPromptAction === "insert") {
+      const prompt = current[index]?.prompt || "";
+      if (!prompt) {
+        showToast("這個 Fixed Prompt 還沒有內容。", "error");
+        return;
+      }
+      insertTextAtCursor(el.novelAiPrompt, prompt);
+    }
+    saveSettingsDraft();
+  });
+  el.novelAiFixedPromptList.addEventListener("input", (event) => {
+    const target = event?.target?.closest?.("[data-fixed-prompt-field]");
+    if (target?.dataset.fixedPromptField === "name") {
+      const card = target.closest(".nai-fixed-prompt-card");
+      const insertButton = card?.querySelector('[data-fixed-prompt-action="insert"]');
+      if (insertButton) {
+        insertButton.textContent = target.value.trim() || "未命名片段";
+      }
+    }
+    novelAiFixedPromptSnippets = collectFixedPromptSnippets();
+    saveSettingsDraft();
+  });
   el.novelAiAddRandomPromptBtn.addEventListener("click", () => {
     const current = collectRandomPromptSnippets();
     current.push(createRandomPromptSnippet(current.length));
@@ -2199,31 +2321,11 @@ function bindEvents() {
     } else if (action === "insert") {
       const name = current[index]?.name || `片段 ${index + 1}`;
       insertTextAtCursor(el.novelAiPrompt, `{{${name}}}`);
-    } else if (action === "add-fixed" || action === "add-random") {
-      const type = action === "add-fixed" ? "fixed" : "random";
-      const draft = card.querySelector(`[data-random-prompt-draft="${type}"]`);
-      const additions = normalizePromptItemList(draft?.value || "");
-      if (!additions.length) {
-        showToast(type === "fixed" ? "請先輸入固定 prompt。" : "請先輸入隨機 prompt。", "error");
-        return;
-      }
-      const targetKey = type === "fixed" ? "fixedItems" : "randomItems";
-      current[index][targetKey] = [...(current[index][targetKey] || []), ...additions];
-      renderRandomPromptSnippets(current);
-    } else if (action === "remove-fixed-item" || action === "remove-random-item") {
-      const type = action === "remove-fixed-item" ? "fixed" : "random";
-      const targetKey = type === "fixed" ? "fixedItems" : "randomItems";
-      const itemIndex = clampIntegerValue(button.dataset.randomPromptItemIndex, -1, -1, 9999);
-      if (itemIndex >= 0) {
-        current[index][targetKey] = [...(current[index][targetKey] || [])];
-        current[index][targetKey].splice(itemIndex, 1);
-        renderRandomPromptSnippets(current);
-      }
     }
     saveSettingsDraft();
   });
   el.novelAiRandomPromptList.addEventListener("input", (event) => {
-    const target = event?.target?.closest?.("[data-random-prompt-field], [data-random-prompt-item]");
+    const target = event?.target?.closest?.("[data-random-prompt-field]");
     if (target?.dataset.randomPromptField === "name") {
       const card = target.closest(".nai-random-prompt-card");
       const insertButton = card?.querySelector('[data-random-prompt-action="insert"]');
@@ -2343,7 +2445,9 @@ async function boot() {
   fillSelect(el.novelAiSampler, NOVELAI_SAMPLER_OPTIONS, "k_euler_ancestral");
   fillSelect(el.novelAiNoiseSchedule, NOVELAI_NOISE_SCHEDULE_OPTIONS, "karras");
   novelAiRandomPromptSnippets = loadRandomPromptSnippets();
+  novelAiFixedPromptSnippets = loadFixedPromptSnippets(novelAiRandomPromptSnippets);
   setFormSettings(loadSettingsDraft(), { save: false, clearBaseImage: true });
+  renderFixedPromptSnippets(novelAiFixedPromptSnippets);
   renderRandomPromptSnippets(novelAiRandomPromptSnippets);
   renderMainImage(null);
   bindEvents();

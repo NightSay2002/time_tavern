@@ -2135,6 +2135,16 @@ function normalizeNovelAiRandomPromptMetadata(value = {}) {
   return cloned;
 }
 
+function normalizeNovelAiFixedPromptSnippets(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => ({
+      id: normalizePlainText(item?.id) || `fixed_${index + 1}`,
+      name: normalizePlainText(item?.name || item?.title || item?.key) || `固定片段 ${index + 1}`,
+      prompt: normalizePlainText(item?.prompt || item?.text || item?.content)
+    }))
+    .filter((item) => item.name || item.prompt);
+}
+
 function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}) {
   const charCaptions = characters
     .map((character) => {
@@ -2169,6 +2179,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const model = normalizePlainText(source.model) || "nai-diffusion-4-5-full";
   const prompt = normalizePlainText(source.prompt || source.input);
   const promptTemplate = normalizePlainText(source.promptTemplate || source.prompt_template);
+  const fixedPromptSnippets = normalizeNovelAiFixedPromptSnippets(source.fixedPromptSnippets || source.fixed_prompt_snippets);
   const randomPrompt = normalizeNovelAiRandomPromptMetadata(source.randomPrompt || source.random_prompt);
   const negativePrompt = normalizePlainText(source.negativePrompt || source.negative_prompt);
   const width = clampInteger(source.width, 1024, 64, 2048);
@@ -2290,6 +2301,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     model,
     prompt,
     promptTemplate,
+    fixedPromptSnippets,
     randomPrompt,
     negativePrompt,
     width,
@@ -2564,6 +2576,7 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
       character_prompts: settings.characters || [],
       vibe_transfer: settings.vibeTransfer || {},
       precise_reference: settings.preciseReference || {},
+      fixed_prompt_snippets: settings.fixedPromptSnippets || [],
       random_prompt: settings.randomPrompt || null
     }),
     NovelAIMetadata: fullMetadata
