@@ -626,6 +626,7 @@ function renderCharacters(characters = novelAiCharactersDraft) {
     empty.className = "nai-empty-inline";
     empty.textContent = "還沒有角色 Prompt。";
     el.novelAiCharacterList.appendChild(empty);
+    updateNovelAiDuplicateWarnings();
     return;
   }
   items.forEach((character, index) => {
@@ -671,6 +672,7 @@ function renderCharacters(characters = novelAiCharactersDraft) {
     card.querySelector('[data-novelai-character-field="negativePrompt"]').value = character.negativePrompt || "";
     el.novelAiCharacterList.appendChild(card);
   });
+  updateNovelAiDuplicateWarnings();
 }
 
 function collectFixedPromptSnippets() {
@@ -694,6 +696,7 @@ function renderFixedPromptSnippets(snippets = novelAiFixedPromptSnippets) {
     empty.className = "nai-empty-inline";
     empty.textContent = "還沒有 Fixed Prompt 片段。";
     el.novelAiFixedPromptList.appendChild(empty);
+    updateNovelAiDuplicateWarnings();
     return;
   }
   items.forEach((snippet, index) => {
@@ -713,6 +716,7 @@ function renderFixedPromptSnippets(snippets = novelAiFixedPromptSnippets) {
     card.querySelector('[data-fixed-prompt-field="prompt"]').value = snippet.prompt || "";
     el.novelAiFixedPromptList.appendChild(card);
   });
+  updateNovelAiDuplicateWarnings();
 }
 
 function collectRandomPromptSnippets() {
@@ -742,6 +746,7 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
     empty.className = "nai-empty-inline";
     empty.textContent = "還沒有 Random Prompt 片段。";
     el.novelAiRandomPromptList.appendChild(empty);
+    updateNovelAiDuplicateWarnings();
     return;
   }
   items.forEach((snippet, index) => {
@@ -777,6 +782,7 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
     card.querySelector('[data-random-prompt-field="weightMax"]').value = snippet.weightMax;
     el.novelAiRandomPromptList.appendChild(card);
   });
+  updateNovelAiDuplicateWarnings();
 }
 
 function insertTextAtCursor(textarea, text = "") {
@@ -964,6 +970,172 @@ function cleanExpandedPrompt(prompt = "") {
     .trim();
 }
 
+function normalizePromptDuplicateKey(value = "") {
+  return String(value || "")
+    .replace(/\s+/gu, " ")
+    .toLowerCase()
+    .trim();
+}
+
+function promptDuplicateFieldSelector() {
+  return "#novelAiPrompt, #novelAiNegativePrompt, " +
+    "[data-fixed-prompt-field=\"prompt\"], [data-random-prompt-field=\"randomText\"], " +
+    "[data-novelai-character-field=\"prompt\"], [data-novelai-character-field=\"negativePrompt\"]";
+}
+
+function promptDuplicateSeparator(field) {
+  return field?.matches?.("[data-random-prompt-field=\"randomText\"]") ? "line" : "comma";
+}
+
+function getPromptSegments(value = "", separator = "comma") {
+  const text = String(value || "");
+  const regex = separator === "line" ? /\r\n|\r|\n/gu : /[，,]/gu;
+  const segments = [];
+  let start = 0;
+  let match;
+  const pushSegment = (from, to) => {
+    const raw = text.slice(from, to);
+    const leadingLength = raw.match(/^\s*/u)?.[0]?.length || 0;
+    const trailingLength = raw.match(/\s*$/u)?.[0]?.length || 0;
+    const segmentStart = from + leadingLength;
+    const segmentEnd = Math.max(segmentStart, to - trailingLength);
+    const term = text.slice(segmentStart, segmentEnd);
+    if (term) {
+      segments.push({ term, start: segmentStart, end: segmentEnd });
+    }
+  };
+  while ((match = regex.exec(text))) {
+    pushSegment(start, match.index);
+    start = match.index + match[0].length;
+  }
+  pushSegment(start, text.length);
+  return segments;
+}
+
+function findDuplicatePromptSegments(field) {
+  const entries = new Map();
+  const segments = getPromptSegments(field?.value || "", promptDuplicateSeparator(field));
+  segments.forEach((segment) => {
+    const term = segment.term;
+    const key = normalizePromptDuplicateKey(term);
+    if (!key) {
+      return;
+    }
+    const entry = entries.get(key) || [];
+    entry.push(segment);
+    entries.set(key, entry);
+  });
+  return Array.from(entries.values())
+    .filter((items) => items.length > 1)
+    .flat()
+    .sort((left, right) => left.start - right.start);
+}
+
+function isPromptDuplicateField(target) {
+  return Boolean(target?.matches?.(promptDuplicateFieldSelector()));
+}
+
+function getPromptDuplicateFields() {
+  const dynamicFields = document.querySelectorAll(
+    "[data-fixed-prompt-field=\"prompt\"], [data-random-prompt-field=\"randomText\"], " +
+    "[data-novelai-character-field=\"prompt\"], [data-novelai-character-field=\"negativePrompt\"]"
+  );
+  return [el.novelAiPrompt, el.novelAiNegativePrompt, ...dynamicFields].filter(Boolean);
+}
+
+function ensurePromptHighlightLayer(field) {
+  if (!field) {
+    return null;
+  }
+  if (field.nextElementSibling?.classList?.contains("nai-duplicate-warning")) {
+    field.nextElementSibling.remove();
+  }
+  let wrap = field.parentElement?.classList?.contains("nai-prompt-highlight-wrap") ? field.parentElement : null;
+  if (!wrap) {
+    wrap = document.createElement("span");
+    wrap.className = "nai-prompt-highlight-wrap";
+    field.insertAdjacentElement("beforebegin", wrap);
+    wrap.appendChild(field);
+  }
+  let layer = wrap.querySelector(":scope > .nai-prompt-highlight");
+  if (!layer) {
+    layer = document.createElement("span");
+    layer.className = "nai-prompt-highlight";
+    layer.setAttribute("aria-hidden", "true");
+    wrap.insertBefore(layer, field);
+    field.addEventListener("scroll", () => syncPromptHighlightScroll(field));
+  }
+  return layer;
+}
+
+function syncPromptHighlightLayout(field, layer) {
+  const style = window.getComputedStyle(field);
+  [
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "fontFamily",
+    "fontSize",
+    "fontStyle",
+    "fontWeight",
+    "letterSpacing",
+    "lineHeight",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "textAlign",
+    "textIndent",
+    "textTransform",
+    "wordSpacing"
+  ].forEach((name) => {
+    layer.style[name] = style[name];
+  });
+}
+
+function syncPromptHighlightScroll(field) {
+  const layer = field?.parentElement?.querySelector?.(":scope > .nai-prompt-highlight");
+  if (!layer) {
+    return;
+  }
+  layer.scrollTop = field.scrollTop;
+  layer.scrollLeft = field.scrollLeft;
+}
+
+function promptHighlightHtml(value = "", duplicateSegments = []) {
+  const text = String(value || "");
+  let cursor = 0;
+  let html = "";
+  duplicateSegments.forEach((segment) => {
+    html += escapeHtml(text.slice(cursor, segment.start));
+    html += `<mark class="nai-duplicate-token">${escapeHtml(text.slice(segment.start, segment.end))}</mark>`;
+    cursor = segment.end;
+  });
+  html += escapeHtml(text.slice(cursor));
+  return html || " ";
+}
+
+function updatePromptDuplicateHighlight(field) {
+  if (!field) {
+    return;
+  }
+  const duplicates = findDuplicatePromptSegments(field);
+  const layer = ensurePromptHighlightLayer(field);
+  syncPromptHighlightLayout(field, layer);
+  layer.innerHTML = promptHighlightHtml(field.value || "", duplicates);
+  syncPromptHighlightScroll(field);
+  field.classList.toggle("has-duplicate-prompts", duplicates.length > 0);
+}
+
+function updateNovelAiDuplicateWarnings(target = null) {
+  if (isPromptDuplicateField(target)) {
+    updatePromptDuplicateHighlight(target);
+    return;
+  }
+  getPromptDuplicateFields().forEach(updatePromptDuplicateHighlight);
+}
+
 function expandRandomPromptTemplate(promptTemplate = "", snippets = []) {
   const template = String(promptTemplate || "").trim();
   const normalizedSnippets = normalizeRandomPromptSnippets(snippets);
@@ -1109,6 +1281,7 @@ function setFormSettings(settings = {}, options = {}) {
   renderAllReferences();
   updateRangeValues();
   renderCostPreview();
+  updateNovelAiDuplicateWarnings();
   if (options.save !== false) {
     saveFixedPromptSnippets();
     saveRandomPromptSnippets();
@@ -2216,6 +2389,7 @@ function bindEvents() {
     novelAiCharactersDraft = collectCharacters();
     updateRangeValues();
     renderCostPreview();
+    updateNovelAiDuplicateWarnings(event?.target);
     saveSettingsDraft();
   };
   el.novelAiForm.addEventListener("input", onFormChange);

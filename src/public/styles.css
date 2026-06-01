@@ -4218,6 +4218,48 @@ body.novelai-bright-body textarea {
   line-height: 1.55;
 }
 
+.nai-prompt-highlight-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.nai-prompt-highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-color: transparent;
+  border-style: solid;
+  border-radius: 12px;
+  background: #fff;
+  color: transparent;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.nai-card .nai-prompt-highlight-wrap textarea {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  caret-color: #3f2a50;
+}
+
+.nai-duplicate-token {
+  border-radius: 5px;
+  background: rgba(255, 216, 75, 0.72);
+  box-shadow: 0 0 0 1px rgba(239, 68, 106, 0.38), 0 0 0 4px rgba(255, 216, 75, 0.22);
+  color: transparent;
+}
+
+.nai-card textarea.has-duplicate-prompts {
+  border-color: rgba(239, 68, 106, 0.82);
+  box-shadow: 0 0 0 3px rgba(239, 68, 106, 0.16);
+}
+
 .nai-switch {
   display: inline-flex;
   align-items: center;
