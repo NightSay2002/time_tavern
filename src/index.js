@@ -1794,6 +1794,28 @@ function buildSavedSessionSummary(session) {
   };
 }
 
+function normalizeConversationForClient(conversation = []) {
+  return (Array.isArray(conversation) ? conversation : []).map((message) => {
+    if (message?.role !== "assistant") {
+      return message;
+    }
+    const finalized = finalizeAssistantOutputContent(message.content);
+    return {
+      ...message,
+      content: finalized.content || safeText(message.content)
+    };
+  });
+}
+
+function buildSavedSessionDetail(session) {
+  const snapshot = materializeSavedSessionSnapshot(session);
+  return {
+    ...buildSavedSessionSummary(session),
+    conversation: normalizeConversationForClient(snapshot.conversation),
+    aiLogCount: Array.isArray(snapshot.aiLogs) ? snapshot.aiLogs.length : 0
+  };
+}
+
 function listSavedSessionSummaries(currentState) {
   return currentState.savedSessions.map((session) => buildSavedSessionSummary(session));
 }
@@ -8610,18 +8632,7 @@ async function runConversationTurnStreaming({
 function statePayload(state) {
   return {
     ...state,
-    conversation: Array.isArray(state.conversation)
-      ? state.conversation.map((message) => {
-          if (message?.role !== "assistant") {
-            return message;
-          }
-          const finalized = finalizeAssistantOutputContent(message.content);
-          return {
-            ...message,
-            content: finalized.content || safeText(message.content)
-          };
-        })
-      : [],
+    conversation: normalizeConversationForClient(state.conversation),
     aiLogs: Array.isArray(state.aiLogs)
       ? state.aiLogs.map((entry) => normalizeAiLog(entry))
       : [],
@@ -9580,6 +9591,19 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 201, {
         session: buildSavedSessionSummary(created),
         state: statePayload(state)
+      });
+      return;
+    }
+
+    const sessionDetailMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
+    if (sessionDetailMatch && method === "GET") {
+      const session = getSavedSessionById(state, sessionDetailMatch[1]);
+      if (!session) {
+        sendJson(res, 404, { error: "對話存檔不存在" });
+        return;
+      }
+      sendJson(res, 200, {
+        session: buildSavedSessionDetail(session)
       });
       return;
     }

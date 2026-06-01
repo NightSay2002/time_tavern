@@ -80,6 +80,10 @@
 
   sessionPickerDialog: document.getElementById("sessionPickerDialog"),
   sessionPickerGrid: document.getElementById("sessionPickerGrid"),
+  sessionPreviewPanel: document.getElementById("sessionPreviewPanel"),
+  sessionPreviewTitle: document.getElementById("sessionPreviewTitle"),
+  sessionPreviewMeta: document.getElementById("sessionPreviewMeta"),
+  sessionPreviewMessages: document.getElementById("sessionPreviewMessages"),
   sessionPickerPrevBtn: document.getElementById("sessionPickerPrevBtn"),
   sessionPickerNextBtn: document.getElementById("sessionPickerNextBtn"),
   sessionPickerPageInfo: document.getElementById("sessionPickerPageInfo"),
@@ -188,6 +192,7 @@ let contextCompressionDialogPayload = null;
 let selectedContextCompressionProfileId = "standard";
 let roleCardPickerPage = 1;
 let sessionPickerPage = 1;
+let selectedSessionPreviewId = "";
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
 let coverCropConfirmHandler = null;
@@ -4640,6 +4645,10 @@ function renderSessionPicker(state = appState) {
   }
 
   const sessions = Array.isArray(state.savedSessionsMeta) ? state.savedSessionsMeta : [];
+  if (selectedSessionPreviewId && !sessions.some((session) => session.id === selectedSessionPreviewId)) {
+    selectedSessionPreviewId = "";
+    renderSessionPreviewPlaceholder();
+  }
   const totalPages = Math.max(1, Math.ceil(sessions.length / SESSION_PICKER_PAGE_SIZE));
   sessionPickerPage = Math.min(Math.max(1, sessionPickerPage), totalPages);
   const startIndex = (sessionPickerPage - 1) * SESSION_PICKER_PAGE_SIZE;
@@ -4672,6 +4681,9 @@ function renderSessionPicker(state = appState) {
 function createSessionPickerTile(session, state) {
   const tile = document.createElement("article");
   tile.className = "session-picker-card";
+  if (selectedSessionPreviewId === session.id) {
+    tile.classList.add("previewing");
+  }
 
   const title = document.createElement("h4");
   title.textContent = session.name;
@@ -4697,15 +4709,155 @@ function createSessionPickerTile(session, state) {
     el.sessionPickerDialog?.close();
   });
 
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "secondary";
+  previewBtn.textContent = "預覽";
+  previewBtn.addEventListener("click", () => previewSession(session.id));
+
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "muted";
   deleteBtn.textContent = "刪除";
   deleteBtn.addEventListener("click", () => deleteSession(session));
 
-  actions.append(continueBtn, deleteBtn);
+  actions.append(continueBtn, previewBtn, deleteBtn);
   tile.append(title, role, meta, actions);
   return tile;
+}
+
+function renderSessionPreviewPlaceholder(message = "尚未選擇存檔。") {
+  if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.textContent = "存檔預覽";
+  }
+  if (el.sessionPreviewMeta) {
+    el.sessionPreviewMeta.textContent = "選擇一個存檔查看對話。";
+  }
+  if (el.sessionPreviewMessages) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = message;
+    el.sessionPreviewMessages.replaceChildren(empty);
+  }
+}
+
+function getSessionPreviewAuthorInfo(message = {}, session = {}) {
+  if (message.role === "assistant") {
+    return {
+      name: session.roleCardName || "AI",
+      roleLabel: "assistant"
+    };
+  }
+  if (message.role === "user") {
+    const profileName = String(appState?.userProfile?.displayName || appState?.userProfile?.name || "{{user}}").trim();
+    return {
+      name: profileName || "{{user}}",
+      roleLabel: "user"
+    };
+  }
+  return {
+    name: message.role || "system",
+    roleLabel: message.role || "system"
+  };
+}
+
+function renderSessionPreview(session = {}) {
+  const conversation = Array.isArray(session.conversation) ? session.conversation : [];
+  selectedSessionPreviewId = session.id || "";
+  if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.textContent = session.name || "存檔預覽";
+  }
+  if (el.sessionPreviewMeta) {
+    const updatedText = session.updatedAt ? new Date(session.updatedAt).toLocaleString("zh-Hant") : "未知時間";
+    el.sessionPreviewMeta.textContent = `角色卡：${getSessionRoleCardLabel(session)}｜訊息：${conversation.length}｜更新：${updatedText}`;
+  }
+  if (!el.sessionPreviewMessages) {
+    return;
+  }
+  if (!conversation.length) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = "這個存檔沒有對話內容。";
+    el.sessionPreviewMessages.replaceChildren(empty);
+    renderSessionPicker(appState);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  conversation.forEach((message, index) => {
+    const author = getSessionPreviewAuthorInfo(message, session);
+    const item = document.createElement("article");
+    item.className = `session-preview-message ${message.role || "unknown"}`;
+
+    const header = document.createElement("div");
+    header.className = "session-preview-message-header";
+    const name = document.createElement("strong");
+    name.textContent = `#${index + 1} ${author.name}`;
+    const meta = document.createElement("span");
+    const timeText = message.createdAt ? formatMessageTimestamp(message.createdAt) : author.roleLabel;
+    meta.textContent = timeText;
+    header.append(name, meta);
+
+    const body = document.createElement("div");
+    body.className = "session-preview-message-body markdown-body";
+    body.innerHTML = renderMarkdownToHtml(message.content || "", {
+      allowHtml: message.role === "assistant"
+    });
+
+    const imageAttachments = getMessageImageAttachments(message);
+    if (imageAttachments.length > 0) {
+      const imageGrid = document.createElement("div");
+      imageGrid.className = "message-image-grid";
+      imageAttachments.forEach((image) => {
+        const link = document.createElement("a");
+        link.className = "message-image-link";
+        link.href = image.imageUrl;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.title = image.prompt || image.fileName;
+        const img = document.createElement("img");
+        img.src = image.imageUrl;
+        img.alt = image.fileName || "generated image";
+        img.loading = "lazy";
+        link.appendChild(img);
+        imageGrid.appendChild(link);
+      });
+      body.appendChild(imageGrid);
+    }
+
+    item.append(header, body);
+    fragment.appendChild(item);
+  });
+  el.sessionPreviewMessages.replaceChildren(fragment);
+  renderSessionPicker(appState);
+}
+
+async function previewSession(sessionId = "") {
+  if (!sessionId) {
+    return;
+  }
+  selectedSessionPreviewId = sessionId;
+  if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.textContent = "讀取預覽中...";
+  }
+  if (el.sessionPreviewMeta) {
+    el.sessionPreviewMeta.textContent = "";
+  }
+  if (el.sessionPreviewMessages) {
+    const loading = document.createElement("p");
+    loading.className = "form-hint";
+    loading.textContent = "正在讀取存檔對話...";
+    el.sessionPreviewMessages.replaceChildren(loading);
+  }
+  renderSessionPicker(appState);
+  try {
+    const payload = await request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "GET" });
+    renderSessionPreview(payload.session || {});
+  } catch (error) {
+    selectedSessionPreviewId = "";
+    renderSessionPreviewPlaceholder(error.message || "存檔預覽讀取失敗。");
+    showToast(error.message || "存檔預覽讀取失敗", "error");
+  }
 }
 
 function getActiveRoleCardFromState(state = appState) {

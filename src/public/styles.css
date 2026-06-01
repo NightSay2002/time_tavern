@@ -926,6 +926,14 @@ button {
   align-items: start;
 }
 
+.session-picker-content {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.52fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
 .role-picker-card {
   height: 430px;
   display: grid;
@@ -1031,6 +1039,11 @@ button {
   box-shadow: 0 0 22px rgba(77, 141, 255, 0.16), inset 0 0 18px rgba(255, 255, 255, 0.04);
 }
 
+.session-picker-card.previewing {
+  border-color: rgba(255, 214, 242, 0.72);
+  box-shadow: 0 0 22px rgba(255, 79, 200, 0.16), inset 0 0 18px rgba(255, 255, 255, 0.04);
+}
+
 .session-picker-card h4 {
   margin: 0;
   font-family: "Pop Gothic", "Noto Sans TC", "PingFang TC", sans-serif;
@@ -1074,6 +1087,98 @@ button {
 
 .session-picker-actions button:first-child {
   grid-column: 1 / -1;
+}
+
+.session-preview-panel {
+  min-height: 300px;
+  max-height: min(65vh, 690px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 22% 8%, rgba(255, 79, 200, 0.14), transparent 34%),
+    linear-gradient(160deg, rgba(77, 141, 255, 0.08), rgba(255, 79, 200, 0.06)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.session-preview-panel > header {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.session-preview-panel > header strong {
+  overflow: hidden;
+  color: #f8fbff;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-preview-panel > header span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.session-preview-messages {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+  overscroll-behavior: contain;
+}
+
+.session-preview-message {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(4, 7, 19, 0.34);
+}
+
+.session-preview-message.user {
+  border-color: rgba(77, 141, 255, 0.2);
+}
+
+.session-preview-message.assistant {
+  border-color: rgba(255, 79, 200, 0.2);
+}
+
+.session-preview-message-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.session-preview-message-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f8fbff;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-preview-message-header span {
+  flex: none;
+  color: #8fa5cf;
+  font-size: 12px;
+}
+
+.session-preview-message-body {
+  max-height: 220px;
+  overflow: auto;
+  color: #dbe8ff;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .inline-actions {
@@ -3588,10 +3693,15 @@ body.novelai-studio-body .novelai-small-preview {
     min-height: 280px;
   }
 
+  .session-picker-content,
   .role-picker-grid,
   .session-picker-grid,
   .role-picker-pagination {
     grid-template-columns: 1fr;
+  }
+
+  .session-preview-panel {
+    max-height: none;
   }
 
   .role-picker-card {

@@ -222,7 +222,18 @@
           <h3>選擇對話存檔</h3>
           <button id="closeSessionPickerBtn" type="button" class="muted">關閉</button>
         </div>
-        <div id="sessionPickerGrid" class="session-picker-grid"></div>
+        <div class="session-picker-content">
+          <div id="sessionPickerGrid" class="session-picker-grid"></div>
+          <aside id="sessionPreviewPanel" class="session-preview-panel" aria-live="polite">
+            <header>
+              <strong id="sessionPreviewTitle">存檔預覽</strong>
+              <span id="sessionPreviewMeta">選擇一個存檔查看對話。</span>
+            </header>
+            <div id="sessionPreviewMessages" class="session-preview-messages">
+              <p class="form-hint">尚未選擇存檔。</p>
+            </div>
+          </aside>
+        </div>
         <div class="role-picker-pagination">
           <button id="sessionPickerPrevBtn" type="button" class="secondary">上一頁</button>
           <span id="sessionPickerPageInfo">第 1 / 1 頁</span>
