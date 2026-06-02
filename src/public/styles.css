@@ -4379,6 +4379,36 @@ body.novelai-bright-body textarea {
   gap: 8px;
 }
 
+.nai-random-weight-toggle {
+  min-height: 40px;
+  padding: 10px 12px;
+  border: 1px solid rgba(218, 154, 235, 0.58);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.nai-random-prompt-grid input:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.nai-random-bias-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.nai-random-bias-row input {
+  grid-column: 1 / -1;
+}
+
+.nai-random-bias-row b {
+  color: #7d45a0;
+  font-size: 13px;
+}
+
 .nai-random-prompt-entry {
   display: grid;
   gap: 7px;
@@ -4722,8 +4752,10 @@ body.novelai-bright-body textarea {
 .nai-main-output .novelai-image-actions {
   right: 12px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  max-width: min(52%, 560px);
 }
 
 .nai-main-output .novelai-image-actions button {
@@ -4736,6 +4768,12 @@ body.novelai-bright-body textarea {
   background: linear-gradient(120deg, #fff7fb, #ffd2e8);
   color: #8e1649;
   box-shadow: 0 10px 22px rgba(194, 90, 141, 0.18);
+}
+
+.nai-main-output .novelai-image-actions .nai-content-action {
+  border: 1px solid rgba(136, 87, 190, 0.5);
+  background: linear-gradient(120deg, #fffaff, #eadbff);
+  color: #5b2574;
 }
 
 .nai-history-panel {
@@ -4897,6 +4935,49 @@ body.is-novelai-drop-active .nai-drop-overlay {
 
 .nai-drop-choice-actions [data-drop-action="cancel"]:hover {
   background: #ffe8f2;
+}
+
+.nai-content-dialog {
+  width: min(820px, calc(100vw - 28px));
+  padding: 0;
+  border: 1px solid rgba(216, 148, 232, 0.42);
+  border-radius: 22px;
+  background: #fffaff;
+  color: #3f2350;
+  box-shadow: 0 24px 80px rgba(101, 42, 130, 0.28);
+}
+
+.nai-content-dialog::backdrop {
+  background: rgba(64, 23, 80, 0.26);
+}
+
+.nai-content-dialog form {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.nai-content-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nai-content-dialog h3 {
+  margin: 0;
+  color: #4d2364;
+}
+
+.nai-content-dialog textarea {
+  width: 100%;
+  min-height: min(58vh, 560px);
+  resize: vertical;
+  border: 1px solid rgba(206, 151, 229, 0.52);
+  border-radius: 14px;
+  background: #fff;
+  color: #2f1f3c;
+  font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 @media (max-width: 980px) {

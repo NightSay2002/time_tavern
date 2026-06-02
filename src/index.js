@@ -2201,6 +2201,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const model = normalizePlainText(source.model) || "nai-diffusion-4-5-full";
   const prompt = normalizePlainText(source.prompt || source.input);
   const promptTemplate = normalizePlainText(source.promptTemplate || source.prompt_template);
+  const fixedPrompt = source.fixedPrompt || source.fixed_prompt || null;
   const fixedPromptSnippets = normalizeNovelAiFixedPromptSnippets(source.fixedPromptSnippets || source.fixed_prompt_snippets);
   const randomPrompt = normalizeNovelAiRandomPromptMetadata(source.randomPrompt || source.random_prompt);
   const negativePrompt = normalizePlainText(source.negativePrompt || source.negative_prompt);
@@ -2323,6 +2324,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     model,
     prompt,
     promptTemplate,
+    fixedPrompt,
     fixedPromptSnippets,
     randomPrompt,
     negativePrompt,
@@ -2598,6 +2600,7 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
       character_prompts: settings.characters || [],
       vibe_transfer: settings.vibeTransfer || {},
       precise_reference: settings.preciseReference || {},
+      fixed_prompt: settings.fixedPrompt || null,
       fixed_prompt_snippets: settings.fixedPromptSnippets || [],
       random_prompt: settings.randomPrompt || null
     }),

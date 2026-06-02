@@ -53,6 +53,8 @@ const el = {
   novelAiDropChoiceDialog: document.getElementById("novelAiDropChoiceDialog"),
   novelAiDropChoicePreview: document.getElementById("novelAiDropChoicePreview"),
   novelAiDropChoiceText: document.getElementById("novelAiDropChoiceText"),
+  novelAiContentDialog: document.getElementById("novelAiContentDialog"),
+  novelAiContentText: document.getElementById("novelAiContentText"),
   toast: document.getElementById("toast")
 };
 
@@ -369,20 +371,25 @@ function clampNumberValue(value, fallback = 0, min = 0, max = 99) {
   return Math.min(max, Math.max(min, resolved));
 }
 
-function splitPromptLines(value = "") {
-  return String(value || "")
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
+function trimPromptItemStart(value = "") {
+  return String(value || "").replace(/^\s+/u, "");
 }
 
-function normalizePromptItemList(value = "") {
+function splitPromptLines(value = "", options = {}) {
+  const preserveTrailingSpace = options.preserveTrailingSpace === true;
+  return String(value || "")
+    .split(/\r?\n/u)
+    .map((line) => preserveTrailingSpace ? trimPromptItemStart(line) : line.trim())
+    .filter((line) => line.trim());
+}
+
+function normalizePromptItemList(value = "", options = {}) {
   if (Array.isArray(value)) {
     return value
-      .flatMap((item) => splitPromptLines(item))
+      .flatMap((item) => splitPromptLines(item, options))
       .filter(Boolean);
   }
-  return splitPromptLines(value);
+  return splitPromptLines(value, options);
 }
 
 function normalizeFixedPromptSnippet(snippet = {}, index = 0) {
@@ -415,10 +422,20 @@ function normalizeRandomPromptSnippet(snippet = {}, index = 0) {
   const name = String(source.name || source.title || source.key || `片段 ${index + 1}`).trim();
   const min = clampIntegerValue(source.min ?? source.minPick ?? source.pickMin, 1, 0, 999);
   const max = clampIntegerValue(source.max ?? source.maxPick ?? source.pickMax, Math.max(1, min), 0, 999);
-  const randomItems = normalizePromptItemList(source.randomItems ?? source.random_items ?? source.randomText ?? source.random ?? source.choices ?? "");
+  const randomItems = normalizePromptItemList(source.randomItems ?? source.random_items ?? source.randomText ?? source.random ?? source.choices ?? "", { preserveTrailingSpace: true });
   const legacyFixedItems = normalizePromptItemList(source.fixedItems ?? source.fixed_items ?? source.fixedText ?? source.fixed ?? source.staticText ?? "");
   const weightMin = clampNumberValue(source.weightMin ?? source.numericWeightMin ?? source.promptWeightMin, 0, 0, 5);
   const weightMax = clampNumberValue(source.weightMax ?? source.numericWeightMax ?? source.promptWeightMax, weightMin, 0, 5);
+  const squareMax = clampIntegerValue(source.squareMax ?? source.bracketMax ?? source.weakMax, 0, 0, 12);
+  const curlyMax = clampIntegerValue(source.curlyMax ?? source.braceMax ?? source.strongMax, 0, 0, 12);
+  const normalizedWeightMin = Math.min(weightMin, weightMax);
+  const normalizedWeightMax = Math.max(weightMin, weightMax);
+  const weightBias = clampNumberValue(
+    source.weightBias ?? source.weight_bias ?? source.numericWeightBias ?? source.promptWeightBias,
+    (normalizedWeightMin + normalizedWeightMax) / 2,
+    normalizedWeightMin,
+    normalizedWeightMax
+  );
   return {
     id: String(source.id || makeClientId("nai_random")).trim(),
     name,
@@ -427,10 +444,14 @@ function normalizeRandomPromptSnippet(snippet = {}, index = 0) {
     randomText: randomItems.join("\n"),
     min: Math.min(min, max),
     max: Math.max(min, max),
-    squareMax: clampIntegerValue(source.squareMax ?? source.bracketMax ?? source.weakMax, 0, 0, 12),
-    curlyMax: clampIntegerValue(source.curlyMax ?? source.braceMax ?? source.strongMax, 0, 0, 12),
-    weightMin: Math.min(weightMin, weightMax),
-    weightMax: Math.max(weightMin, weightMax)
+    squareEnabled: boolSetting(source.squareEnabled ?? source.square_enabled ?? source.bracketEnabled ?? source.weakEnabled, squareMax > 0),
+    squareMax,
+    curlyEnabled: boolSetting(source.curlyEnabled ?? source.curly_enabled ?? source.braceEnabled ?? source.strongEnabled, curlyMax > 0),
+    curlyMax,
+    weightEnabled: boolSetting(source.weightEnabled ?? source.weight_enabled ?? source.numericWeightEnabled ?? source.promptWeightEnabled, normalizedWeightMax > 0),
+    weightMin: normalizedWeightMin,
+    weightMax: normalizedWeightMax,
+    weightBias
   };
 }
 
@@ -447,8 +468,26 @@ function normalizeRandomPromptMetadata(value = {}, fallbackSnippets = []) {
     ? source.expansions.map((item) => ({
       name: String(item?.name || "").trim(),
       placeholder: String(item?.placeholder || "").trim(),
-      selected: normalizePromptItemList(item?.selected || ""),
-      weightedSelected: normalizePromptItemList(item?.weightedSelected || ""),
+      selected: normalizePromptItemList(item?.selected || "", { preserveTrailingSpace: true }),
+      weightedSelected: normalizePromptItemList(item?.weightedSelected || "", { preserveTrailingSpace: true }),
+      result: String(item?.result || "").trim()
+    })).filter((item) => item.name || item.placeholder || item.result)
+    : [];
+  return {
+    promptTemplate: String(source.promptTemplate || "").trim(),
+    finalPrompt: String(source.finalPrompt || "").trim(),
+    snippets,
+    expansions
+  };
+}
+
+function normalizeFixedPromptMetadata(value = {}, fallbackSnippets = []) {
+  const source = value && typeof value === "object" ? value : {};
+  const snippets = normalizeFixedPromptSnippets(source.snippets || source.fixedPromptSnippets || fallbackSnippets);
+  const expansions = Array.isArray(source.expansions)
+    ? source.expansions.map((item) => ({
+      name: String(item?.name || "").trim(),
+      placeholder: String(item?.placeholder || "").trim(),
       result: String(item?.result || "").trim()
     })).filter((item) => item.name || item.placeholder || item.result)
     : [];
@@ -496,10 +535,14 @@ function createRandomPromptSnippet(index = 0) {
     randomText: "",
     min: 1,
     max: 1,
+    squareEnabled: false,
     squareMax: 0,
+    curlyEnabled: false,
     curlyMax: 0,
+    weightEnabled: false,
     weightMin: 0,
-    weightMax: 0
+    weightMax: 0,
+    weightBias: 0
   }, index);
 }
 
@@ -521,10 +564,14 @@ function normalizeSettings(value = {}) {
     source.randomPrompt || source.random_prompt || comment.random_prompt,
     source.randomPromptSnippets || source.random_prompt_snippets
   );
-  const fixedPromptSnippets = normalizeFixedPromptSnippets(
-    source.fixedPromptSnippets || source.fixed_prompt_snippets || comment.fixed_prompt_snippets || []
+  const fixedPrompt = normalizeFixedPromptMetadata(
+    source.fixedPrompt || source.fixed_prompt || comment.fixed_prompt,
+    source.fixedPromptSnippets || source.fixed_prompt_snippets
   );
-  const promptTemplate = String(source.promptTemplate || source.prompt_template || randomPrompt.promptTemplate || "").trim();
+  const fixedPromptSnippets = normalizeFixedPromptSnippets(
+    source.fixedPromptSnippets || source.fixed_prompt_snippets || comment.fixed_prompt_snippets || fixedPrompt.snippets || []
+  );
+  const promptTemplate = String(source.promptTemplate || source.prompt_template || fixedPrompt.promptTemplate || randomPrompt.promptTemplate || "").trim();
   return {
     model: String(source.model || source.Software || comment.model || "nai-diffusion-4-5-full").trim(),
     prompt: String(
@@ -532,6 +579,7 @@ function normalizeSettings(value = {}) {
       comment?.v4_prompt?.caption?.base_caption ?? ""
     ).trim(),
     promptTemplate,
+    fixedPrompt,
     fixedPromptSnippets,
     randomPrompt,
     randomPromptSnippets: randomPrompt.snippets,
@@ -727,11 +775,58 @@ function collectRandomPromptSnippets() {
       randomText: card.querySelector('[data-random-prompt-field="randomText"]')?.value || "",
       min: card.querySelector('[data-random-prompt-field="min"]')?.value || 0,
       max: card.querySelector('[data-random-prompt-field="max"]')?.value || 0,
+      squareEnabled: card.querySelector('[data-random-prompt-field="squareEnabled"]')?.checked === true,
       squareMax: card.querySelector('[data-random-prompt-field="squareMax"]')?.value || 0,
+      curlyEnabled: card.querySelector('[data-random-prompt-field="curlyEnabled"]')?.checked === true,
       curlyMax: card.querySelector('[data-random-prompt-field="curlyMax"]')?.value || 0,
+      weightEnabled: card.querySelector('[data-random-prompt-field="weightEnabled"]')?.checked === true,
       weightMin: card.querySelector('[data-random-prompt-field="weightMin"]')?.value || 0,
-      weightMax: card.querySelector('[data-random-prompt-field="weightMax"]')?.value || 0
+      weightMax: card.querySelector('[data-random-prompt-field="weightMax"]')?.value || 0,
+      weightBias: card.querySelector('[data-random-prompt-field="weightBias"]')?.value || 0
     }, index));
+}
+
+function syncRandomPromptWeightBiasControl(card) {
+  const minInput = card?.querySelector?.('[data-random-prompt-field="weightMin"]');
+  const maxInput = card?.querySelector?.('[data-random-prompt-field="weightMax"]');
+  const biasInput = card?.querySelector?.('[data-random-prompt-field="weightBias"]');
+  const biasValue = card?.querySelector?.("[data-random-prompt-bias-value]");
+  if (!biasInput) {
+    return;
+  }
+  const min = clampNumberValue(minInput?.value, 0, 0, 5);
+  const max = clampNumberValue(maxInput?.value, min, 0, 5);
+  const low = Math.min(min, max);
+  const high = Math.max(min, max);
+  const fallback = Number.isFinite(Number(biasInput.value)) ? Number(biasInput.value) : (low + high) / 2;
+  const value = clampNumberValue(fallback, (low + high) / 2, low, high);
+  biasInput.min = String(low);
+  biasInput.max = String(high);
+  biasInput.step = "0.1";
+  biasInput.value = formatPromptWeight(value);
+  if (biasValue) {
+    biasValue.textContent = formatPromptWeight(value);
+  }
+}
+
+function syncRandomPromptWeightControls(card) {
+  if (!card) {
+    return;
+  }
+  [
+    ["squareEnabled", "squareMax"],
+    ["curlyEnabled", "curlyMax"],
+    ["weightEnabled", "weightMin"],
+    ["weightEnabled", "weightMax"],
+    ["weightEnabled", "weightBias"]
+  ].forEach(([toggleField, inputField]) => {
+    const toggle = card.querySelector(`[data-random-prompt-field="${toggleField}"]`);
+    const input = card.querySelector(`[data-random-prompt-field="${inputField}"]`);
+    if (input) {
+      input.disabled = toggle?.checked !== true;
+    }
+  });
+  syncRandomPromptWeightBiasControl(card);
 }
 
 function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
@@ -765,10 +860,14 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
       <div class="nai-random-prompt-grid">
         <label>抽選最少<input type="number" min="0" step="1" data-random-prompt-field="min" /></label>
         <label>抽選最多<input type="number" min="0" step="1" data-random-prompt-field="max" /></label>
+        <label class="nai-switch nai-random-weight-toggle"><input type="checkbox" data-random-prompt-field="squareEnabled" /> 啟用 []</label>
         <label>[] max<input type="number" min="0" max="12" step="1" data-random-prompt-field="squareMax" /></label>
+        <label class="nai-switch nai-random-weight-toggle"><input type="checkbox" data-random-prompt-field="curlyEnabled" /> 啟用 {}</label>
         <label>{} max<input type="number" min="0" max="12" step="1" data-random-prompt-field="curlyMax" /></label>
+        <label class="nai-switch nai-random-weight-toggle"><input type="checkbox" data-random-prompt-field="weightEnabled" /> 啟用數值權重</label>
         <label>數值權重最少<input type="number" min="0" max="5" step="0.1" data-random-prompt-field="weightMin" /></label>
         <label>數值權重最多<input type="number" min="0" max="5" step="0.1" data-random-prompt-field="weightMax" /></label>
+        <label class="nai-random-bias-row">數值權重偏向 <b data-random-prompt-bias-value>0.0</b><input type="range" min="0" max="5" step="0.1" data-random-prompt-field="weightBias" /></label>
       </div>
     `;
     card.querySelector('[data-random-prompt-action="insert"]').textContent = snippet.name || `片段 ${index + 1}`;
@@ -776,10 +875,15 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
     card.querySelector('[data-random-prompt-field="randomText"]').value = snippet.randomText || "";
     card.querySelector('[data-random-prompt-field="min"]').value = snippet.min;
     card.querySelector('[data-random-prompt-field="max"]').value = snippet.max;
+    card.querySelector('[data-random-prompt-field="squareEnabled"]').checked = snippet.squareEnabled === true;
     card.querySelector('[data-random-prompt-field="squareMax"]').value = snippet.squareMax;
+    card.querySelector('[data-random-prompt-field="curlyEnabled"]').checked = snippet.curlyEnabled === true;
     card.querySelector('[data-random-prompt-field="curlyMax"]').value = snippet.curlyMax;
+    card.querySelector('[data-random-prompt-field="weightEnabled"]').checked = snippet.weightEnabled === true;
     card.querySelector('[data-random-prompt-field="weightMin"]').value = snippet.weightMin;
     card.querySelector('[data-random-prompt-field="weightMax"]').value = snippet.weightMax;
+    card.querySelector('[data-random-prompt-field="weightBias"]').value = snippet.weightBias;
+    syncRandomPromptWeightControls(card);
     el.novelAiRandomPromptList.appendChild(card);
   });
   updateNovelAiDuplicateWarnings();
@@ -917,30 +1021,57 @@ function randomNumberInRange(min, max) {
   return low + Math.random() * (high - low);
 }
 
+function randomBiasedNumberInRange(min, max, bias) {
+  const low = Math.min(min, max);
+  const high = Math.max(min, max);
+  if (high <= low) {
+    return low;
+  }
+  const center = clampNumberValue(bias, (low + high) / 2, low, high);
+  const focusedLow = Math.max(low, center - 1);
+  const focusedHigh = Math.min(high, center + 1);
+  const useFullRange = Math.random() < 0.18 || focusedHigh <= focusedLow;
+  return useFullRange ? randomNumberInRange(low, high) : randomNumberInRange(focusedLow, focusedHigh);
+}
+
 function formatPromptWeight(value) {
   return (Math.round(Number(value || 0) * 10) / 10).toFixed(1);
 }
 
-function splitPromptChain(text = "") {
+function protectNumericWeightPromptToken(value = "") {
+  const text = String(value || "");
+  return /\d$/u.test(text) ? `${text} ` : text;
+}
+
+function splitPromptChain(text = "", options = {}) {
+  const preserveTrailingSpace = options.preserveTrailingSpace === true;
   return String(text || "")
     .split(/[，,]/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
+    .map((item) => preserveTrailingSpace ? trimPromptItemStart(item) : item.trim())
+    .filter((item) => item.trim());
 }
 
 function applyRandomPromptWeightToToken(text = "", snippet = {}) {
-  let output = String(text || "").trim();
+  // Some NovelAI tags intentionally keep a trailing space, e.g. "year2025 ",
+  // to avoid becoming part of the closing "::" in numeric weights.
+  let output = trimPromptItemStart(text);
+  if (!output.trim()) {
+    return "";
+  }
   const squareMax = clampIntegerValue(snippet.squareMax, 0, 0, 12);
   const curlyMax = clampIntegerValue(snippet.curlyMax, 0, 0, 12);
   const weightMin = clampNumberValue(snippet.weightMin, 0, 0, 5);
   const weightMax = clampNumberValue(snippet.weightMax, weightMin, 0, 5);
+  const weightBias = clampNumberValue(snippet.weightBias, (weightMin + weightMax) / 2, Math.min(weightMin, weightMax), Math.max(weightMin, weightMax));
   const weightTypes = [
-    "none",
-    ...(squareMax > 0 ? ["square"] : []),
-    ...(curlyMax > 0 ? ["curly"] : []),
-    ...(Math.max(weightMin, weightMax) > 0 ? ["numeric"] : [])
+    ...(snippet.squareEnabled === true && squareMax > 0 ? ["square"] : []),
+    ...(snippet.curlyEnabled === true && curlyMax > 0 ? ["curly"] : []),
+    ...(snippet.weightEnabled === true && Math.max(weightMin, weightMax) > 0 ? ["numeric"] : [])
   ];
-  const weightType = weightTypes[randomIntInclusive(0, weightTypes.length - 1)] || "none";
+  if (!weightTypes.length) {
+    return output;
+  }
+  const weightType = weightTypes[randomIntInclusive(0, weightTypes.length - 1)];
   if (weightType === "square") {
     const squareCount = randomIntInclusive(1, squareMax);
     output = `${"[".repeat(squareCount)}${output}${"]".repeat(squareCount)}`;
@@ -950,13 +1081,13 @@ function applyRandomPromptWeightToToken(text = "", snippet = {}) {
     output = `${"{".repeat(curlyCount)}${output}${"}".repeat(curlyCount)}`;
   }
   if (weightType === "numeric") {
-    output = `${formatPromptWeight(randomNumberInRange(weightMin, weightMax))}::${output}::`;
+    output = `${formatPromptWeight(randomBiasedNumberInRange(weightMin, weightMax, weightBias))}::${protectNumericWeightPromptToken(output)}::`;
   }
   return output;
 }
 
 function applyRandomPromptWeight(text = "", snippet = {}) {
-  return splitPromptChain(text)
+  return splitPromptChain(text, { preserveTrailingSpace: true })
     .map((item) => applyRandomPromptWeightToToken(item, snippet))
     .join(",");
 }
@@ -1136,40 +1267,89 @@ function updateNovelAiDuplicateWarnings(target = null) {
   getPromptDuplicateFields().forEach(updatePromptDuplicateHighlight);
 }
 
-function expandRandomPromptTemplate(promptTemplate = "", snippets = []) {
+function promptSnippetPlaceholder(name = "") {
+  return `||${String(name || "").trim()}||`;
+}
+
+function makePromptSnippetMap(snippets = []) {
+  return new Map(snippets.filter((snippet) => snippet.name).map((snippet) => [snippet.name, snippet]));
+}
+
+function expandRandomPromptSnippet(snippet = {}, placeholder = "") {
+  const randomItems = normalizePromptItemList(snippet.randomItems);
+  const min = Math.min(randomItems.length, clampIntegerValue(snippet.min, 0, 0, randomItems.length));
+  const max = Math.min(randomItems.length, clampIntegerValue(snippet.max, min, 0, randomItems.length));
+  const count = randomItems.length > 0 ? randomIntInclusive(Math.min(min, max), Math.max(min, max)) : 0;
+  const selected = shufflePromptItems(randomItems).slice(0, count);
+  const weightedSelected = selected.map((item) => applyRandomPromptWeight(item, snippet));
+  const result = cleanExpandedPrompt(weightedSelected.filter(Boolean).join(","));
+  return {
+    name: snippet.name,
+    placeholder,
+    selected,
+    weightedSelected,
+    result
+  };
+}
+
+function expandPromptTemplate(promptTemplate = "", fixedSnippets = [], randomSnippets = []) {
   const template = String(promptTemplate || "").trim();
-  const normalizedSnippets = normalizeRandomPromptSnippets(snippets);
-  const snippetMap = new Map(normalizedSnippets.map((snippet) => [snippet.name, snippet]));
-  const expansions = [];
-  const expanded = template.replace(/\{\{\s*([^}]+?)\s*\}\}/gu, (placeholder, rawName) => {
+  const normalizedFixedSnippets = normalizeFixedPromptSnippets(fixedSnippets);
+  const normalizedRandomSnippets = normalizeRandomPromptSnippets(randomSnippets);
+  const fixedMap = makePromptSnippetMap(normalizedFixedSnippets);
+  const randomMap = makePromptSnippetMap(normalizedRandomSnippets);
+  const fixedExpansions = [];
+  const randomExpansions = [];
+  const expandModernPlaceholder = (placeholder, rawName) => {
     const name = String(rawName || "").trim();
-    const snippet = snippetMap.get(name);
-    if (!snippet) {
-      throw new Error(`Random Prompt 找不到片段：${name}`);
+    const fixedSnippet = fixedMap.get(name);
+    const randomSnippet = randomMap.get(name);
+    if (fixedSnippet && randomSnippet) {
+      throw new Error(`Prompt 片段名字重複：${name}，Fixed Prompt 和 Random Prompt 請不要同名。`);
     }
-    const randomItems = normalizePromptItemList(snippet.randomItems);
-    const min = Math.min(randomItems.length, clampIntegerValue(snippet.min, 0, 0, randomItems.length));
-    const max = Math.min(randomItems.length, clampIntegerValue(snippet.max, min, 0, randomItems.length));
-    const count = randomItems.length > 0 ? randomIntInclusive(Math.min(min, max), Math.max(min, max)) : 0;
-    const selected = shufflePromptItems(randomItems).slice(0, count);
-    const weightedSelected = selected.map((item) => applyRandomPromptWeight(item, snippet));
-    const parts = [...weightedSelected].filter(Boolean);
-    const result = cleanExpandedPrompt(parts.join(","));
-    expansions.push({
-      name,
-      placeholder,
-      selected,
-      weightedSelected,
-      result
-    });
-    return result;
+    if (fixedSnippet) {
+      const result = cleanExpandedPrompt(fixedSnippet.prompt || "");
+      fixedExpansions.push({ name, placeholder, result });
+      return result;
+    }
+    if (randomSnippet) {
+      const expansion = expandRandomPromptSnippet(randomSnippet, placeholder);
+      randomExpansions.push(expansion);
+      return expansion.result;
+    }
+    throw new Error(`Prompt 找不到片段：${name}`);
+  };
+  let expanded = template.replace(/\|\|\s*([^|]+?)\s*\|\|/gu, expandModernPlaceholder);
+
+  // Legacy support: old Random Prompt placeholders used {{name}}. Only expand
+  // them when the name matches a Random Prompt snippet, otherwise leave NovelAI
+  // weight syntax untouched.
+  expanded = expanded.replace(/\{\{\s*([^}]+?)\s*\}\}/gu, (placeholder, rawName) => {
+    const name = String(rawName || "").trim();
+    const snippet = randomMap.get(name);
+    if (!snippet) {
+      return placeholder;
+    }
+    const expansion = expandRandomPromptSnippet(snippet, placeholder);
+    randomExpansions.push(expansion);
+    return expansion.result;
   });
   const finalPrompt = cleanExpandedPrompt(expanded);
   return {
     promptTemplate: template,
     finalPrompt,
-    snippets: normalizedSnippets,
-    expansions
+    fixedPrompt: {
+      promptTemplate: template,
+      finalPrompt,
+      snippets: normalizedFixedSnippets,
+      expansions: fixedExpansions
+    },
+    randomPrompt: {
+      promptTemplate: template,
+      finalPrompt,
+      snippets: normalizedRandomSnippets,
+      expansions: randomExpansions
+    }
   };
 }
 
@@ -1226,12 +1406,13 @@ function getFormSettings() {
 
 function getGenerationSettings() {
   const settings = getFormSettings();
-  const expansion = expandRandomPromptTemplate(settings.promptTemplate || settings.prompt, settings.randomPromptSnippets);
+  const expansion = expandPromptTemplate(settings.promptTemplate || settings.prompt, settings.fixedPromptSnippets, settings.randomPromptSnippets);
   return {
     ...settings,
     prompt: expansion.finalPrompt,
     promptTemplate: expansion.promptTemplate,
-    randomPrompt: expansion
+    fixedPrompt: expansion.fixedPrompt,
+    randomPrompt: expansion.randomPrompt
   };
 }
 
@@ -1525,8 +1706,85 @@ function itemSettings(item = {}) {
   return item.metadata?.settings || item.settings || item.metadata || {};
 }
 
+function itemRequest(item = {}) {
+  return item.metadata?.request || item.request || {};
+}
+
 function itemPrompt(item = {}) {
   return String(itemSettings(item).prompt || item.prompt || "").trim();
+}
+
+function formatPromptExpansionLines(expansions = []) {
+  return (Array.isArray(expansions) ? expansions : [])
+    .map((item) => {
+      const name = String(item?.name || item?.placeholder || "").trim();
+      const result = String(item?.result || "").trim();
+      const picked = normalizePromptItemList(item?.weightedSelected || item?.selected || "", { preserveTrailingSpace: true }).join(", ");
+      const details = [result, picked && picked !== result ? `抽選：${picked}` : ""].filter(Boolean).join("\n  ");
+      return [name ? `- ${name}` : "-", details ? `  ${details}` : ""].filter(Boolean).join("\n");
+    })
+    .filter(Boolean);
+}
+
+function formatImageContent(item = {}) {
+  const settings = itemSettings(item);
+  const request = itemRequest(item);
+  const prompt = settings.prompt || itemPrompt(item) || "";
+  const promptTemplate = settings.promptTemplate || "";
+  const negativePrompt = settings.negativePrompt || settings.uc || "";
+  const lines = [
+    "【Prompt】",
+    prompt || "（空白）"
+  ];
+  if (promptTemplate && promptTemplate !== prompt) {
+    lines.push("", "【Prompt Template】", promptTemplate);
+  }
+  if (negativePrompt) {
+    lines.push("", "【Undesired Content】", negativePrompt);
+  }
+  const settingSummary = [
+    `模型: ${settings.model || request.model || "N/A"}`,
+    `尺寸: ${settings.width || "?"} x ${settings.height || "?"}`,
+    `Seed: ${settings.seed ?? "N/A"}`,
+    `Steps: ${settings.steps ?? "N/A"}`,
+    `Guidance: ${settings.scale ?? "N/A"}`,
+    `Sampler: ${settings.sampler || "N/A"}`,
+    `Noise Schedule: ${settings.noiseSchedule || "N/A"}`
+  ];
+  lines.push("", "【設定】", ...settingSummary);
+  const characters = (settings.characters || []).filter((character) => character?.enabled !== false && (character.prompt || character.negativePrompt));
+  if (characters.length) {
+    lines.push("", "【Character Prompts】");
+    characters.forEach((character, index) => {
+      lines.push(
+        `#${index + 1} ${character.name || "Character"}`,
+        character.prompt ? `Prompt: ${character.prompt}` : "",
+        character.negativePrompt ? `Undesired: ${character.negativePrompt}` : ""
+      );
+    });
+  }
+  const fixedLines = formatPromptExpansionLines(settings.fixedPrompt?.expansions);
+  if (fixedLines.length) {
+    lines.push("", "【Fixed Prompt 展開】", ...fixedLines);
+  }
+  const randomLines = formatPromptExpansionLines(settings.randomPrompt?.expansions);
+  if (randomLines.length) {
+    lines.push("", "【Random Prompt 抽選】", ...randomLines);
+  }
+  return lines.join("\n").replace(/\n{3,}/gu, "\n\n").trim();
+}
+
+function openImageContentDialog(item = {}) {
+  if (!el.novelAiContentDialog || !el.novelAiContentText) {
+    showToast(formatImageContent(item));
+    return;
+  }
+  el.novelAiContentText.value = formatImageContent(item);
+  if (typeof el.novelAiContentDialog.showModal === "function") {
+    el.novelAiContentDialog.showModal();
+  } else {
+    el.novelAiContentDialog.setAttribute("open", "open");
+  }
 }
 
 function makeActionButton(text, className, handler) {
@@ -1562,6 +1820,7 @@ function renderMainImage(item = null) {
   const actions = document.createElement("div");
   actions.className = "novelai-image-actions";
   actions.append(
+    makeActionButton("內容", "secondary nai-content-action", () => openImageContentDialog(item)),
     makeActionButton("還原設定", "nai-restore-action", () => {
       applyMetadataToForm(item.metadata || item.settings || {});
       showToast("已把圖片設定還原到表單");
@@ -1860,6 +2119,7 @@ function buildNovelAiCompatibleComment(item = {}) {
     stream: parameters.stream ?? "msgpack",
     version: 1,
     uc: settings.negativePrompt || "",
+    fixed_prompt: settings.fixedPrompt || null,
     fixed_prompt_snippets: settings.fixedPromptSnippets || [],
     random_prompt: settings.randomPrompt || null,
     request_type: parameters.request_type || "PromptGenerateRequest"
@@ -2449,12 +2709,13 @@ function bindEvents() {
       current.splice(index, 1);
       renderFixedPromptSnippets(current);
     } else if (button.dataset.fixedPromptAction === "insert") {
-      const prompt = current[index]?.prompt || "";
-      if (!prompt) {
+      const snippet = current[index] || {};
+      const name = snippet.name || `固定片段 ${index + 1}`;
+      if (!snippet.prompt) {
         showToast("這個 Fixed Prompt 還沒有內容。", "error");
         return;
       }
-      insertTextAtCursor(el.novelAiPrompt, prompt);
+      insertTextAtCursor(el.novelAiPrompt, promptSnippetPlaceholder(name));
     }
     saveSettingsDraft();
   });
@@ -2494,7 +2755,7 @@ function bindEvents() {
       renderRandomPromptSnippets(current);
     } else if (action === "insert") {
       const name = current[index]?.name || `片段 ${index + 1}`;
-      insertTextAtCursor(el.novelAiPrompt, `{{${name}}}`);
+      insertTextAtCursor(el.novelAiPrompt, promptSnippetPlaceholder(name));
     }
     saveSettingsDraft();
   });
@@ -2506,6 +2767,20 @@ function bindEvents() {
       if (insertButton) {
         insertButton.textContent = target.value.trim() || "未命名片段";
       }
+    }
+    if (["weightMin", "weightMax", "weightBias"].includes(target?.dataset.randomPromptField)) {
+      syncRandomPromptWeightBiasControl(target.closest(".nai-random-prompt-card"));
+    }
+    novelAiRandomPromptSnippets = collectRandomPromptSnippets();
+    saveSettingsDraft();
+  });
+  el.novelAiRandomPromptList.addEventListener("change", (event) => {
+    const target = event?.target?.closest?.("[data-random-prompt-field]");
+    if (!target) {
+      return;
+    }
+    if (["squareEnabled", "curlyEnabled", "weightEnabled", "weightMin", "weightMax", "weightBias"].includes(target.dataset.randomPromptField)) {
+      syncRandomPromptWeightControls(target.closest(".nai-random-prompt-card"));
     }
     novelAiRandomPromptSnippets = collectRandomPromptSnippets();
     saveSettingsDraft();

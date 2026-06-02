@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260601-inline-duplicate-prompts1" />
+    <link rel="stylesheet" href="/styles.css?v=20260601-image-content1" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -42,7 +42,7 @@
                 <strong>Fixed Prompt</strong>
                 <button id="novelAiAddFixedPromptBtn" type="button" class="secondary">新增</button>
               </div>
-              <p class="nai-card-hint">常用服裝、姿勢、場景 prompt；點擊名字會直接插入 Base Prompt。</p>
+              <p class="nai-card-hint">常用服裝、姿勢、場景 prompt；點擊名字會插入 ||名字||，Generate 時才展開。</p>
               <div id="novelAiFixedPromptList" class="nai-fixed-prompt-list"></div>
             </section>
 
@@ -51,7 +51,7 @@
                 <strong>Random Prompt</strong>
                 <button id="novelAiAddRandomPromptBtn" type="button" class="secondary">新增</button>
               </div>
-              <p class="nai-card-hint">點擊名字會插入 {{名字}}；Generate 時才會抽選並展開。</p>
+              <p class="nai-card-hint">點擊名字會插入 ||名字||；Generate 時才會抽選並展開。</p>
               <div id="novelAiRandomPromptList" class="nai-random-prompt-list"></div>
             </section>
 
@@ -209,7 +209,17 @@
       </form>
     </dialog>
 
+    <dialog id="novelAiContentDialog" class="nai-content-dialog">
+      <form method="dialog">
+        <div class="nai-content-dialog-header">
+          <h3>圖片內容</h3>
+          <button type="submit" class="muted">關閉</button>
+        </div>
+        <textarea id="novelAiContentText" rows="18" readonly></textarea>
+      </form>
+    </dialog>
+
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260601-inline-duplicate-prompts1"></script>
+    <script type="module" src="/novelai.js?v=20260601-image-content1"></script>
   </body>
 </html>
