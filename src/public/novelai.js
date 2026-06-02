@@ -63,6 +63,8 @@ let novelAiCharactersDraft = [];
 let novelAiVibeImages = [];
 let novelAiPreciseImages = [];
 let novelAiCurrentImages = [];
+let novelAiHistoryItems = [];
+let novelAiSelectedHistoryId = "";
 let novelAiPendingDropFiles = [];
 let novelAiDragDepth = 0;
 let novelAiFixedPromptSnippets = [];
@@ -1798,8 +1800,14 @@ function makeActionButton(text, className, handler) {
 
 function renderMainImage(item = null) {
   if (!item) {
+    novelAiSelectedHistoryId = "";
+    updateActiveHistoryItem();
     renderEmpty(el.novelAiOutputGrid, "生成後會顯示在這裡。");
     return;
+  }
+  if (item.id) {
+    novelAiSelectedHistoryId = item.id;
+    updateActiveHistoryItem();
   }
   el.novelAiOutputGrid.innerHTML = "";
   const card = document.createElement("article");
@@ -1832,16 +1840,75 @@ function renderMainImage(item = null) {
   el.novelAiOutputGrid.appendChild(card);
 }
 
+function updateActiveHistoryItem(options = {}) {
+  const { scroll = false } = options;
+  let activeCard = null;
+  el.novelAiHistoryGrid?.querySelectorAll?.(".nai-history-item").forEach((card) => {
+    const active = Boolean(novelAiSelectedHistoryId) && card.dataset.historyId === novelAiSelectedHistoryId;
+    card.classList.toggle("active", active);
+    card.querySelector('[data-history-action="select"]')?.setAttribute("aria-current", active ? "true" : "false");
+    if (active) {
+      activeCard = card;
+    }
+  });
+  if (scroll && activeCard) {
+    activeCard.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function selectHistoryItem(item = null, options = {}) {
+  if (!item) {
+    return;
+  }
+  renderMainImage(item);
+  updateActiveHistoryItem(options);
+}
+
+function moveHistorySelection(direction = 1) {
+  if (!novelAiHistoryItems.length) {
+    return;
+  }
+  const currentIndex = novelAiHistoryItems.findIndex((item) => item.id === novelAiSelectedHistoryId);
+  const fallbackIndex = direction > 0 ? -1 : novelAiHistoryItems.length;
+  const nextIndex = Math.min(novelAiHistoryItems.length - 1, Math.max(0, (currentIndex >= 0 ? currentIndex : fallbackIndex) + direction));
+  if (nextIndex >= 0 && nextIndex < novelAiHistoryItems.length) {
+    selectHistoryItem(novelAiHistoryItems[nextIndex], { scroll: true });
+  }
+}
+
+function canUseHistoryKeyboard(event = {}) {
+  if (!["ArrowUp", "ArrowDown"].includes(event.key)) {
+    return false;
+  }
+  if (document.querySelector("dialog[open]")) {
+    return false;
+  }
+  const target = event.target;
+  if (target?.closest?.("textarea, input, select, [contenteditable=\"true\"]")) {
+    return false;
+  }
+  return novelAiHistoryItems.length > 0;
+}
+
+function onHistoryKeyboardNavigation(event) {
+  if (!canUseHistoryKeyboard(event)) {
+    return;
+  }
+  event.preventDefault();
+  moveHistorySelection(event.key === "ArrowUp" ? -1 : 1);
+}
+
 function renderHistoryList(items = []) {
+  novelAiHistoryItems = Array.isArray(items) ? items : [];
   el.novelAiHistoryGrid.innerHTML = "";
-  if (!items.length) {
+  if (!novelAiHistoryItems.length) {
     const empty = document.createElement("p");
     empty.className = "nai-empty-inline";
     empty.textContent = "還沒有生成歷史。";
     el.novelAiHistoryGrid.appendChild(empty);
     return;
   }
-  items.forEach((item) => {
+  novelAiHistoryItems.forEach((item) => {
     const card = document.createElement("article");
     card.className = "nai-history-item";
     card.dataset.historyId = item.id || "";
@@ -1856,7 +1923,7 @@ function renderHistoryList(items = []) {
     card.querySelector("img").src = item.dataUrl || item.imageUrl || "";
     card.querySelector("strong").textContent = truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 36);
     card.querySelector("span").textContent = item.createdAt ? new Date(item.createdAt).toLocaleString("zh-Hant") : "";
-    card.querySelector('[data-history-action="select"]').addEventListener("click", () => renderMainImage(item));
+    card.querySelector('[data-history-action="select"]').addEventListener("click", () => selectHistoryItem(item, { scroll: true }));
     card.querySelector('[data-history-action="delete"]').addEventListener("click", async () => {
       await deleteHistoryItem(item.id);
       await renderHistory();
@@ -1864,6 +1931,7 @@ function renderHistoryList(items = []) {
     });
     el.novelAiHistoryGrid.appendChild(card);
   });
+  updateActiveHistoryItem();
 }
 
 async function renderHistory() {
@@ -2661,6 +2729,7 @@ function bindEvents() {
   el.novelAiLoopGenerateBtn.addEventListener("click", loopGenerateImages);
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
   el.novelAiRefreshAlbumBtn.addEventListener("click", renderHistory);
+  window.addEventListener("keydown", onHistoryKeyboardNavigation);
   el.novelAiBaseImagePreview.addEventListener("click", () => el.novelAiBaseImageFile.click());
   el.novelAiBaseImageFile.addEventListener("change", async () => {
     try {

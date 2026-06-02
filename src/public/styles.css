@@ -4810,6 +4810,16 @@ body.novelai-bright-body textarea {
   background: rgba(255, 255, 255, 0.78);
 }
 
+.nai-history-item.active {
+  border-color: rgba(142, 80, 205, 0.72);
+  background: linear-gradient(120deg, #fffaff, #f1e4ff);
+  box-shadow: 0 12px 28px rgba(121, 75, 173, 0.18);
+}
+
+.nai-history-item.active > button:first-child {
+  box-shadow: 0 0 0 3px rgba(142, 80, 205, 0.24);
+}
+
 .nai-history-item > button:first-child {
   width: 72px;
   min-height: 72px;
