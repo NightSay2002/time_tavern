@@ -83,7 +83,8 @@ http://localhost:3234
 │       ├── multi.json
 │       └── no_role.json
 ├── defaults/
-│   └── app-defaults.json        # GitHub 發佈用預設設定、角色卡與非機密環境值
+│   ├── app-defaults.json        # GitHub 發佈用預設設定、角色卡與非機密環境值
+│   └── novelai-defaults.json    # NovelAI 跑圖頁首次載入預設
 └── data/
     ├── app-state.json           # 執行狀態、目前對話、設定、存檔 metadata
     ├── cardstate.json           # 使用者設定與角色卡分離備份
@@ -93,6 +94,8 @@ http://localhost:3234
 `data/`、`.env`、`node_modules/` 已在 `.gitignore` 中，不會被提交。
 
 網頁中的「儲存預設」會把目前使用者設定、角色卡、Prompt、模型內容設定、統計判斷與非機密環境顯示設定寫入 `defaults/app-defaults.json` 與 `prompts/modular/`。這些檔案可以提交到 GitHub，下載者第一次啟動時會自動套用；「使用預設」可在已有本機資料時手動套用 GitHub 預設，會清空原本環境設定、目前對話與 AI logs，但會保留對話存檔。
+
+NovelAI 跑圖頁的「保存預設」會把目前文字 prompt、片段庫、尺寸與生成參數寫入 `defaults/novelai-defaults.json`；旁邊的「啟用預設」可決定新瀏覽器首次打開跑圖頁時是否自動套用這份預設。
 
 ## 環境變數
 
@@ -115,7 +118,7 @@ http://localhost:3234
 | `WEB_USER_AVATAR_IMAGE` | 否 | 空 | 網頁聊天面板使用者頭像；環境設定可直接上傳圖片並保存成 data URL。 |
 | `WEB_AI_AVATAR_IMAGE` | 否 | 角色卡封面 | 網頁聊天面板 AI 頭像；環境設定可直接上傳圖片，留空使用角色卡封面。 |
 | `DISCORD_BOT_TOKEN` | 否 | 空 | Discord Bot token。空白時不登入 Discord。 |
-| `DISCORD_CLIENT_ID` | 否 | 從 token 推斷 | 產生 Discord Bot 邀請連結用。 |
+| `DISCORD_CLIENT_ID` | 否 | 從 token 推斷 | 產生帶 `bot` / `applications.commands` scope 與基本頻道權限的 Discord Bot 邀請連結用。 |
 | `DISCORD_GUILD_ID` | 否 | 空 | 指定 guild 註冊 Slash 指令；空白時只註冊全域指令。 |
 | `COMMAND_PREFIX` | 否 | `!ai` | Discord 文字指令前綴。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | 否 | `1048576` | Discord `.txt` / `text/plain` 附件輸入大小上限。 |
@@ -246,7 +249,7 @@ Provider 預設 Base URL：
 | Slash 指令 | 啟動後自動註冊 `/ai`、`/ai_start`、`/ai_status`、`/player_set`、`/reload`、`/replay`、`/run_time`、`/ai_help`、`/session_save`、`/session_list`、`/session_load`。 |
 | 全域指令 | 預設註冊到全域應用程式。 |
 | Guild 指令 | 設定 `DISCORD_GUILD_ID` 時會額外嘗試註冊到指定伺服器。 |
-| Bot 邀請連結 | 網頁可依 `DISCORD_CLIENT_ID` 或 token 推斷出的 client id 產生邀請 URL。 |
+| Bot 邀請連結 | 網頁可依 `DISCORD_CLIENT_ID` 或 token 推斷出的 client id 產生伺服器安裝用 URL，包含 `bot`、`applications.commands`、查看頻道、發送訊息、讀取訊息歷史、使用 Slash 指令、反應、附件、嵌入連結與 thread 發訊權限。 |
 | `/ai_start` | 在目前頻道開始或重開對話，並把該頻道設為直接對話頻道。 |
 | 頻道直接對話 | `/ai_start` 後，該伺服器頻道可直接輸入對話，不必加 `!ai`。 |
 | 文字前綴 | 非啟用頻道可用 `!ai 內容` 或 `!ai 指令`。前綴可由 `COMMAND_PREFIX` 修改。 |
@@ -311,6 +314,8 @@ DM 若要執行 meta 指令也請加前綴；沒有前綴時會當作聊天內�
 | `POST` | `/api/restart` | 排程重啟目前 Node server。 |
 | `POST` | `/api/defaults/apply` | 套用 GitHub 預設設定，清除原本環境設定並保留對話存檔。 |
 | `POST` | `/api/defaults/save` | 將目前設定保存成 GitHub 預設檔。 |
+| `GET` | `/api/novelai/defaults` | 讀取 NovelAI 跑圖頁預設。 |
+| `PUT` / `POST` | `/api/novelai/defaults` | 將目前 NovelAI 跑圖頁設定保存成預設。 |
 | `PUT` | `/api/conversation-settings` | 相容舊版 UI 的對話設定 API；新版 UI 以 `.env` 的 `CHAT_API_MODEL` 與各 Prompt 模式的 `dialogueContextRounds` 為主。 |
 | `GET` | `/api/context-compression` | 取得目前模型內容與啟用的大模型 profiles。 |
 | `PUT` | `/api/context-compression` | 手動保存指定 profile 的模型內容。 |
@@ -382,6 +387,10 @@ GitHub 發佈用預設資料，包含：
 
 這讓角色卡資料在 runtime state 損壞或重整時有獨立備份。
 
+### `defaults/novelai-defaults.json`
+
+NovelAI 跑圖頁的 GitHub 發佈用預設資料，包含啟用狀態、Base Prompt、Undesired Content、Fixed Prompt、Random Prompt、Character Prompts、尺寸與生成參數。預設檔不保存 Image2Image / Vibe Transfer / Precise Reference 的圖片 data URL，只保存文字與數值設定。
+
 ### `data/saved-sessions/<session_id>.json`
 
 分離保存存檔中的大段資料：
@@ -410,7 +419,7 @@ GitHub 發佈用預設資料，包含：
 3. 建議填入 `DISCORD_CLIENT_ID`，讓網頁能穩定產生 Bot 邀請連結。
 4. 若要使用文字指令或讀取一般訊息，請在 Discord Bot 設定中啟用 Message Content Intent。
 5. 啟動 `npm start`。
-6. 在網頁按「Discord Bot 連結」邀請 Bot。
+6. 在網頁按「Discord Bot 連結」邀請 Bot；邀請頁應是伺服器安裝流程，並顯示 `bot` / `applications.commands` scope 與基本頻道聊天權限。
 7. 到 Discord 使用 `/ai_start` 開始頻道對話。
 
 Slash 指令全域註冊可能需要等待 Discord 同步；若要立即在特定伺服器測試，可設定 `DISCORD_GUILD_ID`。

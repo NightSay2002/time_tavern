@@ -38,6 +38,8 @@ const el = {
   novelAiSizePreset: document.getElementById("novelAiSizePreset"),
   novelAiMetadataFile: document.getElementById("novelAiMetadataFile"),
   novelAiImportMetadataBtn: document.getElementById("novelAiImportMetadataBtn"),
+  novelAiSaveDefaultsBtn: document.getElementById("novelAiSaveDefaultsBtn"),
+  novelAiDefaultsEnabled: document.getElementById("novelAiDefaultsEnabled"),
   novelAiMetadataStatus: document.getElementById("novelAiMetadataStatus"),
   novelAiCostPreview: document.getElementById("novelAiCostPreview"),
   novelAiLoopCount: document.getElementById("novelAiLoopCount"),
@@ -1476,6 +1478,10 @@ function loadSettingsDraft() {
   return safeParseJson(window.localStorage?.getItem(NOVELAI_SETTINGS_STORAGE_KEY) || "{}");
 }
 
+function hasSettingsDraft(settings = {}) {
+  return Boolean(settings && typeof settings === "object" && !Array.isArray(settings) && Object.keys(settings).length > 0);
+}
+
 function saveSettingsDraft() {
   try {
     const settings = getFormSettings();
@@ -1489,6 +1495,59 @@ function saveSettingsDraft() {
     saveRandomPromptSnippets(settings.randomPromptSnippets);
   } catch {
     // Draft saving is optional.
+  }
+}
+
+async function loadNovelAiDefaults() {
+  try {
+    const payload = await request("/api/novelai/defaults");
+    return payload?.defaults && typeof payload.defaults === "object"
+      ? payload.defaults
+      : { enabled: false, settings: {} };
+  } catch {
+    return { enabled: false, settings: {} };
+  }
+}
+
+async function saveNovelAiDefaults() {
+  if (!el.novelAiSaveDefaultsBtn) {
+    return;
+  }
+  const originalText = el.novelAiSaveDefaultsBtn.textContent;
+  el.novelAiSaveDefaultsBtn.disabled = true;
+  el.novelAiSaveDefaultsBtn.textContent = "保存中...";
+  try {
+    const settings = getFormSettings();
+    settings.baseImage = "";
+    settings.vibeTransfer.images = [];
+    settings.preciseReference.images = [];
+    const payload = await request("/api/novelai/defaults", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: el.novelAiDefaultsEnabled?.checked === true,
+        settings
+      })
+    });
+    showToast(payload?.defaults?.updatedAt ? "已將目前 NovelAI 內容設為預設。" : "已保存 NovelAI 預設。");
+  } catch (error) {
+    showToast(error.message || "NovelAI 預設保存失敗。", "error");
+  } finally {
+    el.novelAiSaveDefaultsBtn.disabled = false;
+    el.novelAiSaveDefaultsBtn.textContent = originalText;
+  }
+}
+
+async function saveNovelAiDefaultsEnabled() {
+  try {
+    const payload = await request("/api/novelai/defaults", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: el.novelAiDefaultsEnabled?.checked === true
+      })
+    });
+    showToast(payload?.defaults?.enabled ? "已啟用 NovelAI 預設。" : "已停用 NovelAI 預設。");
+  } catch (error) {
+    showToast(error.message || "NovelAI 預設啟用狀態保存失敗。", "error");
   }
 }
 
@@ -2727,6 +2786,8 @@ function bindEvents() {
     await generateImages();
   });
   el.novelAiLoopGenerateBtn.addEventListener("click", loopGenerateImages);
+  el.novelAiSaveDefaultsBtn?.addEventListener("click", saveNovelAiDefaults);
+  el.novelAiDefaultsEnabled?.addEventListener("change", saveNovelAiDefaultsEnabled);
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
   el.novelAiRefreshAlbumBtn.addEventListener("click", renderHistory);
   window.addEventListener("keydown", onHistoryKeyboardNavigation);
@@ -2962,9 +3023,28 @@ async function boot() {
   fillSelect(el.novelAiModel, NOVELAI_MODEL_OPTIONS, "nai-diffusion-4-5-full");
   fillSelect(el.novelAiSampler, NOVELAI_SAMPLER_OPTIONS, "k_euler_ancestral");
   fillSelect(el.novelAiNoiseSchedule, NOVELAI_NOISE_SCHEDULE_OPTIONS, "karras");
-  novelAiRandomPromptSnippets = loadRandomPromptSnippets();
-  novelAiFixedPromptSnippets = loadFixedPromptSnippets(novelAiRandomPromptSnippets);
-  setFormSettings(loadSettingsDraft(), { save: false, clearBaseImage: true });
+  const draftSettings = loadSettingsDraft();
+  const hasDraft = hasSettingsDraft(draftSettings);
+  const defaultPayload = await loadNovelAiDefaults();
+  if (el.novelAiDefaultsEnabled) {
+    el.novelAiDefaultsEnabled.checked = defaultPayload.enabled === true;
+  }
+  const defaultSettings = !hasDraft && defaultPayload.enabled === true ? (defaultPayload.settings || {}) : {};
+  const initialSettings = hasDraft ? draftSettings : defaultSettings;
+  if (hasDraft) {
+    novelAiRandomPromptSnippets = loadRandomPromptSnippets();
+    novelAiFixedPromptSnippets = loadFixedPromptSnippets(novelAiRandomPromptSnippets);
+  } else {
+    const normalizedDefaults = normalizeSettings(defaultSettings);
+    novelAiFixedPromptSnippets = normalizeFixedPromptSnippets(normalizedDefaults.fixedPromptSnippets);
+    novelAiRandomPromptSnippets = normalizeRandomPromptSnippets(normalizedDefaults.randomPromptSnippets);
+  }
+  setFormSettings(initialSettings, {
+    save: false,
+    clearBaseImage: true,
+    replaceFixedPromptSnippets: !hasDraft,
+    replaceRandomPromptSnippets: !hasDraft
+  });
   renderFixedPromptSnippets(novelAiFixedPromptSnippets);
   renderRandomPromptSnippets(novelAiRandomPromptSnippets);
   renderMainImage(null);

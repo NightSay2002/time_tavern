@@ -7,7 +7,7 @@ import os from "node:os";
 import zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ApplicationCommandOptionType, AttachmentBuilder, Client, GatewayIntentBits, MessageFlags, Partials } from "discord.js";
+import { ApplicationCommandOptionType, AttachmentBuilder, Client, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits } from "discord.js";
 import { runConversationTurnWorkflow } from "./conversation-turn.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,6 +25,7 @@ const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
+const NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
 const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?:$|_|\d)|(?:^|_)TOKEN(?:$|\d)|(?:^|_)API_KEY(?:$|\d)/iu;
 const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "DISCORD_BOT_TOKEN",
@@ -519,12 +520,31 @@ function getDiscordClientId() {
     decodeDiscordClientIdFromToken(process.env.DISCORD_BOT_TOKEN);
 }
 
+function getDiscordBotInvitePermissions() {
+  return [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.SendMessagesInThreads,
+    PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.UseApplicationCommands,
+    PermissionFlagsBits.AddReactions,
+    PermissionFlagsBits.AttachFiles,
+    PermissionFlagsBits.EmbedLinks
+  ].reduce((total, permission) => total | BigInt(permission), 0n).toString();
+}
+
 function getDiscordAuthorizeUrl() {
   const clientId = getDiscordClientId();
   if (!clientId) {
     return "";
   }
-  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    integration_type: "0",
+    permissions: getDiscordBotInvitePermissions(),
+    scope: "bot applications.commands"
+  });
+  return `https://discord.com/oauth2/authorize?${params.toString()}`;
 }
 
 function hasUnresolvedTemplatePlaceholder(line, preservedKeys = ["user", "chur"]) {
@@ -1375,6 +1395,78 @@ function saveDefaultAppSettings(currentState) {
     modularPromptCount: Object.keys(modularPromptConfigs).length,
     updatedAt: payload.updatedAt
   };
+}
+
+function sanitizeNovelAiDefaultSettings(input = {}) {
+  const source = input?.settings && typeof input.settings === "object" ? input.settings : input;
+  const settings = cloneData(source && typeof source === "object" && !Array.isArray(source) ? source : {}, {});
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return {};
+  }
+  settings.baseImage = "";
+  settings.vibeTransfer = {
+    ...(settings.vibeTransfer && typeof settings.vibeTransfer === "object" ? settings.vibeTransfer : {}),
+    images: []
+  };
+  settings.preciseReference = {
+    ...(settings.preciseReference && typeof settings.preciseReference === "object" ? settings.preciseReference : {}),
+    images: []
+  };
+  settings.fixedPromptSnippets = Array.isArray(settings.fixedPromptSnippets) ? settings.fixedPromptSnippets : [];
+  settings.randomPromptSnippets = Array.isArray(settings.randomPromptSnippets) ? settings.randomPromptSnippets : [];
+  settings.characters = Array.isArray(settings.characters) ? settings.characters : [];
+  return settings;
+}
+
+function normalizeNovelAiDefaultsEnabled(value, fallback = true) {
+  if (value === true || value === false) {
+    return value;
+  }
+  if (value === "true" || value === "1" || value === 1) {
+    return true;
+  }
+  if (value === "false" || value === "0" || value === 0) {
+    return false;
+  }
+  return fallback;
+}
+
+function readNovelAiDefaultsPayload() {
+  if (!fs.existsSync(NOVELAI_DEFAULTS_FILE)) {
+    return {
+      version: 1,
+      enabled: false,
+      settings: null,
+      updatedAt: ""
+    };
+  }
+  const parsed = JSON.parse(fs.readFileSync(NOVELAI_DEFAULTS_FILE, "utf8"));
+  const settingsSource = parsed?.settings && typeof parsed.settings === "object" ? parsed.settings : parsed;
+  return {
+    version: Number(parsed?.version || 1),
+    enabled: normalizeNovelAiDefaultsEnabled(parsed?.enabled, true),
+    settings: sanitizeNovelAiDefaultSettings(settingsSource),
+    updatedAt: safeText(parsed?.updatedAt)
+  };
+}
+
+function saveNovelAiDefaultsPayload(input = {}) {
+  if (!fs.existsSync(DEFAULTS_DIR)) {
+    fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
+  }
+  const current = readNovelAiDefaultsPayload();
+  const hasSettingsInput = Object.prototype.hasOwnProperty.call(input || {}, "settings") ||
+    !Object.prototype.hasOwnProperty.call(input || {}, "enabled");
+  const payload = {
+    version: 1,
+    enabled: normalizeNovelAiDefaultsEnabled(input?.enabled, current.enabled),
+    settings: hasSettingsInput
+      ? sanitizeNovelAiDefaultSettings(input)
+      : sanitizeNovelAiDefaultSettings(current.settings || {}),
+    updatedAt: nowIso()
+  };
+  fs.writeFileSync(NOVELAI_DEFAULTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return payload;
 }
 
 function applyDefaultAppSettings(currentState) {
@@ -9441,8 +9533,8 @@ async function runConversationTurn({ content, source, extra = {} }) {
 function getDiscordGuidance() {
   const authorizeUrl = getDiscordAuthorizeUrl();
   return [
-    "請先把 Bot 新增到你的應用程式，之後在 Discord 使用 Slash 指令。",
-    authorizeUrl ? `新增 Bot：${authorizeUrl}` : "",
+    "請先用邀請連結把 Bot 加到伺服器，之後在 Discord 使用 Slash 指令。",
+    authorizeUrl ? `邀請 Bot：${authorizeUrl}` : "",
     "主對話：`/ai content:你的內容`，或 `/ai file:上傳txt檔`",
     "開始對話：`/ai_start`，之後該頻道可以直接輸入對話，不需要 `!ai`",
     "停止生成：`/stop`，或在已啟用頻道輸入 `/stop`",
@@ -9516,6 +9608,21 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/novelai/status" && method === "GET") {
       sendJson(res, 200, await getNovelAiStatus());
+      return;
+    }
+
+    if (pathname === "/api/novelai/defaults" && method === "GET") {
+      sendJson(res, 200, {
+        defaults: readNovelAiDefaultsPayload()
+      });
+      return;
+    }
+
+    if (pathname === "/api/novelai/defaults" && (method === "POST" || method === "PUT")) {
+      const body = await readBody(req);
+      sendJson(res, 200, {
+        defaults: saveNovelAiDefaultsPayload(body)
+      });
       return;
     }
 

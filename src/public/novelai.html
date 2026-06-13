@@ -147,6 +147,8 @@
               </div>
               <input id="novelAiMetadataFile" type="file" accept="image/*" class="hidden" />
               <button id="novelAiImportMetadataBtn" type="button" class="secondary">選擇圖片讀取 metadata</button>
+              <button id="novelAiSaveDefaultsBtn" type="button" class="secondary">保存預設</button>
+              <label class="nai-switch"><input id="novelAiDefaultsEnabled" type="checkbox" checked /> 啟用預設</label>
               <p id="novelAiMetadataStatus" class="nai-card-hint">也可以直接把圖片拖進頁面，再選擇「匯入設定」。</p>
             </section>
           </div>
@@ -220,6 +222,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260602-history-keyboard1"></script>
+    <script type="module" src="/novelai.js?v=20260613-nai-defaults2"></script>
   </body>
 </html>

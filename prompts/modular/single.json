@@ -30,6 +30,22 @@
           "action": "call_api",
           "keywordFollowupAction": "continue_reasoner",
           "skipReasoner": false,
+          "imageGeneration": {
+            "model": "nai-diffusion-4-5-curated",
+            "negativePrompt": "",
+            "width": 832,
+            "height": 1216,
+            "steps": 28,
+            "samples": 1,
+            "scale": 6,
+            "cfgRescale": 0,
+            "sampler": "k_euler_ancestral",
+            "noiseSchedule": "karras",
+            "ucPreset": 0,
+            "varietyPlus": false,
+            "imageFormat": "png",
+            "seed": ""
+          },
           "triggers": {
             "everyTurn": false,
             "roundLimit": true,
