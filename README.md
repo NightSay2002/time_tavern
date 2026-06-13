@@ -95,7 +95,7 @@ http://localhost:3234
 
 網頁中的「儲存預設」會把目前使用者設定、角色卡、Prompt、模型內容設定、統計判斷與非機密環境顯示設定寫入 `defaults/app-defaults.json` 與 `prompts/modular/`。這些檔案可以提交到 GitHub，下載者第一次啟動時會自動套用；「使用預設」可在已有本機資料時手動套用 GitHub 預設，會清空原本環境設定、目前對話與 AI logs，但會保留對話存檔。
 
-NovelAI 跑圖頁的「保存預設」會把目前文字 prompt、片段庫、尺寸與生成參數寫入 `defaults/novelai-defaults.json`；旁邊的「啟用預設」可決定新瀏覽器首次打開跑圖頁時是否自動套用這份預設。
+NovelAI 跑圖頁的「保存預設」會把目前文字 prompt、片段庫、尺寸與生成參數寫入 `defaults/novelai-defaults.json`；旁邊的「啟用預設」按鈕會把目前表單恢復成已保存的預設內容。
 
 ## 環境變數
 
@@ -389,7 +389,7 @@ GitHub 發佈用預設資料，包含：
 
 ### `defaults/novelai-defaults.json`
 
-NovelAI 跑圖頁的 GitHub 發佈用預設資料，包含啟用狀態、Base Prompt、Undesired Content、Fixed Prompt、Random Prompt、Character Prompts、尺寸與生成參數。預設檔不保存 Image2Image / Vibe Transfer / Precise Reference 的圖片 data URL，只保存文字與數值設定。
+NovelAI 跑圖頁的 GitHub 發佈用預設資料，包含 Base Prompt、Undesired Content、Fixed Prompt、Random Prompt、Character Prompts、尺寸與生成參數。預設檔不保存 Image2Image / Vibe Transfer / Precise Reference 的圖片 data URL，只保存文字與數值設定。
 
 ### `data/saved-sessions/<session_id>.json`
 

@@ -39,7 +39,7 @@ const el = {
   novelAiMetadataFile: document.getElementById("novelAiMetadataFile"),
   novelAiImportMetadataBtn: document.getElementById("novelAiImportMetadataBtn"),
   novelAiSaveDefaultsBtn: document.getElementById("novelAiSaveDefaultsBtn"),
-  novelAiDefaultsEnabled: document.getElementById("novelAiDefaultsEnabled"),
+  novelAiApplyDefaultsBtn: document.getElementById("novelAiApplyDefaultsBtn"),
   novelAiMetadataStatus: document.getElementById("novelAiMetadataStatus"),
   novelAiCostPreview: document.getElementById("novelAiCostPreview"),
   novelAiLoopCount: document.getElementById("novelAiLoopCount"),
@@ -1523,10 +1523,7 @@ async function saveNovelAiDefaults() {
     settings.preciseReference.images = [];
     const payload = await request("/api/novelai/defaults", {
       method: "PUT",
-      body: JSON.stringify({
-        enabled: el.novelAiDefaultsEnabled?.checked === true,
-        settings
-      })
+      body: JSON.stringify({ settings })
     });
     showToast(payload?.defaults?.updatedAt ? "已將目前 NovelAI 內容設為預設。" : "已保存 NovelAI 預設。");
   } catch (error) {
@@ -1537,17 +1534,23 @@ async function saveNovelAiDefaults() {
   }
 }
 
-async function saveNovelAiDefaultsEnabled() {
+async function applyNovelAiDefaults() {
   try {
-    const payload = await request("/api/novelai/defaults", {
-      method: "PUT",
-      body: JSON.stringify({
-        enabled: el.novelAiDefaultsEnabled?.checked === true
-      })
+    const defaults = await loadNovelAiDefaults();
+    const settings = defaults?.settings && typeof defaults.settings === "object" ? defaults.settings : {};
+    if (!hasSettingsDraft(settings)) {
+      showToast("目前沒有可套用的 NovelAI 預設。", "error");
+      return;
+    }
+    setFormSettings(settings, {
+      save: true,
+      clearBaseImage: true,
+      replaceFixedPromptSnippets: true,
+      replaceRandomPromptSnippets: true
     });
-    showToast(payload?.defaults?.enabled ? "已啟用 NovelAI 預設。" : "已停用 NovelAI 預設。");
+    showToast("已套用 NovelAI 預設。");
   } catch (error) {
-    showToast(error.message || "NovelAI 預設啟用狀態保存失敗。", "error");
+    showToast(error.message || "NovelAI 預設套用失敗。", "error");
   }
 }
 
@@ -2787,7 +2790,7 @@ function bindEvents() {
   });
   el.novelAiLoopGenerateBtn.addEventListener("click", loopGenerateImages);
   el.novelAiSaveDefaultsBtn?.addEventListener("click", saveNovelAiDefaults);
-  el.novelAiDefaultsEnabled?.addEventListener("change", saveNovelAiDefaultsEnabled);
+  el.novelAiApplyDefaultsBtn?.addEventListener("click", applyNovelAiDefaults);
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
   el.novelAiRefreshAlbumBtn.addEventListener("click", renderHistory);
   window.addEventListener("keydown", onHistoryKeyboardNavigation);
@@ -3025,11 +3028,8 @@ async function boot() {
   fillSelect(el.novelAiNoiseSchedule, NOVELAI_NOISE_SCHEDULE_OPTIONS, "karras");
   const draftSettings = loadSettingsDraft();
   const hasDraft = hasSettingsDraft(draftSettings);
-  const defaultPayload = await loadNovelAiDefaults();
-  if (el.novelAiDefaultsEnabled) {
-    el.novelAiDefaultsEnabled.checked = defaultPayload.enabled === true;
-  }
-  const defaultSettings = !hasDraft && defaultPayload.enabled === true ? (defaultPayload.settings || {}) : {};
+  const defaultPayload = hasDraft ? { settings: {} } : await loadNovelAiDefaults();
+  const defaultSettings = !hasDraft ? (defaultPayload.settings || {}) : {};
   const initialSettings = hasDraft ? draftSettings : defaultSettings;
   if (hasDraft) {
     novelAiRandomPromptSnippets = loadRandomPromptSnippets();

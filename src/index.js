@@ -1418,24 +1418,10 @@ function sanitizeNovelAiDefaultSettings(input = {}) {
   return settings;
 }
 
-function normalizeNovelAiDefaultsEnabled(value, fallback = true) {
-  if (value === true || value === false) {
-    return value;
-  }
-  if (value === "true" || value === "1" || value === 1) {
-    return true;
-  }
-  if (value === "false" || value === "0" || value === 0) {
-    return false;
-  }
-  return fallback;
-}
-
 function readNovelAiDefaultsPayload() {
   if (!fs.existsSync(NOVELAI_DEFAULTS_FILE)) {
     return {
       version: 1,
-      enabled: false,
       settings: null,
       updatedAt: ""
     };
@@ -1444,7 +1430,6 @@ function readNovelAiDefaultsPayload() {
   const settingsSource = parsed?.settings && typeof parsed.settings === "object" ? parsed.settings : parsed;
   return {
     version: Number(parsed?.version || 1),
-    enabled: normalizeNovelAiDefaultsEnabled(parsed?.enabled, true),
     settings: sanitizeNovelAiDefaultSettings(settingsSource),
     updatedAt: safeText(parsed?.updatedAt)
   };
@@ -1454,15 +1439,9 @@ function saveNovelAiDefaultsPayload(input = {}) {
   if (!fs.existsSync(DEFAULTS_DIR)) {
     fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
   }
-  const current = readNovelAiDefaultsPayload();
-  const hasSettingsInput = Object.prototype.hasOwnProperty.call(input || {}, "settings") ||
-    !Object.prototype.hasOwnProperty.call(input || {}, "enabled");
   const payload = {
     version: 1,
-    enabled: normalizeNovelAiDefaultsEnabled(input?.enabled, current.enabled),
-    settings: hasSettingsInput
-      ? sanitizeNovelAiDefaultSettings(input)
-      : sanitizeNovelAiDefaultSettings(current.settings || {}),
+    settings: sanitizeNovelAiDefaultSettings(input),
     updatedAt: nowIso()
   };
   fs.writeFileSync(NOVELAI_DEFAULTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");

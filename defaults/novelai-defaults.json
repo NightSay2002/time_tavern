@@ -1,10 +1,9 @@
 {
   "version": 1,
-  "enabled": true,
   "settings": {
     "model": "nai-diffusion-4-5-full",
-    "prompt": "0.4::artist:ratatatat74 ::,0.3::artist:ie (raarami)::,0.7::artist:gogalking::,1.6::artist:hiten (hitenkei)::,1.6::artist:sos_adult::,0.8::artist:qtian::,0.6::artist:kezime::,1.1::artist:channel (caststation)::,2.1::artist:wo habum::,||質量詞||",
-    "promptTemplate": "0.4::artist:ratatatat74 ::,0.3::artist:ie (raarami)::,0.7::artist:gogalking::,1.6::artist:hiten (hitenkei)::,1.6::artist:sos_adult::,0.8::artist:qtian::,0.6::artist:kezime::,1.1::artist:channel (caststation)::,2.1::artist:wo habum::,||質量詞||",
+    "prompt": "||畫師抽取||,solo,1girl,||質量詞||",
+    "promptTemplate": "||畫師抽取||,solo,1girl,||質量詞||",
     "fixedPromptSnippets": [
       {
         "id": "nai_fixed_1780304490599_ehopvfux",
@@ -106,7 +105,7 @@
     "seed": 9999,
     "sampler": "k_euler_ancestral",
     "noiseSchedule": "karras",
-    "loopCount": 100,
+    "loopCount": 1,
     "sizePreset": "portrait",
     "qualityToggle": true,
     "baseImage": "",
@@ -122,5 +121,5 @@
       "images": []
     }
   },
-  "updatedAt": "2026-06-13T05:15:44.358Z"
+  "updatedAt": "2026-06-13T05:26:31.154Z"
 }
