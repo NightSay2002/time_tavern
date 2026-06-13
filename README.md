@@ -1,45 +1,40 @@
 # 時分居酒屋
 
-時分居酒屋是一個本地網頁管理端加 Discord Bot 的對話工具。它以角色卡、世界書、可編輯 Prompt、OpenAI-compatible 對話 API、大模型內容壓縮、對話存檔與 Discord 指令為核心，適合長篇角色互動、劇情推進、角色卡製作與多人頻道協作。
+時分居酒屋是一個本地網頁管理端、Discord Bot、角色卡 Prompt 編輯器與 NovelAI 跑圖頁整合在一起的長篇對話工具。核心用途是讓角色卡對話可以長期保存、分支重寫、壓縮上下文、多人協作，並在需要時從對話或獨立頁面生成 NovelAI 圖片。
 
-專案目前是純 Node.js HTTP server，沒有前端打包流程；啟動後會同時提供本地網頁和選配的 Discord Bot。
+目前專案是純 Node.js HTTP server，沒有前端打包流程。啟動後會提供：
 
-## 功能總覽
-
-- 本地網頁管理端：角色卡管理、對話、存檔、Prompt 編輯、模型內容編輯、環境設定、AI 呼叫紀錄。
-- 對話 API：支援 OpenAI-compatible Chat Completions API，可設定 DeepSeek、OpenAI、Gemini 或自訂 Base URL。
-- 角色卡系統：單角色、多角色、無角色與自訂 Prompt 模式。
-- 每模式獨立上下文輪數：正文對話上下文輪數放在「編輯 Prompt」內，每個 Prompt 模式可各自設定。
-- 世界書 Lorebooks：依最近對話或本輪輸入命中關鍵字後自動插入 Prompt。
-- 大模型內容：按輪數、指定回合或關鍵字觸發，將長篇對話壓縮成可持續承接的模型內容。
-- 多大模型配置：每個 Prompt 模式可建立多個大模型 profile、觸發組合、處理動作與玩家追加詞。
-- 對話存檔：保存、載入、刪除、分支備份，並把長對話分離儲存在 `data/saved-sessions/`。
-- Discord Bot：Slash 指令、文字前綴、頻道直接對話、DM 對話、`.txt` 附件輸入、玩家座位、重生成最新回覆、指定訊息分支重寫、自動推演多輪。
-- AI 呼叫紀錄：保留最近對話 API request/response、模型、token usage、錯誤與 reasoning debug 內容。
-- 網頁環境設定：可在 UI 直接編輯 `.env`，並可從網頁觸發伺服器重啟。
-
-## 技術需求
-
-- Node.js `>=18.0.0`
-- npm
-- 對話 API Key（DeepSeek、OpenAI、Gemini 或相容服務）
-- 選配：Discord Bot Token
+- 本地網頁對話面板：`http://localhost:3234`
+- NovelAI 跑圖頁：`http://localhost:3234/novelai.html`
+- 選配 Discord Bot：填入 Token 後同一個 process 會登入 Discord
 
 ## 快速開始
 
-1. 安裝依賴：
+需求：
+
+- Node.js `>=18.0.0`
+- npm
+- 至少一組 OpenAI-compatible 對話 API key
+- 選配：Discord Bot Token
+- 選配：NovelAI Persistent API Token
+
+安裝與啟動：
 
 ```bash
 npm install
-```
-
-2. 建立環境設定：
-
-```bash
 cp .env.example .env
+npm start
 ```
 
-3. 編輯 `.env`，至少填入對話 API provider、key 與模型：
+然後打開：
+
+```text
+http://localhost:3234
+```
+
+macOS 可直接打開 `start-mac.command`；Windows 可直接執行 `start-win.bat`。兩個啟動器都會檢查 `node_modules`，缺少依賴時自動跑 `npm install`，並打開目前 `PORT` 對應的本地網頁。
+
+`.env` 至少建議填：
 
 ```env
 CHAT_API_PROVIDER=deepseek
@@ -47,34 +42,26 @@ CHAT_API_KEY=你的 API Key
 CHAT_API_MODEL=deepseek-reasoner
 ```
 
-4. 啟動：
-
-```bash
-npm start
-```
-
-5. 開啟本地網頁：
-
-```text
-http://localhost:3234
-```
-
-若沒有設定 `DISCORD_BOT_TOKEN`，系統仍會正常啟動本地網頁管理端，只是不登入 Discord。
+沒有 `DISCORD_BOT_TOKEN` 時，Discord 不會登入，但本地網頁仍可使用。沒有 `NOVELAI_API_TOKEN` 時，只是 NovelAI 跑圖頁不能生成與讀取餘額。
 
 ## 專案結構
 
 ```text
 .
 ├── package.json
+├── start-mac.command
+├── start-win.bat
 ├── .env.example
 ├── src/
-│   ├── index.js                 # HTTP server、API、對話 API 呼叫、Discord Bot
+│   ├── index.js                 # HTTP API、狀態落盤、Prompt 組裝、Discord Bot、NovelAI proxy
 │   └── public/
-│       ├── index.html           # 本地網頁 UI
-│       ├── app.js               # 前端互動邏輯
-│       ├── effects.js           # 背景與視覺效果
-│       ├── styles.css           # UI 樣式
-│       └── assets/              # 圖片、字體、游標
+│       ├── index.html           # 主網頁 UI
+│       ├── app.js               # 主網頁互動邏輯
+│       ├── novelai.html         # NovelAI 跑圖頁
+│       ├── novelai.js           # NovelAI 跑圖頁互動邏輯
+│       ├── styles.css           # 共用 UI 樣式
+│       ├── effects.js           # 視覺效果
+│       └── assets/              # 圖片、字體、音訊、游標
 ├── prompts/
 │   ├── CharacterCardCreationAssistant.txt
 │   ├── Context_compression.txt
@@ -83,391 +70,417 @@ http://localhost:3234
 │       ├── multi.json
 │       └── no_role.json
 ├── defaults/
-│   ├── app-defaults.json        # GitHub 發佈用預設設定、角色卡與非機密環境值
-│   └── novelai-defaults.json    # NovelAI 跑圖頁首次載入預設
+│   ├── app-defaults.json        # 可提交到 GitHub 的主程式預設
+│   └── novelai-defaults.json    # 可提交到 GitHub 的 NovelAI 預設
 └── data/
-    ├── app-state.json           # 執行狀態、目前對話、設定、存檔 metadata
+    ├── app-state.json           # 本機 runtime state
     ├── cardstate.json           # 使用者設定與角色卡分離備份
-    └── saved-sessions/          # 存檔對話與 AI log 分離檔
+    ├── saved-sessions/          # 對話存檔大段內容
+    └── novelai-album/           # NovelAI 收藏相簿
 ```
 
-`data/`、`.env`、`node_modules/` 已在 `.gitignore` 中，不會被提交。
-
-網頁中的「儲存預設」會把目前使用者設定、角色卡、Prompt、模型內容設定、統計判斷與非機密環境顯示設定寫入 `defaults/app-defaults.json` 與 `prompts/modular/`。這些檔案可以提交到 GitHub，下載者第一次啟動時會自動套用；「使用預設」可在已有本機資料時手動套用 GitHub 預設，會清空原本環境設定、目前對話與 AI logs，但會保留對話存檔。
-
-NovelAI 跑圖頁的「保存預設」會把目前文字 prompt、片段庫、尺寸與生成參數寫入 `defaults/novelai-defaults.json`；旁邊的「啟用預設」按鈕會把目前表單恢復成已保存的預設內容。
+`.env`、`data/`、`node_modules/` 不應提交。`defaults/` 與 `prompts/modular/` 是用來發佈預設設定的，可以提交。
 
 ## 環境變數
 
-| 變數 | 必填 | 預設 | 說明 |
-| --- | --- | --- | --- |
-| `PORT` | 否 | `3234` | 本地網頁與 API server port。改完建議重啟。 |
-| `CHAT_API_PROVIDER` | 建議 | `deepseek` | 對話 API 供應商。可用 `deepseek`、`openai`、`gemini`、`custom`。 |
-| `CHAT_API_KEY` | 建議 | 空 | 主聊天、補寫、角色卡助手與預設大模型處理使用。未設定時會回傳本地佔位訊息。 |
-| `CHAT_API_BASE_URL` | 否 | 依 provider | 留空時依供應商使用預設 endpoint；自訂服務請填完整 OpenAI-compatible base URL。 |
-| `CHAT_API_MODEL` | 建議 | `deepseek-reasoner` | API輸出模型，例如 `deepseek-reasoner`、`gpt-4.1`、`gemini-2.5-flash`。 |
-| `CHAT_API_REQUEST_TIMEOUT_MS` | 否 | `600000` | API 請求逾時，毫秒。 |
-| `CHAT_API_MAX_TOKENS` | 否 | `32000` | 主聊天、壓縮、補寫與角色卡助手的輸出 token 上限；仍會受模型本身上限限制。 |
-| `CHAT_API_MAX_TOKENS_PARAM` | 否 | `max_tokens` | 輸出 token 參數名。多數相容 API 用 `max_tokens`；部分模型可改 `max_completion_tokens`。 |
-| `CHAT_API_TEMPERATURE` | 否 | `0.5` | 一般對話 temperature；角色卡建立助手固定使用較高 temperature。 |
-| `CHAT_API_KEY2` / `CHAT_API_KEY3` / ... | 否 | 空 | 大模型內容壓縮用 key。依目前啟用的大模型順序使用；例如 4 個大模型但只有 key2、key3、key4 時，第 4 個大模型沿用 key4。全空時使用 `CHAT_API_KEY`。 |
-| `CHAT_API_MODEL_TOKEN_CAP` | 否 | 依模型 | 手動覆蓋模型 token cap；未設定時 `deepseek-chat` 為 `8192`，其他模型為 `64000`。 |
-| `AI_MIN_REPLY_CHARS` | 否 | `600` | 回覆可見字數低於此值時，會嘗試補寫。 |
-| `WEB_USER_NAME_TEMPLATE` | 否 | `{{user}}` | 網頁聊天面板顯示的使用者名字，可用 `{{user}}` / `{{chur}}`。 |
-| `WEB_AI_NAME_TEMPLATE` | 否 | `{{chur}}` | 網頁聊天面板顯示的 AI 名字；預設使用目前角色卡名字。 |
-| `WEB_USER_AVATAR_IMAGE` | 否 | 空 | 網頁聊天面板使用者頭像；環境設定可直接上傳圖片並保存成 data URL。 |
-| `WEB_AI_AVATAR_IMAGE` | 否 | 角色卡封面 | 網頁聊天面板 AI 頭像；環境設定可直接上傳圖片，留空使用角色卡封面。 |
-| `DISCORD_BOT_TOKEN` | 否 | 空 | Discord Bot token。空白時不登入 Discord。 |
-| `DISCORD_CLIENT_ID` | 否 | 從 token 推斷 | 產生帶 `bot` / `applications.commands` scope 與基本頻道權限的 Discord Bot 邀請連結用。 |
-| `DISCORD_GUILD_ID` | 否 | 空 | 指定 guild 註冊 Slash 指令；空白時只註冊全域指令。 |
-| `COMMAND_PREFIX` | 否 | `!ai` | Discord 文字指令前綴。 |
-| `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | 否 | `1048576` | Discord `.txt` / `text/plain` 附件輸入大小上限。 |
+常用設定可在主網頁的「環境設定」編輯，保存後會寫回 `.env`。對話 API key、Base URL、模型等多數設定會即時同步；Port、Discord Token、Slash 指令註冊等啟動期設定建議重啟。
 
-Provider 預設 Base URL：
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `PORT` | `3234` | 本地 HTTP server port。 |
+| `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini` 或 `custom`。 |
+| `CHAT_API_KEY` | 空 | 主聊天、補寫、角色卡助手、大模型處理使用。 |
+| `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API 時填完整 base URL。 |
+| `CHAT_API_MODEL` | `deepseek-reasoner` | 主對話模型。 |
+| `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
+| `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限；仍受模型上限限制。 |
+| `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改成 `max_completion_tokens`。 |
+| `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature；角色卡助手另用較高值。 |
+| `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | 大模型內容處理可按順序使用不同 key；不足時沿用最後一把。 |
+| `AI_MIN_REPLY_CHARS` | `600` | 回覆可見字數太短時會嘗試補寫。 |
+| `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。空白時不登入 Discord。 |
+| `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
+| `DISCORD_GUILD_ID` | 空 | 指定 guild 立即註冊 Slash 指令；空白時註冊全域指令。 |
+| `COMMAND_PREFIX` | `!ai` | Discord 文字指令前綴。 |
+| `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
+| `WEB_USER_NAME_TEMPLATE` | `{{user}}` | 網頁聊天面板的使用者名字模板。 |
+| `WEB_AI_NAME_TEMPLATE` | `{{chur}}` | 網頁聊天面板的 AI 名字模板。 |
+| `WEB_USER_AVATAR_IMAGE` | 空 | 使用者頭像；UI 可直接上傳。 |
+| `WEB_AI_AVATAR_IMAGE` | 角色卡封面 | AI 頭像；UI 可直接上傳。 |
+| `WEB_BACKGROUND_IMAGE` | 空 | 網頁背景圖片；UI 可直接上傳。 |
+| `WEB_DAILY_WELCOME_AUDIO` | `/assets/audio/welcome-back.mp3` | 每天第一次開頁播放的語音。 |
+| `NOVELAI_API_TOKEN` | 空 | NovelAI Persistent API Token。別名：`NOVELAI_ACCESS_TOKEN`、`NOVELAI_TOKEN`、`NAI_API_TOKEN`。 |
+| `NOVELAI_IMAGE_API_BASE_URL` | `https://image.novelai.net` | NovelAI 圖片 API base URL。 |
+| `NOVELAI_PRIMARY_API_BASE_URL` | `https://api.novelai.net` | NovelAI 主 API base URL，用於讀取 Anlas / subscription。 |
+| `NOVELAI_REQUEST_TIMEOUT_MS` | `600000` | NovelAI 請求逾時，毫秒。 |
 
-| Provider | 預設 Base URL |
+Provider 預設 base URL：
+
+| Provider | Base URL |
 | --- | --- |
 | `deepseek` | `https://api.deepseek.com` |
 | `openai` | `https://api.openai.com/v1` |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| `custom` | 未內建；請設定 `CHAT_API_BASE_URL`。 |
+| `custom` | 必須自行設定 `CHAT_API_BASE_URL` |
 
-舊版環境變數仍會讀取作為相容別名：`DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_MAX_TOKENS`、`DEEPSEEK_REQUEST_TIMEOUT_MS`、`DEEPSEEK_API_KEY2`、`DEEPSEEK_KEY2`、`deepseek_key2`。新設定請優先使用 `CHAT_API_*`。
+相容舊變數：`DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`DEEPSEEK_REQUEST_TIMEOUT_MS`、`DEEPSEEK_API_KEY2` 等仍會被讀取，但新設定建議統一使用 `CHAT_API_*`。
 
-網頁的「環境設定」會管理常用欄位，未列出的自訂 key 可放在「其他環境變數」。保存後會寫入 `.env`。對話 API key、Base URL、API輸出模型等多數情況會立即同步；Discord Token、Port、Slash 指令註冊等啟動期設定建議重啟。
+## 主網頁功能
 
-## 完整功能表
+主頁是 Discord 風格的聊天面板加功能欄：
 
-### 主畫面
+- 使用者設定：稱呼、自訂補充，支援 `{{user}}` 與 `{{chur}}`。
+- 角色卡：建立、選擇、開始、編輯、刪除、匯入、匯出。
+- Prompt 編輯：角色模式、模式名字、正文規則、大模型規則、模塊、觸發組合。
+- 模型內容：查看與手動編輯標準壓縮模型或自訂大模型目前內容。
+- 統計判斷：時間、天數、自動早中晚切換與 `{保持時間}`。
+- 對話存檔：保存、載入、刪除、預覽對話內容。
+- AI 呼叫紀錄：顯示最新的 100 輪呼叫摘要，包含模型、token、費用估算與錯誤。
+- 環境設定：編輯 `.env`、測試 API、上傳頭像/背景、重啟 server。
+- NovelAI 跑圖入口：打開獨立頁 `/novelai.html`。
+- 簡繁轉換：切換 UI 顯示。
+- 使用預設 / 儲存預設：套用或保存可提交到 GitHub 的非機密設定。
 
-| 區域 | 功能 | 說明 |
-| --- | --- | --- |
-| 手機資訊抽屜 | 標題、狀態、手機分頁 | 小螢幕可在「對話」與「功能」分頁間切換。 |
-| 使用者設定 | 稱呼 | 作為 `{{user}}` 的替換內容。 |
-| 使用者設定 | 自訂補充 | 會附加到每次使用者發言最後，支援 `{{user}}` 與 `{{chur}}`。 |
-| Prompt 設定 | 編輯 Prompt | 開啟 Prompt 模式、大模型、模塊、觸發條件、每模式上下文輪數與預覽編輯器。 |
-| Prompt 設定 | 模型內容狀態 | 顯示目前模式的上下文輪數與標準模型內容壓縮進度。 |
-| 角色卡 | 選擇角色卡 | 開啟卡片式選擇器，可開始、編輯、刪除角色卡。 |
-| 角色卡 | 建立角色卡 | 開啟角色卡表單。 |
-| 對話存檔 | 選擇對話存檔 | 開啟存檔選擇器，可載入或刪除存檔。 |
-| 對話存檔 | 保存目前整體對話 | 將目前角色卡、對話、壓縮內容、AI logs 與狀態保存成存檔。 |
-| 功能按鈕 | 編輯 AI 的輸出對話 | 選擇一則 assistant 訊息並覆寫內容。 |
-| 功能按鈕 | 查看/編輯模型內容 | 查看或手動修改標準與自訂大模型 profile 的目前內容。 |
-| 功能按鈕 | 統計判斷編輯 | 編輯時間、天數、自動切換時段與保留時間規則。 |
-| 功能按鈕 | 環境設定 | 編輯 `.env`，可測試對話 API 連接，也可觸發伺服器重啟。 |
-| 功能按鈕 | 使用預設 | 從 `defaults/app-defaults.json` 與 `prompts/modular/` 套用 GitHub 預設，清除原本環境設定並保留對話存檔。 |
-| 功能按鈕 | 儲存預設 | 將目前設定保存成可提交到 GitHub 的預設檔。 |
-| 功能按鈕 | 簡繁轉換 | 切換 UI 顯示為繁體或簡體。 |
-| 對話區 | 訊息列表 | 顯示使用者與 AI 對話、開場、壓縮通知等。 |
-| 對話區 | 輸入框 | 本地網頁送出一輪對話。 |
-| 對話區 | Discord Bot 連結 | 依 Bot Client ID 或 Token 產生邀請連結。 |
-| AI 呼叫紀錄 | Request/response 檢視 | 顯示最近對話 API 呼叫、用途、模型、token usage、錯誤與回應。 |
+聊天訊息支援 Markdown；assistant 訊息允許經過清理的 HTML 顯示。危險標籤和事件屬性會被過濾。
 
-### 角色卡功能
+## 角色卡
 
-| 功能 | 說明 |
-| --- | --- |
-| 角色模式 | 每張卡可選單角色、多角色、無角色或自訂 Prompt 模式。 |
-| 名字 | 角色卡名稱；也會在選擇器與存檔摘要中顯示。 |
-| 封面上傳 | 支援圖片上傳，前端以 data URL 存入角色卡。 |
-| 封面取景 | 可拖曳裁切框並預覽縮圖。 |
-| 移除封面 | 清除角色卡封面。 |
-| 自定義內容 | 可建立任意「名字 + 內容」欄位，例如性格、場景、系統指令、詳細描述、人物關係；支援 `{{user}}` 與 `{{chur}}`。 |
-| 舊欄位相容 | 若舊資料有 `personality`、`scene`、`systemInstruction` 等欄位，會轉成自定義內容。 |
-| 開場對話 | 開始角色卡時可作為第一則 assistant 開場訊息。支援 `{{user}}` 與 `{{chur}}`。 |
-| 世界書 Lorebooks | 每條世界書包含標題、關鍵字、內容與啟用狀態。 |
-| 世界書觸發 | 以前一則 assistant 與最新 user 內容比對關鍵字，命中後插入正文 Prompt。 |
-| 世界書去重 | 已在尚未壓縮區間插入過的世界書，不會重複附加。 |
-| 文字損壞檢查 | 保存時會檢查 `�`，避免已損壞編碼寫入資料檔。 |
+角色卡包含：
 
-### Prompt 編輯功能
+- 角色模式：單角色、多角色、無角色或自訂 Prompt 模式。
+- 名字與封面：封面可上傳、裁切、移除。
+- 自定義內容：可建立任意欄位，例如性格、場景、系統指令、詳細描述、人物關係。
+- 開場對話：支援多個開場，像工作表分頁那樣切換；開始角色卡時會加入對話。
+- 世界書：關鍵字命中後把內容插入正文 Prompt。
+- SillyTavern 匯入：支援 JSON、PNG、JPG/JPEG 角色卡；世界書條目沒有 name 時會嘗試用 key 當名稱。
+- 匯出：有封面時匯出為帶資料的 JPG；沒有封面時匯出 JSON。
 
-| 功能 | 說明 |
-| --- | --- |
-| 內建模式 | `single` 單角色、`multi` 多角色、`no_role` 無角色。 |
-| 自訂模式 | 可新增模式，會存成 `prompts/modular/<mode>.json`。 |
-| 刪除模式 | 內建模式不可刪除；若仍有角色卡使用該模式，也不可刪除。 |
-| 模式名字 | 控制 UI 顯示名稱。 |
-| 正文對話上下文輪數 | 位於模式名字下方；每個模式獨立設定，控制最近多少輪對話直接送入正文模型，也作為標準壓縮觸發依據。 |
-| 正文主要規則 | 生成正文時的主要 system rules。 |
-| 正文輸出規則 | 生成正文時的輸出格式、承接與風格規則。 |
-| 模型主要規則 | 大模型內容壓縮時的總規則。 |
-| 壓縮模塊 | 每個模塊定義 `id`、名稱、新增規則與刪除規則。 |
-| JSON 壓縮格式 | 有模塊時，大模型輸出 `model.<id>` 與 `delete.<id>`；後端會追加新項並刪除舊項。 |
-| 純文字壓縮格式 | 若某自訂 profile 沒有模塊，可輸出完整純文字模型內容。 |
-| Prompt 預覽 | 可預覽正文 system prompt 與壓縮 prompt。 |
-| `{{user}}`/`{{chur}}` 替換 | 預覽與實際呼叫會使用目前稱呼與角色卡名字替換。 |
+`{{user}}` 會替換成使用者設定的稱呼，`{{chur}}` 會替換成角色卡名字。這套替換用在角色卡內容、使用者自訂補充與 Prompt 編輯中。
 
-### 大模型內容與壓縮功能
+## Prompt 編輯
 
-| 功能 | 說明 |
-| --- | --- |
-| 標準壓縮模型 | 每個模式一定有 `standard` profile，預設依該模式的上下文輪數觸發。 |
-| 自訂大模型 | 可建立多個 profile，各自有名稱、啟用狀態、壓縮規則、模塊與觸發動作。 |
-| 觸發組合 | 每個 profile 可有多個觸發組合。 |
-| 輪數觸發 | 未壓縮完成的對話輪數達到目前 Prompt 模式的「正文對話上下文輪數」時觸發。 |
-| 指定回合觸發 | 可指定第 N 回合觸發；`0` 代表開局第一次觸發。 |
-| 關鍵字觸發 | 可從 user、assistant 或 both 搜尋關鍵字。 |
-| 關鍵字表達式 | 支援 `+` 表示多組近距離同時命中，`/` 表示同組任一項，`{{user1}}`、`{{user2}}`、`{{userx}}` 表示 Discord 玩家座位條件。 |
-| `call_api` 動作 | 觸發後呼叫對話 API，把上下文整理進該 profile 的模型內容。 |
-| `copy_user_input` 動作 | 不呼叫 API，直接把最新 user 輸入存為該 profile 模型內容。 |
-| 不 call 正文 | 觸發組合可選擇只處理大模型，不跑正文模型，回覆完成訊息。 |
-| 壓縮合併 | JSON 模塊會依 `delete` 移除舊項，再把新 `model` 項追加到既有內容，並做簡單去重。 |
-| 手動編輯 | 可在「查看/編輯模型內容」直接改目前 profile summary。 |
-| 壓縮通知 | 若本輪處理後模型內容更新，Discord/網頁顯示時會加上模型內容更新提示。 |
-| 玩家追加詞 | 自訂 profile 首次啟用後，可依 Discord 玩家座位把追加文字附到該玩家後續輸入。 |
+內建模式：
 
-### 對話功能
+- `single`：單角色
+- `multi`：多角色
+- `no_role`：無角色
 
-| 功能 | 說明 |
-| --- | --- |
-| 開始角色卡 | 清空目前對話進度、重置壓縮內容，網頁會立即顯示角色卡開場對話。 |
-| CharacterCardCreationAssistant | 角色卡建立助手模式，不使用角色卡正文流程，直接依專用 prompt 對話。 |
-| 本地網頁送出 | 透過 `/api/chat/send` 送出一輪 user 內容。 |
-| 繼續指令 | 輸入括號包住的「繼續 / continue / 續寫」等會轉成延續上一段 AI 的場外指令。 |
-| 最少字數補寫 | AI 回覆低於 `AI_MIN_REPLY_CHARS` 時，最多補寫 2 次。 |
-| 長度截斷重跑 | 對話 API 回傳 `finish_reason:length` 時，主聊天、補寫與角色卡助手會嘗試重跑。 |
-| 開頭重複清理 | 若 AI 開頭直接重述使用者輸入，會嘗試移除重複片段。 |
-| 對話上限 | Runtime conversation 最多保留最近 500 則訊息。 |
-| AI log 上限 | AI 呼叫紀錄最多保留最近 200 筆。 |
+也可以新增自訂模式。自訂模式會保存到 `prompts/modular/<mode>.json`；匯入 Prompt 模式時會建立一個新的模式，不覆蓋現有模式。
 
-### 對話存檔功能
+每個模式包含：
 
-| 功能 | 說明 |
-| --- | --- |
-| 保存目前整體對話 | 保存 user profile、角色卡、active target、對話設定、壓縮內容、Discord 玩家狀態、conversation、AI logs。 |
-| 分離儲存 | 存檔 metadata 在 `data/app-state.json`；conversation 與 AI logs 寫入 `data/saved-sessions/<id>.json`。 |
-| 載入存檔 | 將存檔 snapshot 套回目前 runtime。 |
-| 刪除存檔 | 同時刪除 metadata 與分離檔。 |
-| 分支備份 | `/replay` 或 Discord 編輯訊息重算前，會自動建立備份存檔。 |
-| 存檔摘要 | 顯示 ID、名稱、角色卡/助手模式、狀態、建立/更新時間與訊息數。 |
+- 模式名字
+- 正文對話上下文輪數
+- 正文主要規則
+- 正文輸出規則
+- 模型主要規則
+- 模塊
+- 大模型 profiles
+- 觸發組合與觸發後續動作
+- 玩家追加詞
 
-### Discord Bot 功能
+「模塊」主要用於 JSON 壓縮格式。若某個大模型沒有模塊，代表它可以用純文字保存內容，不強制 JSON。
 
-| 功能 | 說明 |
-| --- | --- |
-| Slash 指令 | 啟動後自動註冊 `/ai`、`/ai_start`、`/ai_status`、`/player_set`、`/reload`、`/replay`、`/run_time`、`/ai_help`、`/session_save`、`/session_list`、`/session_load`。 |
-| 全域指令 | 預設註冊到全域應用程式。 |
-| Guild 指令 | 設定 `DISCORD_GUILD_ID` 時會額外嘗試註冊到指定伺服器。 |
-| Bot 邀請連結 | 網頁可依 `DISCORD_CLIENT_ID` 或 token 推斷出的 client id 產生伺服器安裝用 URL，包含 `bot`、`applications.commands`、查看頻道、發送訊息、讀取訊息歷史、使用 Slash 指令、反應、附件、嵌入連結與 thread 發訊權限。 |
-| `/ai_start` | 在目前頻道開始或重開對話，並把該頻道設為直接對話頻道。 |
-| 頻道直接對話 | `/ai_start` 後，該伺服器頻道可直接輸入對話，不必加 `!ai`。 |
-| 文字前綴 | 非啟用頻道可用 `!ai 內容` 或 `!ai 指令`。前綴可由 `COMMAND_PREFIX` 修改。 |
-| DM 行為 | DM 可直接聊天；若要執行文字 meta 指令，請加前綴。 |
-| `.txt` 附件 | `/ai file:` 或訊息附件可讀取 `.txt` / `text/plain`，上限由 `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` 控制。 |
-| 長回覆分段 | Discord 回覆會按約 1800 字分段送出。 |
-| Typing indicator | 長時間生成時會定期送 typing 狀態。 |
-| Message edit 重算 | 使用者編輯已送出的 Discord 對話訊息時，系統會從該訊息建立備份並重新生成後續。 |
-| 玩家座位 | 伺服器頻道可用 `/player_set` 綁定 user1、user2 等座位，供 prompt 與觸發條件判斷。 |
+## 大模型與模型內容
 
-## Discord 指令
+每個 Prompt 模式都有一個不能關閉的「標準壓縮模型」。除此之外，可以建立多個自訂大模型，用來保存事件、玩家資料、跑圖 prompt、配角生成結果或其他旁路資料。
 
-### Slash 指令
+觸發條件：
+
+- 達到正文上限輪數
+- 每回合觸發
+- 指定回合觸發
+- 觸發關鍵字
+
+指定回合觸發的概念是以目前未壓縮區間計算。假設正文上下文是 20 輪，指定 `0, 5, 10`，壓縮後下一段也會在相對的 `0, 5, 10` 生效，因此整體進度上會對應到 20、25、30 等位置。指定回合欄位空白代表沒有此條件。
+
+關鍵字規則：
+
+- 一行一個關鍵字：同一行條件命中即可觸發。
+- 多行代表多個必要條件時，需全部命中。
+- `玩家1+受了重傷`：兩組詞需在 10 字距離內。
+- `玩家1+受了重傷/死亡`：第二組可命中受了重傷或死亡。
+- `{{user1}}+受了重傷`：必須是 Discord `user1` 的輸入並命中關鍵字。
+
+觸發後續動作：
+
+- `call api`：呼叫對話 API 更新該模型內容。
+- `直接複製貼上玩家的輸入內容`：不呼叫 API，直接把玩家輸入存入模型內容。
+- `建立圖片，然後繼續觸發正文`：先跑 NovelAI 圖，再跑正文。
+- `建立圖片（並行運作），同時繼續正文`：圖片背景生成，正文不等待。
+- 可設定觸發後不 call 正文，完成後只輸出「模型名字完成處理」。
+
+圖片動作是旁路輸出，不應把跑圖 Base Prompt 寫回一般模型內容，也不應污染後續正文上下文。
+
+## 時間統計
+
+「統計判斷編輯」控制對話中自動附加的時間資訊：
+
+```text
+當前天數 | 數值: 第x天
+當前時間 | 數值: 第x天早上2026年1月1日
+```
+
+功能重點：
+
+- 可整體啟用或停用；停用後 user 輸入不會附帶時間。
+- 開始時預設第 1 天，日期可隨機或手動修正。
+- 可設定配合詞、下一天詞、不改詞、早上詞、中午詞、晚上詞。
+- user 輸入可直接改時間；正常回合內的 AI 輸出仍需要配合詞才改時間。
+- 配合詞與天數詞、早中晚詞需在 5 字內。
+- 不改詞在 5 字內會阻止改時間，例如「等到」「等一下」「的時候」。
+- 支援 `3天後` / `三天後` 加天數，也支援 `第3天` 直接改成第 3 天。
+- 自動切換早上、下午/中午、晚上可開關；晚上到早上會自動加 1 天。
+- 自動切換前一輪會在正文最後提示可輸入 `{保持時間}`，該提示不會放進 API 呼叫紀錄。
+- `{保持時間}` 與 `｛保持時間｝` 都會生效，延後目前設定的回合數。
+
+## NovelAI 跑圖頁
+
+入口在主網頁「功能按鈕」區，或直接打開：
+
+```text
+http://localhost:3234/novelai.html
+```
+
+頁面分成三欄：
+
+- 左欄：模型與所有生成設定。
+- 中欄：目前圖片完整預覽、Prompt 內容、還原設定、下載、收藏。
+- 右欄：本地歷史縮圖；可點擊或用鍵盤上下鍵切換。
+
+左欄功能：
+
+- 模型選擇：V4.5 / V4 / Anime V3 / Furry V3 等選項。
+- Base Prompt：主要 prompt，會標記重複詞。
+- Fixed Prompt：常用固定片段，點名字插入 `||名字||`，生成時展開。
+- Random Prompt：隨機片段，點名字插入 `||名字||`，生成時抽選並展開。
+- Undesired Content：負面 prompt，同樣會標記重複詞。
+- Character Prompts：可新增多個角色 prompt、啟用/停用、上下排序、刪除、用 5x5 方格選座標。
+- Vibe Transfer：可拖入多張，每張有啟用、Reference Strength、Information Extracted。
+- Image2Image：官方限制一張，提供 Strength 與 Noise。
+- Precise Reference：可拖入多張，每張有啟用、Strength、Fidelity。
+- Image Settings：Normal Portrait 832x1216、Normal Landscape 1216x832、Custom。
+- AI Settings：Steps、Prompt Guidance、Variety+、Seed、Sampler、Prompt Guidance Rescale、Noise Schedule。
+- Metadata：選圖片讀取 NovelAI metadata，也可保存/啟用 NovelAI 預設。
+- Generate / Loop Generate：`生成數量` 為 `0` 代表一直生成直到停止；每張之間會有約 1 至 5 秒隨機延遲。
+
+整個 NovelAI 頁面都支援拖入圖片。放開後會詢問用途：
+
+- Vibe Transfer
+- Image2Image
+- Precise Reference
+- 匯入設定
+- Cancel
+
+下載 PNG 時會優先保留 NovelAI 原生可匯回的 `Comment` metadata；如果圖片本身沒有可用 metadata，會補寫 NovelAI 相容的 `Comment`，並附帶 `TimeTavernNovelAIMetadata` 方便本頁完整還原設定。收藏會保存到 server 端 `data/novelai-album/`；一般歷史則保存在瀏覽器 IndexedDB。
+
+NovelAI 預設：
+
+- 「保存預設」會寫入 `defaults/novelai-defaults.json`。
+- 「啟用預設」是按鈕，點擊後把目前頁面恢復成已保存的預設。
+- 預設會保存文字 prompt、片段庫、角色 prompt、尺寸與 AI Settings。
+- 預設不保存 Image2Image / Vibe Transfer / Precise Reference 的圖片 data URL。
+
+## Random Prompt 與 Fixed Prompt
+
+Fixed Prompt 與 Random Prompt 是兩套獨立片段庫，格式都用 `||名字||` 插入 Base Prompt，避免與 NovelAI 權重 `{}` 混淆。
+
+Fixed Prompt：
+
+- 用來保存常用固定 prompt，例如品質詞、服裝、背景。
+- 點擊名字只插入 `||名字||`。
+- Generate 時展開為該片段內容。
+
+Random Prompt：
+
+- 用來測試畫風、髮型、構圖等隨機片段。
+- 每行是一組候選，也可用逗號放一整串 prompt。
+- 可設定抽選最少與最多數量。
+- 可分別開關 `[] max`、`{} max`、數值權重。
+- `[]` 與 `{}` 不會重疊；同一項只會選一種加權方式。
+- 數值權重可設定最小、最大與偏向值；偏向值附近較常出現，極端值仍可能少量出現。
+- 如果某個 prompt 尾字是數字，展開時會自動補空白，降低被 NovelAI 誤判成 `2025::` 權重語法的機率。
+
+metadata 會保存：
+
+- 實際送出的最終 prompt
+- 原本 prompt template
+- Fixed / Random 片段庫
+- 每個 placeholder 的展開結果
+
+## Discord Bot
+
+Bot 邀請連結由網頁產生，包含 `bot` 與 `applications.commands` scope，以及基本聊天、反應、附件、讀取歷史、thread 發訊等權限。若要一般訊息也能觸發對話，Discord Developer Portal 需要開啟 Message Content Intent。
+
+Slash 指令：
 
 | 指令 | 參數 | 說明 |
 | --- | --- | --- |
-| `/ai` | `content` 選填、`file` 選填 | 對 AI 輸入文字或上傳 `.txt` 作為本輪輸入。 |
-| `/ai_start` | 無 | 開始目前網頁選定的角色卡或助手模式，並把此頻道設為直接對話頻道。 |
-| `/ai_status` | 無 | 查看連線狀態、對話狀態、模型設定、目前模式、玩家分配與存檔數。 |
-| `/player_set` | `number` 必填 | 把自己設定為指定玩家座位，例如 `2` 會成為 `user2`。 |
-| `/reload` | `feedback` 選填 | 移除最新 AI 回覆，依同一 user 輸入重新生成，可附上改進要求。 |
-| `/replay` | `message_number`、`content` 必填 | 從指定訊息編號建立分支，用新的 user 內容重寫後續。 |
-| `/run_time` | `number`、`message` 必填 | 依要求自動推演多輪；單次最多 20 輪；角色卡助手模式不支援。 |
-| `/ai_help` | 無 | 顯示使用指南與 Bot 邀請連結。 |
-| `/session_save` | `name` 選填 | 保存目前整體對話。 |
-| `/session_list` | 無 | 列出所有對話存檔。 |
-| `/session_load` | `id` 必填 | 載入指定存檔。 |
+| `/ai` | `content`、`file` | 對 AI 輸入文字或上傳 `.txt`。 |
+| `/ai_start` | 無 | 在目前頻道開始對話，並重置 user1/user2 玩家座位。 |
+| `/ai_status` | 無 | 查看目前 Bot、模型、對話與玩家狀態。 |
+| `/stop` | 無 | 停止目前正在生成的 AI 回覆。 |
+| `/player_set` | `number` | 把自己設定為指定玩家，例如 `2`。可有多個 Discord user 同時是 user2。 |
+| `/reload` | `feedback` | 移除最新 AI 回覆並重跑，可附改進要求。 |
+| `/replay` | `message_number`、`content` | 從指定訊息編號建立分支並重寫後續。 |
+| `/run_time` | `number`、`message` | 按要求自動推演多輪，角色卡助手模式不支援。 |
+| `/ai_help` | 無 | 顯示可用指令。 |
+| `/session_save` | `name` | 保存目前整體對話。 |
+| `/session_list` | 無 | 列出對話存檔。 |
+| `/session_load` | `id` | 載入對話存檔。 |
 
-### 文字指令
-
-伺服器頻道使用：
+文字指令：
 
 ```text
-!ai 指令
+!ai help
+!ai status
+!ai start
+!ai player_set 2
+!ai reload 這次回覆太短
+!ai replay 12 新的使用者內容
+!ai run_time 5 依照目前事件自然推進
+!ai session_save 存檔名
+!ai session_list
+!ai session_load <id>
 ```
 
-DM 若要執行 meta 指令也請加前綴；沒有前綴時會當作聊天內容。已由 `/ai_start` 啟用的伺服器頻道可直接輸入對話。
+`/ai_start` 會把該伺服器的對話固定在目前頻道。之後該頻道內的普通訊息都會觸發 AI，不需要 `!ai`。如果在另一個頻道再次 `/ai_start`，會切換固定頻道並重置玩家座位。
 
-| 文字指令 | 說明 |
-| --- | --- |
-| `!ai help` / `!ai ai_help` / `!ai 幫助` | 顯示指南。 |
-| `!ai status` / `!ai ai_status` / `!ai 狀態` | 顯示狀態。 |
-| `!ai start` / `!ai ai_start` / `!ai 開始` | 在目前頻道開始對話。 |
-| `!ai player_set 2` | 把自己設定為 `user2`。 |
-| `!ai reload <feedback>` | 依 feedback 重新生成最新回覆。 |
-| `!ai replay <message_number> <content>` | 從指定訊息編號建立分支。 |
-| `!ai run_time <number> <message>` | 自動推演多輪。 |
-| `!ai session_save <name>` | 保存目前對話。 |
-| `!ai session_list` | 列出存檔。 |
-| `!ai session_load <id>` | 載入存檔。 |
+Discord 其他行為：
+
+- 第一個發言者自動成為 `user1`，第二個成為 `user2`。
+- `/player_set 2` 可手動把自己設成 `user2`。
+- 使用者編輯 Discord 原訊息時，Bot 會從該訊息建立備份並重新生成後續分支。
+- 每次 AI 正文會自行加上 `👍` / `👎` 反應；使用者點擊後會把「喜歡 / 不喜歡這次正文輸出」標記到下一則 user 訊息。
+- 再次點同一個反應或在網頁點同一表情可取消。
+
+## 對話與存檔
+
+對話流程：
+
+- 開始角色卡會清空目前 runtime 對話進度、重置模型內容，並加入開場對話。
+- 開場對話本身是對話的一部分，會保留到第一次壓縮發生。
+- 正文對話使用最近 N 輪上下文；N 由目前 Prompt 模式設定。
+- AI 若開頭重複使用者輸入，後端會嘗試去除重複片段與相鄰符號。
+- `send-stream` 會先顯示模型思考/生成過程，正文出現後替換成正式內容。
+- `/stop` 或網頁停止按鈕會取消目前生成請求。
+
+存檔功能：
+
+- 主網頁可保存、載入、刪除、預覽存檔。
+- Discord 可用 `/session_save`、`/session_list`、`/session_load`。
+- 存檔 metadata 在 `data/app-state.json`。
+- 大段 conversation 與 AI logs 分離存在 `data/saved-sessions/<id>.json`。
+- `/replay` 與 Discord 訊息編輯重算前會先建立分支備份。
+
+## 預設與 GitHub 發佈
+
+主網頁「儲存預設」會保存：
+
+- 使用者設定
+- 角色卡
+- 角色卡 runtime state
+- 目前角色卡 / 助手模式
+- Prompt 模式與大模型設定
+- 模型內容設定
+- 時間統計設定
+- 非機密環境顯示設定
+- 頭像、背景等非 secret UI 資料
+
+不保存：
+
+- AI 呼叫紀錄
+- Discord Bot Token
+- 對話 API key
+- NovelAI API token
+- 目前對話正文
+- 對話存檔本體
+
+保存後可提交：
+
+- `defaults/app-defaults.json`
+- `defaults/novelai-defaults.json`
+- `prompts/modular/*.json`
+
+下載者第一次啟動時，如果本機沒有 `data/app-state.json`，會用 GitHub 預設初始化。已有本機資料時，可按「使用預設」手動套用；這會清空目前環境設定、目前對話與 AI logs，但保留對話存檔。
 
 ## HTTP API
 
-本地網頁使用以下 API。所有 request/response 皆為 JSON，靜態檔由同一個 server 提供。
+主要 API：
 
 | Method | Path | 說明 |
 | --- | --- | --- |
-| `GET` | `/api/state` | 取得完整 UI state、prompt configs、saved sessions meta、Discord 狀態。 |
-| `GET` | `/api/env` | 讀取 `.env` 內容。 |
-| `PUT` | `/api/env` | 覆寫 `.env` 內容並同步 process env。 |
-| `POST` | `/api/chat-api/test` | 使用目前表單內容測試對話 API 連接，不會先寫入 `.env`。 |
-| `POST` | `/api/restart` | 排程重啟目前 Node server。 |
-| `POST` | `/api/defaults/apply` | 套用 GitHub 預設設定，清除原本環境設定並保留對話存檔。 |
-| `POST` | `/api/defaults/save` | 將目前設定保存成 GitHub 預設檔。 |
-| `GET` | `/api/novelai/defaults` | 讀取 NovelAI 跑圖頁預設。 |
-| `PUT` / `POST` | `/api/novelai/defaults` | 將目前 NovelAI 跑圖頁設定保存成預設。 |
-| `PUT` | `/api/conversation-settings` | 相容舊版 UI 的對話設定 API；新版 UI 以 `.env` 的 `CHAT_API_MODEL` 與各 Prompt 模式的 `dialogueContextRounds` 為主。 |
-| `GET` | `/api/context-compression` | 取得目前模型內容與啟用的大模型 profiles。 |
-| `PUT` | `/api/context-compression` | 手動保存指定 profile 的模型內容。 |
-| `GET` | `/api/character-card-creation-assistant-prompt` | 讀取角色卡建立助手 prompt。 |
-| `PUT` | `/api/character-card-creation-assistant-prompt` | 保存角色卡建立助手 prompt。 |
-| `POST` | `/api/modular-prompts/:mode/preview` | 預覽指定模式的正文 system prompt 與壓縮 prompt。 |
-| `PUT` | `/api/modular-prompts/:mode` | 保存指定 Prompt 模式。 |
-| `DELETE` | `/api/modular-prompts/:mode` | 刪除自訂 Prompt 模式。 |
-| `GET` | `/api/sessions` | 列出對話存檔摘要。 |
-| `POST` | `/api/sessions/save` | 保存目前整體對話。 |
-| `POST` | `/api/sessions/:id/load` | 載入指定存檔。 |
-| `PUT` | `/api/sessions/:id` | 重新命名存檔。 |
-| `POST` | `/api/sessions/:id/archive` | 將存檔標為 archived。 |
-| `POST` | `/api/sessions/:id/resume` | 將存檔恢復為 active。 |
-| `DELETE` | `/api/sessions/:id` | 刪除存檔與分離資料檔。 |
-| `PUT` | `/api/user-profile` | 更新稱呼與自訂補充。 |
-| `GET` | `/api/role-cards` | 取得角色卡列表與目前 active role card id。 |
-| `POST` | `/api/assistant-modes/character-card-creation/start` | 啟用角色卡建立助手模式。 |
-| `POST` | `/api/role-cards` | 建立角色卡。 |
-| `PUT` | `/api/role-cards/:id` | 更新角色卡。 |
-| `DELETE` | `/api/role-cards/:id` | 刪除角色卡。 |
-| `POST` | `/api/role-cards/:id/start` | 開始指定角色卡對話。 |
-| `PUT` | `/api/messages/:id` | 編輯 assistant 訊息內容。 |
+| `GET` | `/api/state` | 取得主 UI state。 |
+| `GET` / `PUT` | `/api/env` | 讀取或保存 `.env`。 |
+| `POST` | `/api/chat-api/test` | 測試對話 API 連接。 |
+| `POST` | `/api/restart` | 排程重啟 server。 |
+| `GET` / `PUT` | `/api/time-tracking` | 讀取或保存時間統計設定。 |
+| `GET` / `PUT` | `/api/context-compression` | 讀取或保存模型內容。 |
+| `POST` | `/api/defaults/save` | 保存 GitHub 預設。 |
+| `POST` | `/api/defaults/apply` | 套用 GitHub 預設。 |
+| `GET` / `POST` | `/api/novelai/defaults` | 讀取或保存 NovelAI 預設。 |
+| `GET` | `/api/novelai/status` | 讀取 NovelAI token 狀態與 Anlas。 |
+| `POST` | `/api/novelai/generate` | 生成 NovelAI 圖片。 |
+| `GET` / `POST` | `/api/novelai/album` | 列出或收藏 NovelAI 圖片。 |
+| `GET` | `/api/novelai/album/:id/image` | 讀取收藏圖片。 |
+| `DELETE` | `/api/novelai/album/:id` | 刪除收藏圖片。 |
+| `GET` / `POST` | `/api/sessions`、`/api/sessions/save` | 列出或保存對話存檔。 |
+| `GET` / `PUT` / `DELETE` | `/api/sessions/:id` | 讀取、改名或刪除存檔。 |
+| `POST` | `/api/sessions/:id/load` | 載入存檔。 |
+| `POST` | `/api/sessions/:id/archive` / `/resume` | 封存或恢復存檔。 |
+| `GET` / `POST` | `/api/role-cards` | 列出或建立角色卡。 |
+| `PUT` / `DELETE` | `/api/role-cards/:id` | 更新或刪除角色卡。 |
+| `POST` | `/api/role-cards/:id/start` | 開始角色卡。 |
+| `GET` / `POST` | `/api/assistant-cards` | 列出或建立助手卡。 |
+| `PUT` / `DELETE` | `/api/assistant-cards/:id` | 更新或刪除助手卡。 |
+| `POST` | `/api/assistant-cards/:id/start` | 啟用助手卡。 |
+| `PUT` | `/api/messages/:id` | 編輯 assistant 訊息。 |
+| `POST` | `/api/messages/:id/replay-edit` | 編輯 user 訊息並從該處重跑分支。 |
+| `POST` | `/api/messages/:id/feedback` | 喜歡 / 不喜歡 / 取消回饋。 |
 | `POST` | `/api/chat/send` | 本地網頁送出一輪對話。 |
-| `POST` | `/api/chat/send-stream` | 目前停用，會回傳 Discord 使用指南。 |
+| `POST` | `/api/chat/send-stream` | 本地網頁串流送出一輪對話。 |
+| `POST` | `/api/chat/stop` | 停止目前生成。 |
+| `POST` | `/api/chat/reload` | 重跑最新 AI 回覆。 |
+| `POST` | `/api/chat/replay` | 從指定訊息編號重寫分支。 |
+| `POST` | `/api/chat/run-time` | 網頁自動推演多輪。 |
+| `POST` | `/api/modular-prompts/:mode/preview` | 預覽 Prompt 模式。 |
+| `PUT` / `DELETE` | `/api/modular-prompts/:mode` | 保存或刪除 Prompt 模式。 |
 
-## 資料模型重點
+靜態檔由同一 server 從 `src/public/` 提供。
 
-### `data/app-state.json`
+## 資料檔
 
-主要保存 runtime state：
-
-- `userProfile`：稱呼與自訂補充。
-- `roleCards`：角色卡資料；啟動時會被 `cardstate.json` 覆蓋同步。
-- `roleCardRuntimeState`：角色卡執行期增量資料與世界書 runtime。
-- `activeRoleCardId` / `activeAssistantMode`：目前對話目標。
-- `conversationSettings`：模型與上下文輪數。
-- `contextCompression`：標準與自訂大模型內容。
-- `aiSessionStarted`、`pendingOpeningBroadcast`、`lastDiscordChannelId`：對話與 Discord 狀態。
-- `discordPlayers`：Discord user id 到玩家座位的映射。
-- `turnState`：目前 user turn number。
-- `conversation`：目前 runtime 對話，最多保留 500 則。
-- `aiLogs`：最近 AI 呼叫紀錄，最多保留 200 筆。
-- `savedSessions`：存檔 metadata。
-
-### `data/cardstate.json`
-
-分離保存：
-
-- `userProfile`
-- `roleCards`
-- `updatedAt`
-
-### `defaults/app-defaults.json`
-
-GitHub 發佈用預設資料，包含：
-
-- `userProfile`
-- `roleCards`
-- `roleCardRuntimeState`
-- `activeRoleCardId` / `activeAssistantMode`
-- `conversationSettings`
-- `contextCompression`
-- `timeTracking`
-- `environment`：只保存非機密環境值，不保存 Discord Bot Token、對話 API Key 或其他 secret。
-- `updatedAt`
-
-如果本機沒有自己的 `data/app-state.json`，啟動時會用這個檔案建立初始設定與角色卡。按下「使用預設」時，也會重新套用這些預設並重新載入 `prompts/modular/`；原本 `.env`、目前 conversation 與 AI logs 會清空，saved sessions 會保留。
-
-這讓角色卡資料在 runtime state 損壞或重整時有獨立備份。
-
-### `defaults/novelai-defaults.json`
-
-NovelAI 跑圖頁的 GitHub 發佈用預設資料，包含 Base Prompt、Undesired Content、Fixed Prompt、Random Prompt、Character Prompts、尺寸與生成參數。預設檔不保存 Image2Image / Vibe Transfer / Precise Reference 的圖片 data URL，只保存文字與數值設定。
-
-### `data/saved-sessions/<session_id>.json`
-
-分離保存存檔中的大段資料：
-
-- `conversation`
-- `aiLogs`
-- `updatedAt`
-
-## Prompt 檔案
-
-| 檔案 | 用途 |
+| 檔案或目錄 | 說明 |
 | --- | --- |
-| `prompts/CharacterCardCreationAssistant.txt` | 角色卡建立助手 system prompt。 |
-| `prompts/Context_compression.txt` | 預設上下文壓縮 prompt fallback。 |
-| `prompts/modular/single.json` | 單角色模式的正文與大模型規則。 |
-| `prompts/modular/multi.json` | 多角色模式的正文與大模型規則。 |
-| `prompts/modular/no_role.json` | 無角色模式的正文與大模型規則。 |
-| `prompts/modular/<custom>.json` | UI 新增的自訂模式。 |
+| `data/app-state.json` | runtime state、目前對話、模型內容、存檔 metadata、AI logs 摘要。 |
+| `data/cardstate.json` | 使用者設定與角色卡分離備份。 |
+| `data/saved-sessions/` | 對話存檔中的 conversation 與 AI logs。 |
+| `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
+| `defaults/app-defaults.json` | 可提交的主程式預設。 |
+| `defaults/novelai-defaults.json` | 可提交的 NovelAI 預設。 |
+| `prompts/modular/*.json` | 可提交的 Prompt 模式設定。 |
 
-建議優先使用網頁的「編輯 Prompt」操作，因為它會做欄位正規化並產生預覽。
+`data/` 可能包含完整對話、角色設定與模型內容，不建議公開。
 
-## Discord 設定流程
+## 開發與檢查
 
-1. 到 Discord Developer Portal 建立 Application 與 Bot。
-2. 複製 Bot Token 到 `.env` 的 `DISCORD_BOT_TOKEN`。
-3. 建議填入 `DISCORD_CLIENT_ID`，讓網頁能穩定產生 Bot 邀請連結。
-4. 若要使用文字指令或讀取一般訊息，請在 Discord Bot 設定中啟用 Message Content Intent。
-5. 啟動 `npm start`。
-6. 在網頁按「Discord Bot 連結」邀請 Bot；邀請頁應是伺服器安裝流程，並顯示 `bot` / `applications.commands` scope 與基本頻道聊天權限。
-7. 到 Discord 使用 `/ai_start` 開始頻道對話。
+常用命令：
 
-Slash 指令全域註冊可能需要等待 Discord 同步；若要立即在特定伺服器測試，可設定 `DISCORD_GUILD_ID`。
+```bash
+npm start
+npm test
+node --check src/index.js
+node --check src/public/app.js
+node --check src/public/novelai.js
+```
 
-## 常見操作流程
-
-### 建立角色卡並開始網頁對話
-
-1. 開啟 `http://localhost:3234`。
-2. 在「使用者設定」填入稱呼與自訂補充。
-3. 按「建立角色卡」。
-4. 選擇角色模式，填寫名字、自定義內容、開場對話與世界書。
-5. 保存角色卡。
-6. 在「選擇角色卡」中按開始。
-7. 在對話輸入框送出內容。
-
-### 編輯大模型與 Prompt
-
-1. 按「編輯 Prompt」。
-2. 選擇角色模式。
-3. 編輯正文主要規則、正文輸出規則、模型主要規則。
-4. 視需要新增模塊、大模型 profile、觸發組合與追加詞。
-5. 按「更新預覽」檢查最終 Prompt。
-6. 按「保存 Prompt」。
-
-### 保存與分支
-
-1. 對話進行中可按「保存目前整體對話」。
-2. Discord 可用 `/session_save name:名稱`。
-3. 想從中途改寫時，用 `/replay message_number:編號 content:新內容`。
-4. `/replay` 會先建立分支備份，再截斷並重寫後續。
+`npm test` 目前使用 Node.js 內建 test runner。專案沒有 build step，修改前端後刷新瀏覽器即可。
 
 ## 注意事項
 
-- `.env` 含 API key 與 Bot token，不要提交或分享。
-- `data/` 可能包含完整對話、角色卡、模型內容與 AI logs，也不要公開提交。
-- 本專案可自訂 Prompt 與內容規則；請自行確保使用內容符合所在地法律、Discord 平台規範與模型供應商使用條款。
-- `data/app-state.json` 若手動編輯失敗，server 會 fallback 建立預設 state；角色卡仍可能從 `cardstate.json` 恢復。
-- `deepseek-chat` 的 token cap 在程式內限制為 `8192`，其他模型 cap 為 `64000`。
-- 如果回覆太短，系統會嘗試補寫；若不想補寫，可把 `AI_MIN_REPLY_CHARS` 設小。
-- `/run_time` 單次最多 20 輪，且 CharacterCardCreationAssistant 模式不支援。
-- 網頁的 `/api/chat/send-stream` 目前停用；正常本地對話使用 `/api/chat/send`。
-
-## 開發備註
-
-- `npm start` 等同 `node src/index.js`。
-- 專案沒有 build step。
-- 專案沒有內建測試 script。
-- 靜態檔從 `src/public/` 直接提供。
-- `src/index.js` 同時負責 HTTP API、狀態落盤、Prompt 組裝、DeepSeek 呼叫與 Discord Bot。
-- `src/public/app.js` 負責所有 UI 狀態渲染、表單送出、dialog、角色卡裁切與 API 呼叫。
+- `.env` 包含 API key 與 Bot token，不要提交。
+- Discord Bot 要讀取一般訊息，需要在 Developer Portal 開啟 Message Content Intent。
+- 全域 Slash 指令可能需要等待 Discord 同步；測試時可設定 `DISCORD_GUILD_ID`。
+- `data/app-state.json` 手動編輯錯誤時，server 會盡量 fallback；角色卡仍可能從 `data/cardstate.json` 恢復。
+- NovelAI 圖片功能依賴 NovelAI 官方 API 與 token 狀態，Anlas 計算只作為前端預估。
+- 本專案可自訂 Prompt 與生成內容，使用時請自行遵守所在地法律、Discord 規範與各模型供應商條款。
