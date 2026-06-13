@@ -57,6 +57,7 @@
           <h2>角色卡</h2>
           <button id="selectRoleCardBtn" type="button" class="secondary desktop-role-picker-btn">選擇角色卡</button>
           <button id="createRoleCardBtn" type="button">建立角色卡</button>
+          <button id="createAssistantCardBtn" type="button" class="secondary">建立新助手</button>
           <button id="importRoleCardBtn" type="button" class="secondary">匯入角色卡</button>
           <input id="roleCardImportFile" type="file" class="hidden" accept=".json,.png,.jpg,.jpeg,application/json,image/png,image/jpeg" />
           <div id="roleCardList" class="card-list role-card-inline-list"></div>
@@ -407,14 +408,23 @@
 
     <dialog id="assistantPromptDialog" class="dialog prompt-viewer-dialog">
       <form id="assistantPromptForm" method="dialog" class="stack">
-        <h3>編輯助手 Prompt</h3>
-        <p class="form-hint">這會更新 CharacterCardCreationAssistant 使用的 system prompt，保存後立即生效。</p>
+        <h3>編輯助手卡</h3>
+        <p class="form-hint">保存後立即生效；助手卡不會混入使用者設定。</p>
+        <input id="assistantCardId" type="hidden" />
         <label>
-          CharacterCardCreationAssistant Prompt
+          助手名稱
+          <input id="assistantCardName" type="text" required />
+        </label>
+        <label>
+          簡介
+          <textarea id="assistantCardDescription" rows="3"></textarea>
+        </label>
+        <label>
+          Prompt
           <textarea id="assistantPromptInput" rows="18" required></textarea>
         </label>
         <div class="dialog-actions">
-          <button type="submit">保存助手 Prompt</button>
+          <button type="submit">保存助手卡</button>
           <button type="button" id="cancelAssistantPromptDialog">關閉</button>
         </div>
       </form>

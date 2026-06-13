@@ -48,6 +48,8 @@ const CHAT_API_TEMPERATURE = 0.5;
 const CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE = 0.9;
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
+const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
+const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
 const NOVELAI_IMAGE_API_DEFAULT_BASE_URL = "https://image.novelai.net";
 const NOVELAI_PRIMARY_API_DEFAULT_BASE_URL = "https://api.novelai.net";
@@ -314,6 +316,71 @@ function getContextCompressionPrompt() {
 function getCharacterCardCreationAssistantPrompt() {
   return safeText(characterCardCreationAssistantPrompt) ||
     "你是角色卡建立助手，請直接輸出正式正文。";
+}
+
+function createDefaultAssistantCard() {
+  const now = nowIso();
+  return {
+    id: CHARACTER_CARD_CREATION_ASSISTANT_MODE,
+    name: DEFAULT_ASSISTANT_CARD_NAME,
+    description: DEFAULT_ASSISTANT_CARD_DESCRIPTION,
+    prompt: getCharacterCardCreationAssistantPrompt(),
+    locked: true,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function normalizeAssistantCard(input = {}, index = 0) {
+  const source = input && typeof input === "object" ? input : {};
+  const isDefault = safeText(source.id) === CHARACTER_CARD_CREATION_ASSISTANT_MODE || index === 0;
+  const id = safeText(source.id) || (isDefault ? CHARACTER_CARD_CREATION_ASSISTANT_MODE : newId("assistant"));
+  const fallback = createDefaultAssistantCard();
+  return {
+    id,
+    name: safeText(source.name || source.title || source.label) || (id === CHARACTER_CARD_CREATION_ASSISTANT_MODE ? DEFAULT_ASSISTANT_CARD_NAME : `新助手 ${index + 1}`),
+    description: safeText(source.description || source.intro) || (id === CHARACTER_CARD_CREATION_ASSISTANT_MODE ? DEFAULT_ASSISTANT_CARD_DESCRIPTION : "自訂助手卡。"),
+    prompt: safeText(source.prompt || source.systemPrompt || source.system_prompt) || (id === CHARACTER_CARD_CREATION_ASSISTANT_MODE ? fallback.prompt : getCharacterCardCreationAssistantPrompt()),
+    locked: id === CHARACTER_CARD_CREATION_ASSISTANT_MODE || source.locked === true,
+    createdAt: safeText(source.createdAt) || nowIso(),
+    updatedAt: safeText(source.updatedAt) || nowIso()
+  };
+}
+
+function normalizeAssistantCards(value = []) {
+  const cards = (Array.isArray(value) ? value : [])
+    .map((item, index) => normalizeAssistantCard(item, index))
+    .filter((card) => card.id);
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const defaultCard = normalizeAssistantCard({
+    ...createDefaultAssistantCard(),
+    ...(byId.get(CHARACTER_CARD_CREATION_ASSISTANT_MODE) || {})
+  });
+  byId.set(CHARACTER_CARD_CREATION_ASSISTANT_MODE, defaultCard);
+  return [
+    byId.get(CHARACTER_CARD_CREATION_ASSISTANT_MODE),
+    ...Array.from(byId.values()).filter((card) => card.id !== CHARACTER_CARD_CREATION_ASSISTANT_MODE)
+  ];
+}
+
+function getAssistantCards(currentState = state) {
+  return normalizeAssistantCards(currentState?.assistantCards);
+}
+
+function getAssistantCardById(currentState = state, assistantId = "") {
+  const normalizedId = normalizeAssistantMode(assistantId);
+  if (!normalizedId) {
+    return null;
+  }
+  return getAssistantCards(currentState).find((card) => card.id === normalizedId) || null;
+}
+
+function getActiveAssistantCard(currentState = state) {
+  return getAssistantCardById(currentState, currentState?.activeAssistantMode);
+}
+
+function getActiveAssistantName(currentState = state) {
+  return safeText(getActiveAssistantCard(currentState)?.name) || DEFAULT_ASSISTANT_CARD_NAME;
 }
 
 function ensurePromptsDir() {
@@ -736,6 +803,7 @@ function loadAppDefaults() {
   return {
     userProfile: normalizeUserProfile(parsed.userProfile),
     roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
+    assistantCards: normalizeAssistantCards(parsed.assistantCards),
     roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(parsed.roleCardRuntimeState),
     activeRoleCardId: safeText(parsed.activeRoleCardId) || null,
     activeAssistantMode: normalizeAssistantMode(parsed.activeAssistantMode),
@@ -750,6 +818,7 @@ function loadAppDefaults() {
 function createDefaultState() {
   const appDefaults = loadAppDefaults();
   const defaultRoleCards = appDefaults?.roleCards || [];
+  const defaultAssistantCards = normalizeAssistantCards(appDefaults?.assistantCards);
   const validDefaultRoleCardIds = new Set(defaultRoleCards.map((card) => card.id));
   const defaultActiveRoleCardId = defaultRoleCards.some((card) => card.id === appDefaults?.activeRoleCardId)
     ? appDefaults.activeRoleCardId
@@ -764,6 +833,7 @@ function createDefaultState() {
       displayName: ""
     },
     roleCards: defaultRoleCards,
+    assistantCards: defaultAssistantCards,
     roleCardRuntimeState: defaultRoleCardRuntimeState,
     activeRoleCardId: defaultActiveAssistantMode ? null : defaultActiveRoleCardId,
     activeAssistantMode: defaultActiveAssistantMode,
@@ -1187,9 +1257,10 @@ function calculateAiUsageCost(usage = {}, model = "") {
 
 function normalizeAssistantMode(value) {
   const normalized = safeText(value);
-  return normalized === CHARACTER_CARD_CREATION_ASSISTANT_MODE
-    ? CHARACTER_CARD_CREATION_ASSISTANT_MODE
-    : null;
+  if (normalized === CHARACTER_CARD_CREATION_ASSISTANT_MODE) {
+    return CHARACTER_CARD_CREATION_ASSISTANT_MODE;
+  }
+  return /^assistant_[a-zA-Z0-9_-]+$/u.test(normalized) ? normalized : null;
 }
 
 function isCharacterCardCreationAssistantMode(mode) {
@@ -1216,10 +1287,10 @@ function ensureDataFile() {
 
 function extractCardState(currentState) {
   return {
-    userProfile: normalizeUserProfile(currentState?.userProfile),
     roleCards: Array.isArray(currentState?.roleCards)
       ? currentState.roleCards.map((card) => normalizeRoleCard(card))
       : [],
+    assistantCards: normalizeAssistantCards(currentState?.assistantCards),
     updatedAt: nowIso()
   };
 }
@@ -1244,8 +1315,8 @@ function loadCardState() {
   }
 
   return {
-    userProfile: normalizeUserProfile(raw.userProfile),
     roleCards: Array.isArray(raw.roleCards) ? raw.roleCards.map((card) => normalizeRoleCard(card)) : [],
+    assistantCards: normalizeAssistantCards(raw.assistantCards),
     updatedAt: safeText(raw.updatedAt) || nowIso()
   };
 }
@@ -1277,6 +1348,7 @@ function saveDefaultAppSettings(currentState) {
     version: 2,
     userProfile: normalizeUserProfile(currentState?.userProfile),
     roleCards: normalizedRoleCards,
+    assistantCards: normalizeAssistantCards(currentState?.assistantCards),
     roleCardRuntimeState,
     activeRoleCardId: activeAssistantMode ? null : activeRoleCardId,
     activeAssistantMode,
@@ -1318,6 +1390,7 @@ function applyDefaultAppSettings(currentState) {
     : [];
   currentState.userProfile = cloneData(defaultState.userProfile, { identityText: "", displayName: "" });
   currentState.roleCards = cloneData(defaultState.roleCards, []).map((card) => normalizeRoleCard(card));
+  currentState.assistantCards = normalizeAssistantCards(defaultState.assistantCards);
   currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(defaultState.roleCardRuntimeState);
   currentState.activeRoleCardId = defaultState.activeRoleCardId || null;
   currentState.activeAssistantMode = normalizeAssistantMode(defaultState.activeAssistantMode);
@@ -1432,6 +1505,7 @@ function loadState() {
         ...(parsed.userProfile || {})
       }),
       roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
+      assistantCards: normalizeAssistantCards(parsed.assistantCards),
       roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(parsed.roleCardRuntimeState),
       activeRoleCardId: safeText(parsed.activeRoleCardId) || null,
       activeAssistantMode: normalizeAssistantMode(parsed.activeAssistantMode),
@@ -1449,13 +1523,10 @@ function loadState() {
     merged.turnState = normalizeTurnState(parsed.turnState, merged);
 
     if (persistedCardState) {
-      merged.userProfile = normalizeUserProfile({
-        ...merged.userProfile,
-        ...persistedCardState.userProfile
-      });
       merged.roleCards = Array.isArray(persistedCardState.roleCards)
         ? persistedCardState.roleCards.map((card) => normalizeRoleCard(card))
         : merged.roleCards;
+      merged.assistantCards = normalizeAssistantCards(persistedCardState.assistantCards || merged.assistantCards);
     }
 
     merged.savedSessions = (Array.isArray(parsed.savedSessions) ? parsed.savedSessions : []).map(
@@ -1466,6 +1537,9 @@ function loadState() {
     }
     if (merged.activeAssistantMode) {
       merged.activeRoleCardId = null;
+    }
+    if (merged.activeAssistantMode && !getAssistantCardById(merged, merged.activeAssistantMode)) {
+      merged.activeAssistantMode = null;
     }
     const validRoleCardIds = new Set(merged.roleCards.map((card) => card.id));
     merged.roleCardRuntimeState = Object.fromEntries(
@@ -1482,6 +1556,10 @@ function saveState(state) {
   state.turnState = normalizeTurnState(state.turnState, state);
   state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
   state.timeTracking = normalizeTimeTrackingState(state.timeTracking);
+  state.assistantCards = normalizeAssistantCards(state.assistantCards);
+  if (state.activeAssistantMode && !getAssistantCardById(state, state.activeAssistantMode)) {
+    state.activeAssistantMode = null;
+  }
   state.activeSavedSessionId = null;
   state.updatedAt = nowIso();
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
@@ -1557,6 +1635,7 @@ function captureRuntimeSnapshot(currentState) {
   return {
     userProfile: cloneData(currentState.userProfile, createDefaultState().userProfile),
     roleCards: cloneData(currentState.roleCards, []).map((card) => normalizeRoleCard(card)),
+    assistantCards: normalizeAssistantCards(currentState.assistantCards),
     roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState),
     activeRoleCardId: currentState.activeRoleCardId || null,
     activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
@@ -1648,6 +1727,7 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.roleCards = Array.isArray(source.roleCards)
     ? cloneData(source.roleCards, []).map((card) => normalizeRoleCard(card))
     : [];
+  currentState.assistantCards = normalizeAssistantCards(source.assistantCards);
   currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(source.roleCardRuntimeState);
   const validRoleCardIds = new Set(currentState.roleCards.map((card) => card.id));
   currentState.roleCardRuntimeState = Object.fromEntries(
@@ -1781,6 +1861,9 @@ function buildSavedSessionSummary(session) {
     ? session.snapshot.roleCards.find((card) => safeText(card?.id) === safeText(roleCardId))
     : null;
   const assistantMode = normalizeAssistantMode(session.snapshot?.activeAssistantMode);
+  const assistantCard = assistantMode
+    ? getAssistantCardById(session.snapshot, assistantMode)
+    : null;
   return {
     id: session.id,
     name: session.name,
@@ -1788,7 +1871,7 @@ function buildSavedSessionSummary(session) {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     roleCardId,
-    roleCardName: assistantMode || safeText(roleCard?.name) || "未指定角色卡",
+    roleCardName: safeText(assistantCard?.name) || safeText(roleCard?.name) || "未指定角色卡",
     assistantMode,
     messageCount: externalData.conversation.length
   };
@@ -1904,6 +1987,46 @@ function deleteRoleCard(currentState, cardId) {
   }
   if (currentState.activeRoleCardId === cardId) {
     currentState.activeRoleCardId = null;
+    currentState.aiSessionStarted = false;
+    currentState.pendingOpeningBroadcast = false;
+    currentState.lastDiscordChannelId = "";
+    resetConversationProgress(currentState);
+    resetGeneratedBackendContextPreservingManual(currentState);
+  }
+  return deleted;
+}
+
+function startAssistantCard(currentState, assistantId) {
+  const assistant = getAssistantCardById(currentState, assistantId);
+  if (!assistant) {
+    return null;
+  }
+  currentState.activeRoleCardId = null;
+  currentState.activeAssistantMode = assistant.id;
+  currentState.activeSavedSessionId = null;
+  currentState.aiSessionStarted = true;
+  currentState.pendingOpeningBroadcast = false;
+  currentState.lastDiscordChannelId = "";
+  resetDiscordPlayerAssignments(currentState, "");
+  resetConversationProgress(currentState);
+  currentState.roleCardRuntimeState = {};
+  resetGeneratedBackendContextPreservingManual(currentState);
+  return assistant;
+}
+
+function deleteAssistantCard(currentState, assistantId) {
+  const normalizedId = normalizeAssistantMode(assistantId);
+  if (!normalizedId || normalizedId === CHARACTER_CARD_CREATION_ASSISTANT_MODE) {
+    return null;
+  }
+  currentState.assistantCards = normalizeAssistantCards(currentState.assistantCards);
+  const index = currentState.assistantCards.findIndex((card) => card.id === normalizedId);
+  if (index < 0) {
+    return null;
+  }
+  const [deleted] = currentState.assistantCards.splice(index, 1);
+  if (currentState.activeAssistantMode === normalizedId) {
+    currentState.activeAssistantMode = null;
     currentState.aiSessionStarted = false;
     currentState.pendingOpeningBroadcast = false;
     currentState.lastDiscordChannelId = "";
@@ -3863,6 +3986,13 @@ function createTemplateVariables(currentState = state, runtimeUserName = "", rol
   };
 }
 
+function createAssistantTemplateVariables(runtimeUserName = "") {
+  return {
+    user: safeText(runtimeUserName) || "{{user}}",
+    chur: ""
+  };
+}
+
 function injectTemplatePlaceholders(text, variables = {}) {
   const source = typeof text === "string" ? text : "";
   return renderPromptTemplate(source, variables);
@@ -4845,6 +4975,7 @@ function getUserBaseModelContent(message) {
   if (modelContent) {
     return stripUserIdentityTextFromContent(modelContent)
       .replace(/\n{2,}【觸發世界書 Lorebooks】[\s\S]*$/u, "")
+      .replace(/\n{2,}當前時間 \| 數值:[^\n]*(?:\n【即將自動切換時間】[^\n]*)?/u, "")
       .trim();
   }
   return stripUserIdentityTextFromContent(message?.content);
@@ -4873,6 +5004,12 @@ function getCurrentUserModelContent(message, currentState = state, runtimeUserNa
 
 function attachTriggeredLorebooksToUserMessage(message, currentState = state, runtimeUserName = "") {
   if (!message || message.role !== "user") {
+    return message;
+  }
+  if (isCharacterCardCreationAssistantActive(currentState)) {
+    message.baseModelContent = getUserBaseModelContent(message);
+    message.modelContent = message.baseModelContent;
+    message.preparedModelContent = true;
     return message;
   }
   const storedModelContent = safeText(message.modelContent || message.extra?.modelContent);
@@ -5184,9 +5321,10 @@ function getDialogueContextRounds(currentState = null) {
 }
 
 function buildCharacterCardCreationAssistantSystemPrompt(state, runtimeUserName = "") {
+  const activeAssistant = getActiveAssistantCard(state);
   return finalizePromptTemplate(
-    getCharacterCardCreationAssistantPrompt(),
-    createTemplateVariables(state, runtimeUserName)
+    safeText(activeAssistant?.prompt) || getCharacterCardCreationAssistantPrompt(),
+    createAssistantTemplateVariables(runtimeUserName)
   ).trim();
 }
 
@@ -6867,7 +7005,7 @@ function buildCharacterCardCreationAssistantMessages(state, runtimeUserName = ""
       })),
       {
         role: "user",
-        content: getCurrentUserModelContent(latestUser, state)
+        content: getUserBaseModelContent(latestUser)
       }
     ],
     options.reloadFeedback
@@ -8622,7 +8760,7 @@ async function runConversationTurnStreaming({
         extra,
         keepTimeDirective: hasKeepTimeDirective(content),
         emptyInputMessage: "輸入不可空白。",
-        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
       }
     );
     return {
@@ -9116,7 +9254,7 @@ async function regenerateLatestAssistantReply({
 }) {
   return withStateLock(async () => {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。");
+      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用助手。");
     }
 
     const { latestUser, removedAssistant } = removeLatestAssistantTurnForReload(state);
@@ -9138,7 +9276,7 @@ async function regenerateLatestAssistantReply({
           regenerated: true,
           reloadFeedback: safeText(reloadFeedback)
         },
-        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
       }
     );
 
@@ -9156,7 +9294,7 @@ async function replayConversationFromMessageNumber({
 }) {
   return withStateLock(async () => {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。");
+      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用助手。");
     }
 
     const normalizedMessageNumber = Math.floor(Number(messageNumber));
@@ -9200,7 +9338,7 @@ async function replayConversationFromMessageNumber({
           replayGenerated: true
         },
         emptyInputMessage: "重寫內容不可空白。",
-        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
       }
     );
 
@@ -9219,7 +9357,7 @@ async function replayConversationFromDiscordMessageId({
 }) {
   return withStateLock(async () => {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。");
+      throw new Error("尚未開始。請先在網頁選擇角色卡或啟用助手。");
     }
 
     const normalizedMessageId = safeText(discordMessageId);
@@ -9268,7 +9406,7 @@ async function replayConversationFromDiscordMessageId({
           replayFromDiscordEdit: true
         },
         emptyInputMessage: "重算內容不可空白。",
-        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
       }
     );
 
@@ -9291,7 +9429,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
         extra,
         keepTimeDirective: hasKeepTimeDirective(content),
         emptyInputMessage: "輸入不可空白。",
-        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。"
+        notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
       }
     );
     return {
@@ -9321,7 +9459,7 @@ function getDiscordGuidance() {
 
 function getCurrentConversationTargetLabel(currentState) {
   if (isCharacterCardCreationAssistantActive(currentState)) {
-    return "CharacterCardCreationAssistant";
+    return getActiveAssistantName(currentState);
   }
   const card = getActiveRoleCard(currentState);
   return card ? card.name : "未選擇";
@@ -9526,6 +9664,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/character-card-creation-assistant-prompt" && method === "PUT") {
       const body = await readBody(req);
       const prompt = saveCharacterCardCreationAssistantPrompt(body?.prompt);
+      state.assistantCards = getAssistantCards(state).map((card) =>
+        card.id === CHARACTER_CARD_CREATION_ASSISTANT_MODE
+          ? { ...card, name: card.name || DEFAULT_ASSISTANT_CARD_NAME, prompt, updatedAt: nowIso() }
+          : card
+      );
+      saveState(state);
       sendJson(res, 200, {
         prompt,
         state: statePayload(state)
@@ -9730,21 +9874,84 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/assistant-modes/character-card-creation/start" && method === "POST") {
       const result = await withStateLock(async () => {
-        state.activeRoleCardId = null;
-        state.activeAssistantMode = CHARACTER_CARD_CREATION_ASSISTANT_MODE;
-        state.activeSavedSessionId = null;
-        state.aiSessionStarted = true;
-        state.pendingOpeningBroadcast = false;
-        state.lastDiscordChannelId = "";
-        resetDiscordPlayerAssignments(state, "");
-        resetConversationProgress(state);
-        state.roleCardRuntimeState = {};
-        resetGeneratedBackendContextPreservingManual(state);
-
+        startAssistantCard(state, CHARACTER_CARD_CREATION_ASSISTANT_MODE);
         saveState(state);
         return { state: statePayload(state), status: 200 };
       });
 
+      sendJson(res, 200, { openingMessage: null, state: result.state });
+      return;
+    }
+
+    if (pathname === "/api/assistant-cards" && method === "GET") {
+      sendJson(res, 200, { assistantCards: getAssistantCards(state), activeAssistantMode: state.activeAssistantMode });
+      return;
+    }
+
+    if (pathname === "/api/assistant-cards" && method === "POST") {
+      const body = await readBody(req);
+      const now = nowIso();
+      const card = normalizeAssistantCard({
+        id: newId("assistant"),
+        name: safeText(body?.name) || "新助手",
+        description: safeText(body?.description) || "自訂助手卡。",
+        prompt: safeText(body?.prompt) || getCharacterCardCreationAssistantPrompt(),
+        createdAt: now,
+        updatedAt: now
+      }, getAssistantCards(state).length);
+      state.assistantCards = [...getAssistantCards(state), card];
+      saveState(state);
+      sendJson(res, 201, { assistantCard: card, state: statePayload(state) });
+      return;
+    }
+
+    const assistantCardMatch = pathname.match(/^\/api\/assistant-cards\/([^/]+)$/);
+    if (assistantCardMatch && method === "PUT") {
+      const assistantId = assistantCardMatch[1];
+      const body = await readBody(req);
+      state.assistantCards = getAssistantCards(state);
+      const card = state.assistantCards.find((item) => item.id === normalizeAssistantMode(assistantId));
+      if (!card) {
+        sendJson(res, 404, { error: "助手不存在" });
+        return;
+      }
+      card.name = safeText(body?.name) || card.name || DEFAULT_ASSISTANT_CARD_NAME;
+      card.description = safeText(body?.description) || card.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
+      card.prompt = safeText(body?.prompt) || card.prompt || getCharacterCardCreationAssistantPrompt();
+      card.updatedAt = nowIso();
+      if (card.id === CHARACTER_CARD_CREATION_ASSISTANT_MODE) {
+        saveCharacterCardCreationAssistantPrompt(card.prompt);
+      }
+      saveState(state);
+      sendJson(res, 200, { assistantCard: card, state: statePayload(state) });
+      return;
+    }
+
+    if (assistantCardMatch && method === "DELETE") {
+      const deleted = deleteAssistantCard(state, assistantCardMatch[1]);
+      if (!deleted) {
+        sendJson(res, 404, { error: "助手不存在或不可刪除" });
+        return;
+      }
+      saveState(state);
+      sendJson(res, 200, { state: statePayload(state) });
+      return;
+    }
+
+    const assistantStartMatch = pathname.match(/^\/api\/assistant-cards\/([^/]+)\/start$/);
+    if (assistantStartMatch && method === "POST") {
+      const result = await withStateLock(async () => {
+        const assistant = startAssistantCard(state, assistantStartMatch[1]);
+        if (!assistant) {
+          return { error: "助手不存在", status: 404 };
+        }
+        saveState(state);
+        return { state: statePayload(state), status: 200 };
+      });
+      if (result.error) {
+        sendJson(res, result.status || 400, { error: result.error });
+        return;
+      }
       sendJson(res, 200, { openingMessage: null, state: result.state });
       return;
     }
@@ -10092,7 +10299,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。" });
+        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用助手。" });
         return;
       }
       const result = await runConversationTurn({
@@ -10175,7 +10382,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant。" });
+        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用助手。" });
         return;
       }
 
@@ -10679,7 +10886,7 @@ async function startSessionFromDiscord(channelId, userInfo) {
     if (!card && !isCharacterCardCreationAssistantActive(state)) {
       return {
         ok: false,
-        error: "尚未選擇角色卡或助手模式。請先到網頁建立角色卡，或啟用 CharacterCardCreationAssistant。"
+        error: "尚未選擇角色卡或助手模式。請先到網頁建立角色卡，或啟用助手。"
       };
     }
 
@@ -10695,8 +10902,8 @@ async function startSessionFromDiscord(channelId, userInfo) {
       saveState(state);
       return {
         ok: true,
-        openingDialogue: "CharacterCardCreationAssistant 已啟用，請直接輸入你的角色卡建立需求。",
-        roleCardName: CHARACTER_CARD_CREATION_ASSISTANT_MODE
+        openingDialogue: `${getActiveAssistantName(state)} 已啟用，請直接輸入你的角色卡建立需求。`,
+        roleCardName: getActiveAssistantName(state)
       };
     }
 
@@ -10908,7 +11115,7 @@ async function processDiscordChatTurn({
 
 async function handleDiscordChat(message, userContent) {
   if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-    await message.reply("尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant，再使用對話。");
+    await message.reply("尚未開始。請先在網頁選擇角色卡或啟用助手，再使用對話。");
     return;
   }
   const finalUserContent = await buildDiscordInputWithTextAttachments(userContent, message.attachments);
@@ -11090,7 +11297,7 @@ async function runRuntimeTurns({
     throw new Error("尚未開始。請先在網頁選擇角色卡並開始對話，或使用 /ai_start。");
   }
   if (isCharacterCardCreationAssistantActive(state)) {
-    throw new Error("CharacterCardCreationAssistant 不支援 /run_time 自動推演。");
+    throw new Error("助手模式不支援 /run_time 自動推演。");
   }
 
   const transcriptBlocks = [];
@@ -11225,7 +11432,7 @@ async function handleSlashCommand(interaction) {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
       await safeSendInteractionText(
         interaction,
-        "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant，或使用 /ai_start。",
+        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
         { ephemeral: true }
       );
       return;
@@ -11256,7 +11463,7 @@ async function handleSlashCommand(interaction) {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
       await safeSendInteractionText(
         interaction,
-        "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant，或使用 /ai_start。",
+        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
         { ephemeral: true }
       );
       return;
@@ -11304,7 +11511,7 @@ async function handleSlashCommand(interaction) {
     if (isCharacterCardCreationAssistantActive(state)) {
       await safeSendInteractionText(
         interaction,
-        "CharacterCardCreationAssistant 不支援 /run_time 自動推演。",
+        "助手模式不支援 /run_time 自動推演。",
         { ephemeral: true }
       );
       return;
@@ -11329,7 +11536,7 @@ async function handleSlashCommand(interaction) {
     if (!getActiveRoleCard(state) && !isCharacterCardCreationAssistantActive(state)) {
       await safeSendInteractionText(
         interaction,
-        "尚未選擇角色卡或助手模式。請先在網頁啟用角色卡或 CharacterCardCreationAssistant。",
+        "尚未選擇角色卡或助手模式。請先在網頁啟用角色卡或助手。",
         { ephemeral: true }
       );
       return;
@@ -11394,7 +11601,7 @@ async function handleSlashCommand(interaction) {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
       await safeSendInteractionText(
         interaction,
-        "尚未開始。請先在網頁選擇角色卡或啟用 CharacterCardCreationAssistant，或使用 /ai_start。",
+        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
         { ephemeral: true }
       );
       return;
