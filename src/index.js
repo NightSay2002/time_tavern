@@ -5,6 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import os from "node:os";
 import zlib from "node:zlib";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCommandOptionType, AttachmentBuilder, Client, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits } from "discord.js";
@@ -2268,6 +2269,7 @@ function normalizeNovelAiCharacters(value = []) {
         name: normalizePlainText(item?.name) || `Character ${index + 1}`,
         prompt,
         negativePrompt,
+        enabled: item?.enabled !== false,
         x: Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0.5,
         y: Number.isFinite(y) ? Math.min(1, Math.max(0, y)) : 0.5
       };
@@ -2313,6 +2315,77 @@ function isNovelAiV4Model(model = "") {
 
 function novelAiVarietySigmaForModel(model = "") {
   return /nai-diffusion-4-5/u.test(normalizePlainText(model)) ? 58 : 19;
+}
+
+function getNovelAiVibeCacheKey(model = "", image = "", informationExtracted = 1) {
+  return crypto
+    .createHash("sha256")
+    .update(`${normalizePlainText(model)}\0${Number(informationExtracted).toFixed(4)}\0${normalizePlainText(image)}`)
+    .digest("hex");
+}
+
+async function encodeNovelAiVibeImage({ model = "", image = "", informationExtracted = 1 }) {
+  const normalizedImage = normalizePlainText(image);
+  if (!normalizedImage) {
+    return "";
+  }
+  const normalizedInformationExtracted = clampNumber(informationExtracted, 1, 0, 1);
+  const cacheKey = getNovelAiVibeCacheKey(model, normalizedImage, normalizedInformationExtracted);
+  const cached = novelAiVibeEncodeCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const correlationId = makeNovelAiCorrelationId();
+  const response = await fetchWithTimeout(`${getNovelAiImageApiBaseUrl()}/ai/encode-vibe`, {
+    method: "POST",
+    headers: {
+      ...getNovelAiAuthHeaders(),
+      "x-correlation-id": correlationId
+    },
+    body: JSON.stringify({
+      image: normalizedImage,
+      information_extracted: normalizedInformationExtracted,
+      model: normalizePlainText(model) || "nai-diffusion-4-5-full"
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Vibe Transfer 編碼失敗 (${correlationId})：${await readNovelAiErrorResponse(response)}`);
+  }
+  const vibeToken = Buffer.from(await response.arrayBuffer()).toString("base64");
+  if (!vibeToken) {
+    throw new Error(`Vibe Transfer 編碼失敗 (${correlationId})：NovelAI 沒有回傳可用資料。`);
+  }
+  novelAiVibeEncodeCache.set(cacheKey, vibeToken);
+  return vibeToken;
+}
+
+async function encodeNovelAiV4Vibes(apiPayload = {}) {
+  const model = normalizePlainText(apiPayload.model);
+  const parameters = apiPayload.parameters && typeof apiPayload.parameters === "object"
+    ? apiPayload.parameters
+    : {};
+  const referenceImages = Array.isArray(parameters.reference_image_multiple)
+    ? parameters.reference_image_multiple
+    : [];
+  if (!isNovelAiV4Model(model) || referenceImages.length === 0) {
+    return apiPayload;
+  }
+  const informationExtracted = Array.isArray(parameters.reference_information_extracted_multiple)
+    ? parameters.reference_information_extracted_multiple
+    : [];
+  parameters.reference_image_multiple = await Promise.all(referenceImages.map((image, index) =>
+    encodeNovelAiVibeImage({
+      model,
+      image,
+      informationExtracted: informationExtracted[index] ?? 1
+    })
+  ));
+  delete parameters.reference_information_extracted_multiple;
+  delete parameters.uncond_per_vibe;
+  delete parameters.wonky_vibe_correlation;
+  parameters.normalize_reference_strength_multiple = parameters.normalize_reference_strength_multiple !== false;
+  apiPayload.parameters = parameters;
+  return apiPayload;
 }
 
 function normalizeNovelAiBoolean(value, fallback = false) {
@@ -2363,6 +2436,7 @@ function normalizeNovelAiFixedPromptSnippets(value = []) {
 
 function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}) {
   const charCaptions = characters
+    .filter((character) => character?.enabled !== false)
     .map((character) => {
       const caption = normalizePlainText(options.negative ? character.negativePrompt : character.prompt);
       if (!caption) {
@@ -2856,6 +2930,7 @@ async function generateNovelAiImages(body = {}) {
   if (!settings.prompt) {
     throw new Error("Prompt 不可空白。");
   }
+  await encodeNovelAiV4Vibes(apiPayload);
   const correlationId = makeNovelAiCorrelationId();
   const response = await fetchWithTimeout(`${getNovelAiImageApiBaseUrl()}/ai/generate-image`, {
     method: "POST",
@@ -8880,6 +8955,7 @@ let discordConnected = false;
 let activeDiscordClient = null;
 let restartScheduled = false;
 let stateWriteQueue = Promise.resolve();
+const novelAiVibeEncodeCache = new Map();
 
 function scheduleServerRestart() {
   if (restartScheduled) {
