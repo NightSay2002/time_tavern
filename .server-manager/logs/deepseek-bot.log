@@ -1,0 +1,63 @@
+
+--- 2026-06-18 05:10:43 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+- IP: http://10.14.0.2:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+
+--- 2026-06-19 05:10:40 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 登入失敗： ConnectTimeoutError: Connect Timeout Error (attempted address: discord.com:443, timeout: 10000ms)
+    at onConnectTimeout (node:internal/deps/undici/undici:1690:23)
+    at Immediate._onImmediate (node:internal/deps/undici/undici:1671:11)
+    at process.processImmediate (node:internal/timers:504:21) {
+  code: 'UND_ERR_CONNECT_TIMEOUT'
+}
+
+--- 2026-06-19 12:11:31 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+- IP: http://10.14.0.2:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+
+--- 2026-06-19 12:13:20 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+- IP: http://10.14.0.2:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+
+--- 2026-06-19 12:13:33 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+- IP: http://10.14.0.2:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式

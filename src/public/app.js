@@ -342,6 +342,30 @@ const CHAT_COMMAND_MENU_ITEMS = [
     ]
   },
   {
+    id: "quick-next-scene",
+    command: "｛推进剧情到下一个场景｝",
+    title: "推进剧情到下一个场景",
+    description: "填入快捷劇情指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "｛推进剧情到下一个场景｝"
+  },
+  {
+    id: "quick-time-passes",
+    command: "｛时间流逝——｝",
+    title: "时间流逝——",
+    description: "填入時間流逝快捷指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "｛时间流逝——｝"
+  },
+  {
+    id: "quick-continue",
+    command: "｛繼續｝",
+    title: "繼續",
+    description: "填入繼續快捷指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "｛繼續｝"
+  },
+  {
     id: "help",
     command: "/ai_help",
     title: "查看可用指令",

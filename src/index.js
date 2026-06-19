@@ -53,6 +53,9 @@ const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
 const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
+const DISCORD_LOGIN_RETRY_INITIAL_MS = envNumber("DISCORD_LOGIN_RETRY_INITIAL_MS", 15_000);
+const DISCORD_LOGIN_RETRY_MAX_MS = envNumber("DISCORD_LOGIN_RETRY_MAX_MS", 300_000);
+const DISCORD_LOGIN_RETRY_MAX_ATTEMPTS = envNumber("DISCORD_LOGIN_RETRY_MAX_ATTEMPTS", 0);
 const NOVELAI_IMAGE_API_DEFAULT_BASE_URL = "https://image.novelai.net";
 const NOVELAI_PRIMARY_API_DEFAULT_BASE_URL = "https://api.novelai.net";
 const NOVELAI_REQUEST_TIMEOUT_MS = envNumber("NOVELAI_REQUEST_TIMEOUT_MS", 600000);
@@ -90,6 +93,29 @@ const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
   [ASSISTANT_FEEDBACK_LIKE]: "【user 喜歡你這次的正文輸出】",
   [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
 };
+const QUICK_SEND_TEMPLATES = [
+  {
+    id: "next_scene",
+    label: "｛推进剧情到下一个场景｝",
+    prefix: "｛推进剧情到下一个场景",
+    suffix: "｝",
+    allowDetails: true
+  },
+  {
+    id: "time_passes",
+    label: "｛时间流逝——｝",
+    prefix: "｛时间流逝——",
+    suffix: "｝",
+    allowDetails: true
+  },
+  {
+    id: "continue",
+    label: "｛繼續｝",
+    prefix: "｛繼續",
+    suffix: "｝",
+    allowDetails: false
+  }
+];
 const CHAT_API_COST_PRICING = [
   { label: "DeepSeek-V4-Pro", aliases: ["deepseek-v4-pro"], currency: "CNY", inputCacheHitPerMillion: 0.025, inputCacheMissPerMillion: 3, outputPerMillion: 6 },
   { label: "DeepSeek-V4-Flash", aliases: ["deepseek-v4-flash"], currency: "CNY", inputCacheHitPerMillion: 0.02, inputCacheMissPerMillion: 1, outputPerMillion: 2 },
@@ -677,6 +703,34 @@ const DISCORD_SLASH_COMMANDS = [
         description: "推演要求，例如劇情方向、互動重點或限制",
         type: ApplicationCommandOptionType.String,
         required: true
+      }
+    ]
+  },
+  {
+    name: "quick_send",
+    description: "快速發送常用劇情指令",
+    options: [
+      {
+        name: "template",
+        description: "選擇要發送的快捷指令",
+        type: ApplicationCommandOptionType.String,
+        required: true,
+        choices: QUICK_SEND_TEMPLATES.map((template) => ({
+          name: template.label,
+          value: template.id
+        }))
+      },
+      {
+        name: "inside",
+        description: "只限前兩個模板：填入括號內，例如 xxxx",
+        type: ApplicationCommandOptionType.String,
+        required: false
+      },
+      {
+        name: "message",
+        description: "只限前兩個模板：另起一行追加內容，例如 zzzzz",
+        type: ApplicationCommandOptionType.String,
+        required: false
       }
     ]
   },
@@ -8953,9 +9007,18 @@ if (sanitizeImageGenerationCompressionState(state)) {
 }
 let discordConnected = false;
 let activeDiscordClient = null;
+let discordLoginRetryTimer = null;
 let restartScheduled = false;
 let stateWriteQueue = Promise.resolve();
 const novelAiVibeEncodeCache = new Map();
+
+function clearDiscordLoginRetryTimer() {
+  if (!discordLoginRetryTimer) {
+    return;
+  }
+  clearTimeout(discordLoginRetryTimer);
+  discordLoginRetryTimer = null;
+}
 
 function scheduleServerRestart() {
   if (restartScheduled) {
@@ -8981,6 +9044,7 @@ function scheduleServerRestart() {
     };
 
     try {
+      clearDiscordLoginRetryTimer();
       activeDiscordClient?.destroy?.();
     } catch (error) {
       console.warn(`Discord bot 關閉失敗：${safeText(error?.message) || "未知錯誤"}`);
@@ -9591,6 +9655,7 @@ function getDiscordGuidance() {
     "請先用邀請連結把 Bot 加到伺服器，之後在 Discord 使用 Slash 指令。",
     authorizeUrl ? `邀請 Bot：${authorizeUrl}` : "",
     "主對話：`/ai content:你的內容`，或 `/ai file:上傳txt檔`",
+    "快速發送：`/quick_send template:｛推进剧情到下一个场景｝ inside:補充 message:下一行內容`",
     "開始對話：`/ai_start`，之後該頻道可以直接輸入對話，不需要 `!ai`",
     "停止生成：`/stop`，或在已啟用頻道輸入 `/stop`",
     "玩家座位：`/player_set number:2`，或在已啟用頻道輸入 `/player_set 2`",
@@ -9602,6 +9667,34 @@ function getDiscordGuidance() {
     `文字指令：伺服器頻道使用 \`${COMMAND_PREFIX} 指令\`；DM 若要執行文字指令也請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
     "網頁也可以直接在對話輸入框送出本地對話。"
   ].filter(Boolean).join("\n");
+}
+
+function getQuickSendTemplate(templateId = "") {
+  const normalizedId = safeText(templateId).toLowerCase();
+  return QUICK_SEND_TEMPLATES.find((template) => template.id === normalizedId) || null;
+}
+
+function buildQuickSendContent(templateId = "", inside = "", message = "") {
+  const template = getQuickSendTemplate(templateId);
+  if (!template) {
+    return { ok: false, error: "未知的快速發送模板。" };
+  }
+
+  const insideText = safeText(inside);
+  const messageText = safeText(message);
+  if (!template.allowDetails && (insideText || messageText)) {
+    return {
+      ok: false,
+      error: `${template.label} 目前不支援 inside/message 補充，請清空補充欄位後再發送。`
+    };
+  }
+
+  const commandText = `${template.prefix}${template.allowDetails ? insideText : ""}${template.suffix}`;
+  return {
+    ok: true,
+    template,
+    content: [commandText, template.allowDetails ? messageText : ""].filter(Boolean).join("\n")
+  };
 }
 
 function getCurrentConversationTargetLabel(currentState) {
@@ -11694,6 +11787,43 @@ async function handleSlashCommand(interaction) {
     return;
   }
 
+  if (name === "quick_send") {
+    const templateId = interaction.options.getString("template") || "";
+    const inside = interaction.options.getString("inside") || "";
+    const message = interaction.options.getString("message") || "";
+    const built = buildQuickSendContent(templateId, inside, message);
+    if (!built.ok) {
+      await safeSendInteractionText(interaction, built.error, { ephemeral: true });
+      return;
+    }
+    if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
+      await safeSendInteractionText(
+        interaction,
+        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
+        { ephemeral: true }
+      );
+      return;
+    }
+
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
+    const turn = await processDiscordChatTurn({
+      channel: interaction.channel,
+      channelId: interaction.channelId,
+      guildId: interaction.guildId,
+      userId: interaction.user.id,
+      userName: interaction.user.username,
+      userContent: built.content
+    });
+    const combinedReply = turn.pendingOpening
+      ? `${turn.pendingOpening}\n\n${turn.replyText}`
+      : turn.replyText;
+    const sentMessages = await sendInteractionLongReply(interaction, combinedReply);
+    await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
+    return;
+  }
+
   if (name === "ai_start") {
     if (!getActiveRoleCard(state) && !isCharacterCardCreationAssistantActive(state)) {
       await safeSendInteractionText(
@@ -11793,6 +11923,104 @@ async function handleSlashCommand(interaction) {
   }
 }
 
+function getDiscordErrorCodes(error) {
+  return [
+    error?.code,
+    error?.cause?.code,
+    error?.rawError?.code,
+    error?.status,
+    error?.statusCode,
+    error?.rawError?.status
+  ].filter((value) => value !== undefined && value !== null && value !== "").map((value) => String(value));
+}
+
+function getDiscordErrorText(error) {
+  return [
+    error?.name,
+    error?.message,
+    error?.cause?.name,
+    error?.cause?.message,
+    error?.rawError?.message
+  ].filter(Boolean).join(" ");
+}
+
+function isRetryableDiscordLoginError(error) {
+  const codes = getDiscordErrorCodes(error);
+  const text = getDiscordErrorText(error);
+  if (
+    codes.some((code) => /^(401|403|TokenInvalid|DISALLOWED_INTENTS)$/iu.test(code)) ||
+    /invalid token|unauthori[sz]ed|forbidden|disallowed intents|privileged intent/iu.test(text)
+  ) {
+    return false;
+  }
+
+  const status = Number(error?.status ?? error?.statusCode ?? error?.rawError?.status);
+  if (Number.isFinite(status) && status >= 500) {
+    return true;
+  }
+
+  return codes.some((code) =>
+    /^(UND_ERR_|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)/iu.test(code)
+  ) || /timeout|timed out|network|fetch failed|socket|temporarily unavailable|aborted/iu.test(text);
+}
+
+function getDiscordLoginRetryDelayMs(attempt) {
+  const initial = Number.isFinite(DISCORD_LOGIN_RETRY_INITIAL_MS) && DISCORD_LOGIN_RETRY_INITIAL_MS > 0
+    ? DISCORD_LOGIN_RETRY_INITIAL_MS
+    : 15_000;
+  const max = Number.isFinite(DISCORD_LOGIN_RETRY_MAX_MS) && DISCORD_LOGIN_RETRY_MAX_MS > 0
+    ? Math.max(initial, DISCORD_LOGIN_RETRY_MAX_MS)
+    : 300_000;
+  const exponent = Math.max(0, Math.min(Math.floor(Number(attempt || 1)) - 1, 8));
+  return Math.min(max, initial * (2 ** exponent));
+}
+
+function formatDiscordRetryDelay(ms) {
+  const seconds = Math.max(1, Math.round(Number(ms || 0) / 1000));
+  if (seconds < 60) {
+    return `${seconds} 秒`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = seconds % 60;
+  return restSeconds ? `${minutes} 分 ${restSeconds} 秒` : `${minutes} 分鐘`;
+}
+
+function startDiscordLoginWithRetry(discordClient) {
+  let attempt = 0;
+  const maxAttempts = Math.max(0, Math.floor(Number(DISCORD_LOGIN_RETRY_MAX_ATTEMPTS || 0)));
+
+  const login = async () => {
+    if (activeDiscordClient !== discordClient || discordClient.isReady?.()) {
+      return;
+    }
+    attempt += 1;
+    try {
+      await discordClient.login(DISCORD_BOT_TOKEN);
+    } catch (error) {
+      discordConnected = false;
+      const retryable = isRetryableDiscordLoginError(error);
+      const reachedAttemptLimit = maxAttempts > 0 && attempt >= maxAttempts;
+      console.error(`Discord bot 登入失敗（第 ${attempt} 次）：`, error);
+      if (!retryable) {
+        console.error("Discord bot 登入錯誤看起來不是暫時性網路問題，已停止自動重試。請檢查 Bot Token、Intents 或權限設定。");
+        return;
+      }
+      if (reachedAttemptLimit) {
+        console.error(`Discord bot 登入重試已達上限 ${maxAttempts} 次，已停止自動重試。`);
+        return;
+      }
+
+      const delayMs = getDiscordLoginRetryDelayMs(attempt);
+      console.warn(`Discord bot 會在 ${formatDiscordRetryDelay(delayMs)} 後重試登入。`);
+      clearDiscordLoginRetryTimer();
+      discordLoginRetryTimer = setTimeout(login, delayMs);
+      discordLoginRetryTimer.unref?.();
+    }
+  };
+
+  void login();
+}
+
 function setupDiscordBot() {
   if (!DISCORD_BOT_TOKEN) {
     console.log("Discord bot 未啟用：缺少 DISCORD_BOT_TOKEN，僅啟動網頁管理端。");
@@ -11813,6 +12041,7 @@ function setupDiscordBot() {
   activeDiscordClient = discordClient;
 
   discordClient.on("clientReady", () => {
+    clearDiscordLoginRetryTimer();
     discordConnected = true;
     console.log(`Discord bot 已上線：${discordClient.user?.tag || "unknown"}`);
     void registerSlashCommands(discordClient);
@@ -12053,12 +12282,7 @@ function setupDiscordBot() {
     discordConnected = false;
   });
 
-  discordClient
-    .login(DISCORD_BOT_TOKEN)
-    .catch((error) => {
-      discordConnected = false;
-      console.error("Discord bot 登入失敗：", error);
-    });
+  startDiscordLoginWithRetry(discordClient);
 }
 
 server.listen(PORT, () => {

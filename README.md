@@ -103,6 +103,9 @@ CHAT_API_MODEL=deepseek-reasoner
 | `DISCORD_GUILD_ID` | 空 | 指定 guild 立即註冊 Slash 指令；空白時註冊全域指令。 |
 | `COMMAND_PREFIX` | `!ai` | Discord 文字指令前綴。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
+| `DISCORD_LOGIN_RETRY_INITIAL_MS` | `15000` | Discord 登入遇到暫時性網路錯誤時，第一次重試等待時間。 |
+| `DISCORD_LOGIN_RETRY_MAX_MS` | `300000` | Discord 登入重試退避上限。 |
+| `DISCORD_LOGIN_RETRY_MAX_ATTEMPTS` | `0` | Discord 登入最多重試次數；`0` 代表不限次數。 |
 | `WEB_USER_NAME_TEMPLATE` | `{{user}}` | 網頁聊天面板的使用者名字模板。 |
 | `WEB_AI_NAME_TEMPLATE` | `{{chur}}` | 網頁聊天面板的 AI 名字模板。 |
 | `WEB_USER_AVATAR_IMAGE` | 空 | 使用者頭像；UI 可直接上傳。 |
@@ -312,6 +315,8 @@ metadata 會保存：
 
 Bot 邀請連結由網頁產生，包含 `bot` 與 `applications.commands` scope，以及基本聊天、反應、附件、讀取歷史、thread 發訊等權限。若要一般訊息也能觸發對話，Discord Developer Portal 需要開啟 Message Content Intent。
 
+啟動時如果 Discord 連線偶發 timeout，例如 `UND_ERR_CONNECT_TIMEOUT`，server 會照常提供本地網頁，Bot 會在背景自動重試登入。Token 無效、Intents 不允許、401/403 這類設定錯誤不會無限重試，會在 console 明確提示需要檢查設定。
+
 Slash 指令：
 
 | 指令 | 參數 | 說明 |
@@ -324,6 +329,7 @@ Slash 指令：
 | `/reload` | `feedback` | 移除最新 AI 回覆並重跑，可附改進要求。 |
 | `/replay` | `message_number`、`content` | 從指定訊息編號建立分支並重寫後續。 |
 | `/run_time` | `number`、`message` | 按要求自動推演多輪，角色卡助手模式不支援。 |
+| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令。`inside` 與 `message` 目前只支援 `｛推进剧情到下一个场景｝`、`｛时间流逝——｝`。 |
 | `/ai_help` | 無 | 顯示可用指令。 |
 | `/session_save` | `name` | 保存目前整體對話。 |
 | `/session_list` | 無 | 列出對話存檔。 |
