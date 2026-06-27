@@ -11007,23 +11007,78 @@ function getDiscordUserAvatarUrl(user) {
   }
 }
 
-async function sendInteractionLongReply(interaction, text) {
-  const chunks = splitForDiscord(text, 1800);
+async function getInteractionFallbackChannel(interaction) {
+  if (interaction?.channel && typeof interaction.channel.send === "function") {
+    return interaction.channel;
+  }
+  const channelId = safeText(interaction?.channelId);
+  if (!channelId || !activeDiscordClient) {
+    return null;
+  }
+  try {
+    const channel = await activeDiscordClient.channels.fetch(channelId);
+    return channel && typeof channel.send === "function" ? channel : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatInteractionExpiryLog(interaction, fallbackSent = false) {
+  const commandName = safeText(interaction?.commandName) || "unknown";
+  const ageMs = Number(interaction?.createdTimestamp)
+    ? Math.max(0, Date.now() - Number(interaction.createdTimestamp))
+    : null;
+  const ageText = Number.isFinite(ageMs) ? `，age=${Math.round(ageMs / 1000)}s` : "";
+  return fallbackSent
+    ? `Discord interaction 已過期，已改用頻道訊息補發。command=${commandName}${ageText}`
+    : `Discord interaction 已過期，訊息無法送出。command=${commandName}${ageText}`;
+}
+
+async function sendInteractionChannelFallback(interaction, text) {
+  const channel = await getInteractionFallbackChannel(interaction);
+  if (!channel) {
+    return [];
+  }
   const sentMessages = [];
-  if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply();
-  }
-  const firstMessage = await interaction.editReply(chunks[0] || " ");
-  if (firstMessage) {
-    sentMessages.push(firstMessage);
-  }
-  for (let i = 1; i < chunks.length; i += 1) {
-    const sent = await interaction.followUp(chunks[i] || " ");
+  const chunks = splitForDiscord(text, 1800);
+  for (const chunk of chunks) {
+    const sent = await channel.send(chunk || " ");
     if (sent) {
       sentMessages.push(sent);
     }
   }
   return sentMessages;
+}
+
+async function sendInteractionLongReply(interaction, text) {
+  const chunks = splitForDiscord(text, 1800);
+  const sentMessages = [];
+  try {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
+    const firstMessage = interaction.replied
+      ? await interaction.followUp(chunks[0] || " ")
+      : await interaction.editReply(chunks[0] || " ");
+    if (firstMessage) {
+      sentMessages.push(firstMessage);
+    }
+    for (let i = 1; i < chunks.length; i += 1) {
+      const sent = await interaction.followUp(chunks[i] || " ");
+      if (sent) {
+        sentMessages.push(sent);
+      }
+    }
+    return sentMessages;
+  } catch (error) {
+    if (!isUnknownInteractionError(error)) {
+      throw error;
+    }
+    const remainingText = chunks.slice(sentMessages.length).join("\n");
+    const fallbackMessages = await sendInteractionChannelFallback(interaction, remainingText || text);
+    console.warn(formatInteractionExpiryLog(interaction, fallbackMessages.length > 0));
+    return [...sentMessages, ...fallbackMessages];
+  }
 }
 
 function isUnknownInteractionError(error) {
@@ -11035,7 +11090,7 @@ function isUnknownInteractionError(error) {
 }
 
 function shouldDeferSlashCommandEarly(commandName = "") {
-  return ["ai", "ai_start", "reload", "replay", "run_time"].includes(safeText(commandName));
+  return ["ai", "ai_start", "reload", "replay", "run_time", "quick_send"].includes(safeText(commandName));
 }
 
 async function safeSendInteractionError(interaction, content) {
@@ -11059,7 +11114,12 @@ async function safeSendInteractionText(interaction, content, options = {}) {
     await interaction.reply(payload);
   } catch (error) {
     if (isUnknownInteractionError(error)) {
-      console.warn("Discord interaction 已過期，訊息無法送出。");
+      if (!ephemeral) {
+        const fallbackMessages = await sendInteractionChannelFallback(interaction, content);
+        console.warn(formatInteractionExpiryLog(interaction, fallbackMessages.length > 0));
+        return;
+      }
+      console.warn(formatInteractionExpiryLog(interaction));
       return;
     }
     throw error;
