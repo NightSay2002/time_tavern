@@ -5037,6 +5037,9 @@ body.is-novelai-drop-active .nai-drop-overlay {
   display: grid;
   place-items: center;
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   border-radius: 16px;
   background:
     linear-gradient(45deg, rgba(255, 255, 255, 0.08) 25%, transparent 25%),
@@ -5048,12 +5051,24 @@ body.is-novelai-drop-active .nai-drop-overlay {
   background-position: 0 0, 0 15px, 15px -15px, -15px 0;
 }
 
+.nai-image-viewer-stage.is-dragging {
+  cursor: grabbing;
+}
+
 .nai-image-viewer-stage img {
   max-width: 100%;
   max-height: 100%;
   display: block;
   object-fit: contain;
   border-radius: 10px;
+  transform-origin: center center;
+  transition: transform 80ms ease-out;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.nai-image-viewer-stage.is-dragging img {
+  transition: none;
 }
 
 @media (max-width: 980px) {

@@ -59,6 +59,7 @@ const el = {
   novelAiContentText: document.getElementById("novelAiContentText"),
   novelAiImageViewerDialog: document.getElementById("novelAiImageViewerDialog"),
   novelAiImageViewerTitle: document.getElementById("novelAiImageViewerTitle"),
+  novelAiImageViewerStage: document.getElementById("novelAiImageViewerStage"),
   novelAiImageViewerImage: document.getElementById("novelAiImageViewerImage"),
   toast: document.getElementById("toast")
 };
@@ -77,6 +78,17 @@ let novelAiRandomPromptSnippets = [];
 let novelAiLoopRunning = false;
 let novelAiLoopStopRequested = false;
 let novelAiLoopDelayTimer = null;
+let novelAiImageViewerState = {
+  scale: 1,
+  x: 0,
+  y: 0,
+  dragging: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  startPanX: 0,
+  startPanY: 0
+};
 
 const NOVELAI_SETTINGS_STORAGE_KEY = "time_tavern_novelai_settings";
 const NOVELAI_FIXED_PROMPT_STORAGE_KEY = "time_tavern_novelai_fixed_prompt_snippets";
@@ -196,6 +208,102 @@ function closeImageViewerDialog() {
   } else {
     el.novelAiImageViewerDialog?.removeAttribute("open");
   }
+}
+
+function applyImageViewerTransform() {
+  if (!el.novelAiImageViewerImage) {
+    return;
+  }
+  const { scale, x, y } = novelAiImageViewerState;
+  el.novelAiImageViewerImage.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
+}
+
+function resetImageViewerTransform() {
+  novelAiImageViewerState = {
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragging: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startPanX: 0,
+    startPanY: 0
+  };
+  el.novelAiImageViewerStage?.classList.remove("is-dragging");
+  applyImageViewerTransform();
+}
+
+function zoomImageViewerAt(clientX, clientY, nextScale) {
+  if (!el.novelAiImageViewerStage) {
+    return;
+  }
+  const minScale = 0.5;
+  const maxScale = 8;
+  const currentScale = novelAiImageViewerState.scale || 1;
+  const scale = Math.min(maxScale, Math.max(minScale, nextScale));
+  if (Math.abs(scale - currentScale) < 0.001) {
+    return;
+  }
+  const rect = el.novelAiImageViewerStage.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  const imagePointX = (clientX - centerX - novelAiImageViewerState.x) / currentScale;
+  const imagePointY = (clientY - centerY - novelAiImageViewerState.y) / currentScale;
+  novelAiImageViewerState.x = clientX - centerX - imagePointX * scale;
+  novelAiImageViewerState.y = clientY - centerY - imagePointY * scale;
+  novelAiImageViewerState.scale = scale;
+  applyImageViewerTransform();
+}
+
+function onImageViewerWheel(event) {
+  if (!el.novelAiImageViewerDialog?.open) {
+    return;
+  }
+  event.preventDefault();
+  const direction = event.deltaY < 0 ? 1 : -1;
+  const factor = direction > 0 ? 1.12 : 1 / 1.12;
+  zoomImageViewerAt(event.clientX, event.clientY, novelAiImageViewerState.scale * factor);
+}
+
+function onImageViewerPointerDown(event) {
+  if (!el.novelAiImageViewerDialog?.open || event.button && event.button !== 0) {
+    return;
+  }
+  event.preventDefault();
+  novelAiImageViewerState.dragging = true;
+  novelAiImageViewerState.pointerId = event.pointerId;
+  novelAiImageViewerState.startX = event.clientX;
+  novelAiImageViewerState.startY = event.clientY;
+  novelAiImageViewerState.startPanX = novelAiImageViewerState.x;
+  novelAiImageViewerState.startPanY = novelAiImageViewerState.y;
+  el.novelAiImageViewerStage?.classList.add("is-dragging");
+  el.novelAiImageViewerStage?.setPointerCapture?.(event.pointerId);
+}
+
+function onImageViewerPointerMove(event) {
+  if (!novelAiImageViewerState.dragging || novelAiImageViewerState.pointerId !== event.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  novelAiImageViewerState.x = novelAiImageViewerState.startPanX + event.clientX - novelAiImageViewerState.startX;
+  novelAiImageViewerState.y = novelAiImageViewerState.startPanY + event.clientY - novelAiImageViewerState.startY;
+  applyImageViewerTransform();
+}
+
+function stopImageViewerDrag(event = {}) {
+  if (!novelAiImageViewerState.dragging) {
+    return;
+  }
+  if (event.pointerId !== undefined && novelAiImageViewerState.pointerId !== event.pointerId) {
+    return;
+  }
+  if (el.novelAiImageViewerStage?.hasPointerCapture?.(novelAiImageViewerState.pointerId)) {
+    el.novelAiImageViewerStage.releasePointerCapture(novelAiImageViewerState.pointerId);
+  }
+  novelAiImageViewerState.dragging = false;
+  novelAiImageViewerState.pointerId = null;
+  el.novelAiImageViewerStage?.classList.remove("is-dragging");
 }
 
 async function request(url, options = {}) {
@@ -1937,6 +2045,7 @@ function openImageViewerDialog(item = {}) {
   const title = itemPrompt(item) || item.fileName || "NovelAI Image";
   el.novelAiImageViewerImage.src = imageSrc;
   el.novelAiImageViewerImage.alt = title;
+  resetImageViewerTransform();
   if (el.novelAiImageViewerTitle) {
     el.novelAiImageViewerTitle.textContent = truncateText(title, 80);
   }
@@ -3066,6 +3175,15 @@ function bindEvents() {
   bindDialogBackdropClose(el.novelAiDropChoiceDialog, { close: closeDropChoiceDialog });
   bindDialogBackdropClose(el.novelAiContentDialog, { close: closeImageContentDialog });
   bindDialogBackdropClose(el.novelAiImageViewerDialog, { close: closeImageViewerDialog });
+  if (el.novelAiImageViewerStage) {
+    el.novelAiImageViewerStage.addEventListener("wheel", onImageViewerWheel, { passive: false });
+    el.novelAiImageViewerStage.addEventListener("pointerdown", onImageViewerPointerDown);
+    el.novelAiImageViewerStage.addEventListener("pointermove", onImageViewerPointerMove);
+    el.novelAiImageViewerStage.addEventListener("pointerup", stopImageViewerDrag);
+    el.novelAiImageViewerStage.addEventListener("pointercancel", stopImageViewerDrag);
+    el.novelAiImageViewerStage.addEventListener("lostpointercapture", stopImageViewerDrag);
+    el.novelAiImageViewerStage.addEventListener("dblclick", resetImageViewerTransform);
+  }
   const onGlobalDragEnter = (event) => {
     if (!transferHasImage(event.dataTransfer)) {
       return;
