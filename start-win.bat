@@ -37,7 +37,7 @@ if not exist "node_modules\discord.js" (
   )
 )
 
-start "" "http://localhost:%PORT_VALUE%"
+start "" cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:%PORT_VALUE%"
 call npm start
 
 echo.

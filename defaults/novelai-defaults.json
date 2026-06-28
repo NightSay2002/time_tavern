@@ -2,13 +2,13 @@
   "version": 1,
   "settings": {
     "model": "nai-diffusion-4-5-full",
-    "prompt": "||畫師抽取||,{{close-up}},cowboy_shot,||質量詞||",
-    "promptTemplate": "||畫師抽取||,{{close-up}},cowboy_shot,||質量詞||",
+    "prompt": "||畫師抽取||,solo,1girl,{{close-up}},cowboy_shot,||質量詞||",
+    "promptTemplate": "||畫師抽取||,solo,1girl,{{close-up}},cowboy_shot,||質量詞||",
     "fixedPromptSnippets": [
       {
         "id": "nai_fixed_1780304490599_ehopvfux",
         "name": "質量詞",
-        "prompt": "year 2025,year 2024,1.3::best quality,amazing quality,very aesthetic,highres,incredibly,absurdres,high detail,photorealistic,absurdres ::,5::masterpiece,best quality ::,-3.0::mature ::,-3::simple illustration ::,-6.0::artist collaboration ::"
+        "prompt": "year 2025,year 2024,1.3::best quality,amazing quality,::,5::masterpiece,best quality ::,-3.0::mature ::,-3::simple illustration ::,-6.0::artist collaboration ::"
       },
       {
         "id": "nai_fixed_1781576310014_cpbylq7y",
@@ -492,7 +492,7 @@
     "seed": 114514,
     "sampler": "k_euler_ancestral",
     "noiseSchedule": "karras",
-    "loopCount": 50,
+    "loopCount": 20,
     "sizePreset": "portrait",
     "qualityToggle": true,
     "baseImage": "",
@@ -500,10 +500,10 @@
     "noise": 0,
     "characters": [
       {
-        "id": "character_1",
+        "id": "nai_char_1782631148740_0mcga3ii",
         "name": "Character 1",
-        "prompt": "black_bikini,grey_eyes,hair_over_shoulder,long_hair,black_hair,grey_halo,eyewear_on_head,small_breasts,{{side_braid}},3.0::braid_over_shoulder::,sandals,sunglasses,cleavage_cutout,butterfly_hair_ornament,navel,black_robe,melting_popsicle,food_on_breasts,popsicle_in_mouth,",
-        "negativePrompt": "twintails,{{double_bun}},black_gloves,gloves",
+        "prompt": "girl,loli,solo, anime illustration,white hair, long hair, very long hair, blunt bangs, pink eyes, pale skin, expressionless, half-closed eyes, looking at viewer,",
+        "negativePrompt": "",
         "enabled": true,
         "x": 0.5,
         "y": 0.5
@@ -518,5 +518,5 @@
       "images": []
     }
   },
-  "updatedAt": "2026-06-21T14:00:24.689Z"
+  "updatedAt": "2026-06-28T07:25:44.735Z"
 }
