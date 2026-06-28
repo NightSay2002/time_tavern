@@ -57,6 +57,9 @@ const el = {
   novelAiDropChoiceText: document.getElementById("novelAiDropChoiceText"),
   novelAiContentDialog: document.getElementById("novelAiContentDialog"),
   novelAiContentText: document.getElementById("novelAiContentText"),
+  novelAiImageViewerDialog: document.getElementById("novelAiImageViewerDialog"),
+  novelAiImageViewerTitle: document.getElementById("novelAiImageViewerTitle"),
+  novelAiImageViewerImage: document.getElementById("novelAiImageViewerImage"),
   toast: document.getElementById("toast")
 };
 
@@ -124,6 +127,76 @@ const SIZE_PRESETS = {
   portrait: { width: 832, height: 1216 },
   landscape: { width: 1216, height: 832 }
 };
+
+function isDialogBackdropPointer(dialog, event) {
+  if (!dialog || !event || !dialog.open) {
+    return false;
+  }
+  if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+    return false;
+  }
+  const rect = dialog.getBoundingClientRect();
+  return event.clientX < rect.left ||
+    event.clientX > rect.right ||
+    event.clientY < rect.top ||
+    event.clientY > rect.bottom;
+}
+
+function closeDialogFromBackdrop(dialog, options = {}) {
+  if (!dialog?.open) {
+    return;
+  }
+  if (typeof options.close === "function") {
+    options.close(dialog);
+  } else if (typeof dialog.close === "function") {
+    dialog.close();
+  } else {
+    dialog.removeAttribute("open");
+  }
+}
+
+function bindDialogBackdropClose(dialog, options = {}) {
+  if (!dialog) {
+    return;
+  }
+  let pointerStartedOnBackdrop = false;
+  dialog.addEventListener("pointerdown", (event) => {
+    if (event.button && event.button !== 0) {
+      pointerStartedOnBackdrop = false;
+      return;
+    }
+    pointerStartedOnBackdrop = isDialogBackdropPointer(dialog, event);
+  });
+  dialog.addEventListener("click", (event) => {
+    if (!pointerStartedOnBackdrop) {
+      return;
+    }
+    pointerStartedOnBackdrop = false;
+    if (!isDialogBackdropPointer(dialog, event)) {
+      return;
+    }
+    closeDialogFromBackdrop(dialog, options);
+  });
+  dialog.addEventListener("close", () => {
+    pointerStartedOnBackdrop = false;
+  });
+}
+
+function closeImageContentDialog() {
+  if (el.novelAiContentDialog?.open && typeof el.novelAiContentDialog.close === "function") {
+    el.novelAiContentDialog.close();
+  } else {
+    el.novelAiContentDialog?.removeAttribute("open");
+  }
+}
+
+function closeImageViewerDialog() {
+  if (el.novelAiImageViewerDialog?.open && typeof el.novelAiImageViewerDialog.close === "function") {
+    el.novelAiImageViewerDialog.close();
+  } else {
+    el.novelAiImageViewerDialog?.removeAttribute("open");
+  }
+}
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -1851,6 +1924,29 @@ function openImageContentDialog(item = {}) {
   }
 }
 
+function openImageViewerDialog(item = {}) {
+  const imageSrc = item.dataUrl || item.imageUrl || "";
+  if (!imageSrc) {
+    showToast("沒有可檢視的圖片。", "error");
+    return;
+  }
+  if (!el.novelAiImageViewerDialog || !el.novelAiImageViewerImage) {
+    window.open(imageSrc, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const title = itemPrompt(item) || item.fileName || "NovelAI Image";
+  el.novelAiImageViewerImage.src = imageSrc;
+  el.novelAiImageViewerImage.alt = title;
+  if (el.novelAiImageViewerTitle) {
+    el.novelAiImageViewerTitle.textContent = truncateText(title, 80);
+  }
+  if (typeof el.novelAiImageViewerDialog.showModal === "function") {
+    el.novelAiImageViewerDialog.showModal();
+  } else {
+    el.novelAiImageViewerDialog.setAttribute("open", "open");
+  }
+}
+
 function makeActionButton(text, className, handler) {
   const button = document.createElement("button");
   button.type = "button";
@@ -1880,6 +1976,8 @@ function renderMainImage(item = null) {
   img.src = item.dataUrl || item.imageUrl || "";
   img.alt = itemPrompt(item) || item.fileName || "NovelAI image";
   preview.appendChild(img);
+  preview.title = "點擊放大檢視";
+  preview.addEventListener("click", () => openImageViewerDialog(item));
   const settings = itemSettings(item);
   const meta = document.createElement("div");
   meta.className = "novelai-image-meta";
@@ -1890,6 +1988,7 @@ function renderMainImage(item = null) {
   const actions = document.createElement("div");
   actions.className = "novelai-image-actions";
   actions.append(
+    makeActionButton("放大", "secondary nai-view-action", () => openImageViewerDialog(item)),
     makeActionButton("內容", "secondary nai-content-action", () => openImageContentDialog(item)),
     makeActionButton("還原設定", "nai-restore-action", () => {
       applyMetadataToForm(item.metadata || item.settings || {});
@@ -2964,6 +3063,9 @@ function bindEvents() {
       await handleDropChoice(button.dataset.dropAction);
     }
   });
+  bindDialogBackdropClose(el.novelAiDropChoiceDialog, { close: closeDropChoiceDialog });
+  bindDialogBackdropClose(el.novelAiContentDialog, { close: closeImageContentDialog });
+  bindDialogBackdropClose(el.novelAiImageViewerDialog, { close: closeImageViewerDialog });
   const onGlobalDragEnter = (event) => {
     if (!transferHasImage(event.dataTransfer)) {
       return;

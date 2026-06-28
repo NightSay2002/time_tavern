@@ -228,6 +228,7 @@ const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
 const MODEL_TRIGGER_ACTION_CALL_API = "call_api";
 const MODEL_TRIGGER_ACTION_COPY_USER_INPUT = "copy_user_input";
+const DIALOG_BACKDROP_CLOSE_CONFIRM_TEXT = "尚未保存的內容會遺失，確定要關閉嗎？";
 const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
 const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
@@ -6077,6 +6078,66 @@ function openModularPromptDialog() {
   lockModularPromptPageScroll();
 }
 
+function isDialogBackdropPointer(dialog, event) {
+  if (!dialog || !event || !dialog.open) {
+    return false;
+  }
+  if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+    return false;
+  }
+  const rect = dialog.getBoundingClientRect();
+  return event.clientX < rect.left ||
+    event.clientX > rect.right ||
+    event.clientY < rect.top ||
+    event.clientY > rect.bottom;
+}
+
+function closeDialogFromBackdrop(dialog, options = {}) {
+  if (!dialog?.open) {
+    return;
+  }
+  if (options.confirmOnClose && !window.confirm(DIALOG_BACKDROP_CLOSE_CONFIRM_TEXT)) {
+    return;
+  }
+  if (typeof options.onBeforeClose === "function") {
+    options.onBeforeClose();
+  }
+  if (typeof options.close === "function") {
+    options.close(dialog);
+  } else if (typeof dialog.close === "function") {
+    dialog.close();
+  } else {
+    dialog.removeAttribute("open");
+  }
+}
+
+function bindDialogBackdropClose(dialog, options = {}) {
+  if (!dialog) {
+    return;
+  }
+  let pointerStartedOnBackdrop = false;
+  dialog.addEventListener("pointerdown", (event) => {
+    if (event.button && event.button !== 0) {
+      pointerStartedOnBackdrop = false;
+      return;
+    }
+    pointerStartedOnBackdrop = isDialogBackdropPointer(dialog, event);
+  });
+  dialog.addEventListener("click", (event) => {
+    if (!pointerStartedOnBackdrop) {
+      return;
+    }
+    pointerStartedOnBackdrop = false;
+    if (!isDialogBackdropPointer(dialog, event)) {
+      return;
+    }
+    closeDialogFromBackdrop(dialog, options);
+  });
+  dialog.addEventListener("close", () => {
+    pointerStartedOnBackdrop = false;
+  });
+}
+
 function createEditorEmptyHint(text = "") {
   const empty = document.createElement("p");
   empty.className = "form-hint";
@@ -9181,6 +9242,29 @@ function bindEvents() {
     el.modularPromptDialog.addEventListener("close", unlockModularPromptPageScroll);
     el.modularPromptDialog.addEventListener("cancel", unlockModularPromptPageScroll);
   }
+
+  [
+    el.roleCardDialog,
+    el.editAiDialog,
+    el.contextCompressionDialog,
+    el.timeTrackingDialog,
+    el.envSettingsDialog,
+    el.assistantPromptDialog,
+    el.modularPromptDialog
+  ].forEach((dialog) => bindDialogBackdropClose(dialog, { confirmOnClose: true }));
+
+  bindDialogBackdropClose(el.coverCropDialog, {
+    confirmOnClose: true,
+    onBeforeClose: resetCoverCropDialogState
+  });
+  bindDialogBackdropClose(el.editMessageDialog, {
+    confirmOnClose: true,
+    onBeforeClose: () => {
+      editingUserMessageId = "";
+    }
+  });
+  bindDialogBackdropClose(el.roleCardPickerDialog);
+  bindDialogBackdropClose(el.sessionPickerDialog);
 
 }
 
