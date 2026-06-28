@@ -76,6 +76,11 @@ body {
   overflow-x: hidden;
 }
 
+body.is-modal-scroll-locked {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 html[lang="zh-Hans"] .hero h1,
 html[lang="zh-Hans"] h2,
 html[lang="zh-Hans"] .role-card h3,

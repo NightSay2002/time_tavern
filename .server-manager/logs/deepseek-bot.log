@@ -318,3 +318,15 @@ Discord bot 登入失敗（第 2 次）： ConnectTimeoutError: Connect Timeout 
 Discord bot 會在 30 秒 後重試登入。
 Discord bot 已上線：小時分#0046
 Slash 指令已註冊到全域應用程式
+回覆字數不足 300 字，開始第 1 次補寫。
+
+--- 2026-06-28 05:10:59 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式

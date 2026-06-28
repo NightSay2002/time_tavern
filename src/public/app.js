@@ -107,6 +107,7 @@
   contextCompressionProfileSelect: document.getElementById("contextCompressionProfileSelect"),
   contextCompressionContentView: document.getElementById("contextCompressionContentView"),
   saveContextCompressionDialog: document.getElementById("saveContextCompressionDialog"),
+  exportContextCompressionDialog: document.getElementById("exportContextCompressionDialog"),
   closeContextCompressionDialog: document.getElementById("closeContextCompressionDialog"),
 
   timeTrackingDialog: document.getElementById("timeTrackingDialog"),
@@ -159,6 +160,9 @@
   editCompressionProfileBtn: document.getElementById("editCompressionProfileBtn"),
   addCompressionProfileBtn: document.getElementById("addCompressionProfileBtn"),
   deleteCompressionProfileBtn: document.getElementById("deleteCompressionProfileBtn"),
+  exportCompressionProfileBtn: document.getElementById("exportCompressionProfileBtn"),
+  importCompressionProfileBtn: document.getElementById("importCompressionProfileBtn"),
+  compressionProfileImportFile: document.getElementById("compressionProfileImportFile"),
   compressionProfileName: document.getElementById("compressionProfileName"),
   compressionProfileEnabled: document.getElementById("compressionProfileEnabled"),
   compressionProfileContextScope: document.getElementById("compressionProfileContextScope"),
@@ -212,6 +216,7 @@ let activeChatCommandForm = null;
 let focusedChatCommandField = "";
 let editingUserMessageId = "";
 let modularPromptRenderFrame = 0;
+let modularPromptScrollLockState = null;
 const MOBILE_LAYOUT_QUERY = "(max-width: 980px)";
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
@@ -5911,6 +5916,167 @@ function clearModularPromptPreview() {
   }
 }
 
+function normalizeWheelDeltaPixels(event) {
+  const lineHeight = 16;
+  const pageHeight = el.modularPromptForm?.clientHeight || window.innerHeight || 800;
+  const multiplier = event.deltaMode === 1
+    ? lineHeight
+    : event.deltaMode === 2
+      ? pageHeight
+      : 1;
+  return event.deltaY * multiplier;
+}
+
+function isElementScrollableVertically(element) {
+  if (!element || element === document || element === window) {
+    return false;
+  }
+  const style = window.getComputedStyle(element);
+  const overflowY = style.overflowY;
+  if (!/(auto|scroll|overlay)/.test(overflowY)) {
+    return false;
+  }
+  return element.scrollHeight > element.clientHeight + 1;
+}
+
+function canScrollElementVertically(element, deltaY = 0) {
+  if (!isElementScrollableVertically(element)) {
+    return false;
+  }
+  if (deltaY < 0) {
+    return element.scrollTop > 0;
+  }
+  if (deltaY > 0) {
+    return element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+  }
+  return false;
+}
+
+function findScrollableElementWithinPromptDialog(target, boundary = el.modularPromptForm) {
+  if (!target || !(target instanceof Element) || !boundary) {
+    return null;
+  }
+  let current = target;
+  while (current && current !== boundary && current !== document.body) {
+    if (isElementScrollableVertically(current)) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return boundary.contains(target) ? boundary : null;
+}
+
+function scrollModularPromptFormBy(deltaY = 0) {
+  if (!el.modularPromptForm || !deltaY) {
+    return;
+  }
+  el.modularPromptForm.scrollTop += deltaY;
+}
+
+function shouldAllowNativePromptScroll(event, deltaY = 0) {
+  if (!el.modularPromptDialog?.open || !el.modularPromptForm) {
+    return true;
+  }
+  const target = event.target;
+  if (!target || !(target instanceof Element) || !el.modularPromptForm.contains(target)) {
+    return false;
+  }
+  const scrollable = findScrollableElementWithinPromptDialog(target);
+  return scrollable && scrollable !== el.modularPromptForm && canScrollElementVertically(scrollable, deltaY);
+}
+
+function handleModularPromptWheel(event) {
+  if (!el.modularPromptDialog?.open || !modularPromptScrollLockState || event.ctrlKey) {
+    return;
+  }
+  const deltaY = normalizeWheelDeltaPixels(event);
+  if (shouldAllowNativePromptScroll(event, deltaY)) {
+    return;
+  }
+  event.preventDefault();
+  scrollModularPromptFormBy(deltaY);
+}
+
+function handleModularPromptTouchStart(event) {
+  if (!el.modularPromptDialog?.open || !modularPromptScrollLockState || event.touches.length !== 1) {
+    return;
+  }
+  modularPromptScrollLockState.lastTouchY = event.touches[0].clientY;
+}
+
+function handleModularPromptTouchMove(event) {
+  if (!el.modularPromptDialog?.open || !modularPromptScrollLockState || event.touches.length !== 1) {
+    return;
+  }
+  const currentY = event.touches[0].clientY;
+  const previousY = Number.isFinite(modularPromptScrollLockState.lastTouchY)
+    ? modularPromptScrollLockState.lastTouchY
+    : currentY;
+  const deltaY = previousY - currentY;
+  modularPromptScrollLockState.lastTouchY = currentY;
+  if (!deltaY || shouldAllowNativePromptScroll(event, deltaY)) {
+    return;
+  }
+  event.preventDefault();
+  scrollModularPromptFormBy(deltaY);
+}
+
+function lockModularPromptPageScroll() {
+  if (modularPromptScrollLockState || !document.body) {
+    return;
+  }
+  const scrollX = window.scrollX || window.pageXOffset || 0;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  modularPromptScrollLockState = {
+    scrollX,
+    scrollY,
+    lastTouchY: 0,
+    bodyStyle: {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      left: document.body.style.left,
+      right: document.body.style.right,
+      width: document.body.style.width,
+      overflow: document.body.style.overflow
+    }
+  };
+  document.body.classList.add("is-modal-scroll-locked");
+  document.body.style.position = "fixed";
+  document.body.style.top = `-${scrollY}px`;
+  document.body.style.left = `-${scrollX}px`;
+  document.body.style.right = "0";
+  document.body.style.width = "100%";
+  document.body.style.overflow = "hidden";
+  document.addEventListener("wheel", handleModularPromptWheel, { passive: false, capture: true });
+  document.addEventListener("touchstart", handleModularPromptTouchStart, { passive: true, capture: true });
+  document.addEventListener("touchmove", handleModularPromptTouchMove, { passive: false, capture: true });
+}
+
+function unlockModularPromptPageScroll() {
+  if (!modularPromptScrollLockState || !document.body) {
+    return;
+  }
+  document.removeEventListener("wheel", handleModularPromptWheel, { capture: true });
+  document.removeEventListener("touchstart", handleModularPromptTouchStart, { capture: true });
+  document.removeEventListener("touchmove", handleModularPromptTouchMove, { capture: true });
+  const { scrollX, scrollY, bodyStyle } = modularPromptScrollLockState;
+  modularPromptScrollLockState = null;
+  document.body.classList.remove("is-modal-scroll-locked");
+  document.body.style.position = bodyStyle.position;
+  document.body.style.top = bodyStyle.top;
+  document.body.style.left = bodyStyle.left;
+  document.body.style.right = bodyStyle.right;
+  document.body.style.width = bodyStyle.width;
+  document.body.style.overflow = bodyStyle.overflow;
+  window.scrollTo(scrollX, scrollY);
+}
+
+function openModularPromptDialog() {
+  renderModularPromptEditor();
+  el.modularPromptDialog.showModal();
+  lockModularPromptPageScroll();
+}
+
 function createEditorEmptyHint(text = "") {
   const empty = document.createElement("p");
   empty.className = "form-hint";
@@ -6905,6 +7071,118 @@ function exportCurrentModularPromptMode() {
   }
 }
 
+function buildCompressionProfileExportPayload(profile = getSelectedCompressionProfile()) {
+  const activeMode = normalizeRoleCardMode(el.modularPromptModeSelect?.value || getActivePromptMode(appState));
+  const promptName = el.modularPromptModeName?.value?.trim() || getPromptModeDisplayName(activeMode);
+  return {
+    type: "time_tavern_compression_profile",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    promptMode: {
+      mode: activeMode,
+      name: promptName
+    },
+    profile: cloneSerializable(profile)
+  };
+}
+
+function exportSelectedCompressionProfile() {
+  try {
+    syncSelectedCompressionProfileFromEditor();
+    const profile = getSelectedCompressionProfile();
+    if (!profile) {
+      throw new Error("目前沒有可匯出的大模型。");
+    }
+    const payload = buildCompressionProfileExportPayload(profile);
+    const fileName = `${sanitizeDownloadFileName([
+      "compression_profile",
+      payload.promptMode?.name || payload.promptMode?.mode,
+      profile.name || profile.id
+    ].filter(Boolean).join("_"))}.json`;
+    triggerBlobDownload(
+      new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" }),
+      fileName
+    );
+    showToast("已匯出大模型");
+  } catch (error) {
+    showToast(error.message || "大模型匯出失敗", "error");
+  }
+}
+
+function getCompressionProfileImportSource(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return source.profile ||
+    source.compressionProfile ||
+    source.timeTavernCompressionProfile ||
+    source.extensions?.time_tavern_compression_profile ||
+    source;
+}
+
+function normalizeImportedCompressionProfile(payload = {}, targetProfile = getSelectedCompressionProfile(), targetIndex = 0) {
+  const source = getCompressionProfileImportSource(payload);
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error("這不是有效的大模型 JSON。");
+  }
+  const hasProfileFields = [
+    "contextScope",
+    "triggerActions",
+    "actions",
+    "triggers",
+    "appendTerms",
+    "playerAppendTerms",
+    "contextCompression",
+    "compression"
+  ].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  if (!hasProfileFields) {
+    throw new Error("JSON 中找不到可匯入的大模型資料。");
+  }
+  const targetId = normalizeCompressionProfileId(targetProfile?.id || selectedCompressionProfileId);
+  const isStandard = targetId === STANDARD_COMPRESSION_PROFILE_ID;
+  return normalizeCompressionProfileConfig({
+    ...source,
+    id: targetId,
+    enabled: isStandard ? true : source.enabled,
+    locked: isStandard
+  }, targetIndex, targetProfile?.contextCompression || null);
+}
+
+async function importCompressionProfileFromFile(file) {
+  if (!file) {
+    return;
+  }
+  try {
+    syncSelectedCompressionProfileFromEditor();
+    const currentProfile = getSelectedCompressionProfile();
+    if (!currentProfile) {
+      throw new Error("目前沒有可覆蓋的大模型。");
+    }
+    const ok = window.confirm(`匯入會覆蓋目前選中的大模型「${currentProfile.name || currentProfile.id}」。匯入後仍需按「保存 Prompt」才會正式保存。要繼續嗎？`);
+    if (!ok) {
+      return;
+    }
+    const text = await file.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error("大模型匯入失敗：JSON 格式不正確。");
+    }
+    const targetIndex = compressionProfilesDraft.findIndex((profile) => profile.id === currentProfile.id);
+    const importedProfile = normalizeImportedCompressionProfile(payload, currentProfile, Math.max(0, targetIndex));
+    compressionProfilesDraft = compressionProfilesDraft.map((profile) =>
+      profile.id === currentProfile.id ? importedProfile : profile
+    );
+    renderCompressionProfileEditor(importedProfile.id);
+    showToast("大模型已匯入，請按「保存 Prompt」寫入設定");
+  } catch (error) {
+    showToast(error.message || "大模型匯入失敗", "error");
+  } finally {
+    if (el.compressionProfileImportFile) {
+      el.compressionProfileImportFile.value = "";
+    }
+  }
+}
+
 async function importModularPromptModeFromFile(file) {
   if (!file) {
     return;
@@ -7631,6 +7909,48 @@ async function saveContextCompressionContent() {
   }
 }
 
+function buildContextCompressionExportPayload() {
+  const compression = contextCompressionDialogPayload?.contextCompression || appState?.contextCompression || {};
+  const activeMode = getActivePromptMode(appState);
+  const promptConfig = getModularConfig(activeMode);
+  const profiles = getContextCompressionProfilesForActiveMode();
+  const profile = profiles.find((item) => item.id === selectedContextCompressionProfileId) || profiles[0] || {};
+  const profileState = getCompressionProfileStateFromRuntime(compression, selectedContextCompressionProfileId);
+  return {
+    type: "time_tavern_model_content",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    promptMode: {
+      mode: activeMode,
+      name: promptConfig.name || getPromptModeDisplayName(activeMode)
+    },
+    profile: cloneSerializable(profile),
+    content: {
+      summary: el.contextCompressionContentView?.value || "",
+      compressedThroughTurnNumber: profileState.compressedThroughTurnNumber || 0,
+      updatedAt: profileState.updatedAt || ""
+    }
+  };
+}
+
+function exportCurrentContextCompressionContent() {
+  try {
+    const payload = buildContextCompressionExportPayload();
+    const fileName = `${sanitizeDownloadFileName([
+      "model_content",
+      payload.promptMode?.name || payload.promptMode?.mode,
+      payload.profile?.name || payload.profile?.id
+    ].filter(Boolean).join("_"))}.json`;
+    triggerBlobDownload(
+      new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" }),
+      fileName
+    );
+    showToast("已匯出模型內容");
+  } catch (error) {
+    showToast(error.message || "模型內容匯出失敗", "error");
+  }
+}
+
 function normalizeTimeTrackingWordListForEditor(value = "") {
   if (Array.isArray(value)) {
     return value.map((item) => String(item || "").trim()).filter(Boolean);
@@ -8167,8 +8487,7 @@ function bindEvents() {
 
   if (el.editModularPromptsBtn) {
     el.editModularPromptsBtn.addEventListener("click", () => {
-      renderModularPromptEditor();
-      el.modularPromptDialog.showModal();
+      openModularPromptDialog();
     });
   }
 
@@ -8604,6 +8923,10 @@ function bindEvents() {
     el.closeContextCompressionDialog.addEventListener("click", () => el.contextCompressionDialog.close());
   }
 
+  if (el.exportContextCompressionDialog) {
+    el.exportContextCompressionDialog.addEventListener("click", exportCurrentContextCompressionContent);
+  }
+
   if (el.closeTimeTrackingDialog) {
     el.closeTimeTrackingDialog.addEventListener("click", () => el.timeTrackingDialog.close());
   }
@@ -8748,6 +9071,17 @@ function bindEvents() {
     el.deleteCompressionProfileBtn.addEventListener("click", deleteSelectedCompressionProfile);
   }
 
+  if (el.exportCompressionProfileBtn) {
+    el.exportCompressionProfileBtn.addEventListener("click", exportSelectedCompressionProfile);
+  }
+
+  if (el.importCompressionProfileBtn && el.compressionProfileImportFile) {
+    el.importCompressionProfileBtn.addEventListener("click", () => el.compressionProfileImportFile.click());
+    el.compressionProfileImportFile.addEventListener("change", async () => {
+      await importCompressionProfileFromFile(el.compressionProfileImportFile.files?.[0]);
+    });
+  }
+
   if (el.addCompressionTriggerActionBtn) {
     el.addCompressionTriggerActionBtn.addEventListener("click", () => {
       const current = collectCompressionTriggerActionsFromEditor({ keepExpanded: true });
@@ -8841,6 +9175,11 @@ function bindEvents() {
 
   if (el.cancelModularPromptDialog) {
     el.cancelModularPromptDialog.addEventListener("click", () => el.modularPromptDialog.close());
+  }
+
+  if (el.modularPromptDialog) {
+    el.modularPromptDialog.addEventListener("close", unlockModularPromptPageScroll);
+    el.modularPromptDialog.addEventListener("cancel", unlockModularPromptPageScroll);
   }
 
 }

@@ -290,6 +290,7 @@
         </label>
         <div class="dialog-actions">
           <button type="submit" id="saveContextCompressionDialog">保存模型內容</button>
+          <button type="button" id="exportContextCompressionDialog" class="secondary">匯出</button>
           <button type="button" id="closeContextCompressionDialog">關閉</button>
         </div>
       </form>
@@ -463,6 +464,9 @@
             <button id="editCompressionProfileBtn" type="button" class="secondary">編輯</button>
             <button id="addCompressionProfileBtn" type="button" class="secondary">＋ 建立大模型</button>
             <button id="deleteCompressionProfileBtn" type="button" class="muted">刪除大模型</button>
+            <button id="exportCompressionProfileBtn" type="button" class="secondary">匯出</button>
+            <button id="importCompressionProfileBtn" type="button" class="secondary">匯入</button>
+            <input id="compressionProfileImportFile" type="file" class="hidden" accept=".json,application/json" />
           </div>
           <div class="compression-profile-grid">
             <label>
