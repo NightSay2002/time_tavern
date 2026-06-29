@@ -131,10 +131,3 @@ node --check src/index.js
 node --check src/public/app.js
 node --check src/public/novelai.js
 ```
-
-## 注意
-
-- 不要提交 `.env`、`data/`、`node_modules/`。
-- `defaults/` 與 `prompts/modular/` 可提交，用於發佈預設。
-- 使用 Discord 一般訊息觸發時，需要在 Discord Developer Portal 開啟 Message Content Intent。
-- 使用本專案生成內容時，請自行遵守所在地法律、Discord 規範與模型供應商條款。
