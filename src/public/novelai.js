@@ -37,9 +37,12 @@ const el = {
   novelAiPreciseList: document.getElementById("novelAiPreciseList"),
   novelAiSizePreset: document.getElementById("novelAiSizePreset"),
   novelAiMetadataFile: document.getElementById("novelAiMetadataFile"),
+  novelAiDefaultsFile: document.getElementById("novelAiDefaultsFile"),
   novelAiImportMetadataBtn: document.getElementById("novelAiImportMetadataBtn"),
   novelAiSaveDefaultsBtn: document.getElementById("novelAiSaveDefaultsBtn"),
   novelAiApplyDefaultsBtn: document.getElementById("novelAiApplyDefaultsBtn"),
+  novelAiDownloadDefaultsBtn: document.getElementById("novelAiDownloadDefaultsBtn"),
+  novelAiInjectDefaultsBtn: document.getElementById("novelAiInjectDefaultsBtn"),
   novelAiMetadataStatus: document.getElementById("novelAiMetadataStatus"),
   novelAiCostPreview: document.getElementById("novelAiCostPreview"),
   novelAiLoopCount: document.getElementById("novelAiLoopCount"),
@@ -57,6 +60,7 @@ const el = {
   novelAiDropChoiceText: document.getElementById("novelAiDropChoiceText"),
   novelAiContentDialog: document.getElementById("novelAiContentDialog"),
   novelAiContentText: document.getElementById("novelAiContentText"),
+  novelAiDownloadDialog: document.getElementById("novelAiDownloadDialog"),
   novelAiImageViewerDialog: document.getElementById("novelAiImageViewerDialog"),
   novelAiImageViewerTitle: document.getElementById("novelAiImageViewerTitle"),
   novelAiImageViewerStage: document.getElementById("novelAiImageViewerStage"),
@@ -72,6 +76,7 @@ let novelAiCurrentImages = [];
 let novelAiHistoryItems = [];
 let novelAiSelectedHistoryId = "";
 let novelAiPendingDropFiles = [];
+let novelAiPendingDownloadItem = null;
 let novelAiDragDepth = 0;
 let novelAiFixedPromptSnippets = [];
 let novelAiRandomPromptSnippets = [];
@@ -364,6 +369,62 @@ function sanitizeDownloadFileName(value = "novelai-image") {
     .slice(0, 80) || "novelai-image";
 }
 
+function stripDataUrlPrefix(value = "") {
+  return String(value || "").trim().replace(/^data:[^,]*,/iu, "").replace(/\s+/gu, "");
+}
+
+function ensureImageDataUrl(value = "", fallbackMime = "image/png") {
+  const text = String(value || "").trim();
+  if (!text || /^data:/iu.test(text)) {
+    return text;
+  }
+  return `data:${fallbackMime};base64,${stripDataUrlPrefix(text)}`;
+}
+
+function isImageFile(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  return type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp|avif|heic|heif)$/iu.test(name);
+}
+
+function getUploadImageMimeType(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (type.startsWith("image/")) {
+    return type;
+  }
+  if (name.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (name.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (name.endsWith(".bmp")) {
+    return "image/bmp";
+  }
+  if (name.endsWith(".avif")) {
+    return "image/avif";
+  }
+  if (name.endsWith(".heic")) {
+    return "image/heic";
+  }
+  if (name.endsWith(".heif")) {
+    return "image/heif";
+  }
+  return "image/png";
+}
+
+function ensureUploadImageDataUrl(dataUrl = "", file) {
+  const text = String(dataUrl || "").trim();
+  if (!text || /^data:image\//iu.test(text)) {
+    return text;
+  }
+  return `data:${getUploadImageMimeType(file)};base64,${stripDataUrlPrefix(text)}`;
+}
+
 function triggerBlobDownload(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -504,7 +565,7 @@ function normalizeImageItems(value = [], prefix = "nai_img", defaults = {}) {
           item?.fidelity,
           defaults.fidelity ?? 1,
           defaults.fidelityMin ?? -1,
-          defaults.fidelityMax ?? 2
+          defaults.fidelityMax ?? 1
         )
       };
     })
@@ -789,26 +850,26 @@ function normalizeSettings(value = {}) {
     characters: normalizeCharacters(promptCharacters),
     vibeTransfer: {
       enabled: sourceVibe.enabled !== false,
-      strength: finiteNumber(sourceVibe.strength ?? source.referenceStrength, 0.6),
+      strength: clampFiniteNumber(sourceVibe.strength ?? source.referenceStrength, 0.6, -1, 1),
       informationExtracted: finiteNumber(sourceVibe.informationExtracted ?? sourceVibe.information_extracted ?? source.referenceInformationExtracted, 1),
       images: normalizeImageItems(sourceVibe.images || source.vibeImages || [], "nai_vibe", {
         strength: sourceVibe.strength ?? source.referenceStrength ?? 0.6,
         informationExtracted: sourceVibe.informationExtracted ?? sourceVibe.information_extracted ?? source.referenceInformationExtracted ?? 1,
-        strengthMin: 0,
+        strengthMin: -1,
         strengthMax: 1
       })
     },
     preciseReference: {
       enabled: sourcePrecise.enabled !== false,
-      strength: finiteNumber(sourcePrecise.strength, 1),
-      fidelity: finiteNumber(sourcePrecise.fidelity, 1),
+      strength: clampFiniteNumber(sourcePrecise.strength, 1, -1, 1),
+      fidelity: clampFiniteNumber(sourcePrecise.fidelity, 1, -1, 1),
       images: normalizeImageItems(sourcePrecise.images || source.preciseImages || source.character_references || [], "nai_precise", {
         strength: sourcePrecise.strength ?? 1,
         fidelity: sourcePrecise.fidelity ?? 1,
         strengthMin: -1,
-        strengthMax: 2,
+        strengthMax: 1,
         fidelityMin: -1,
-        fidelityMax: 2
+        fidelityMax: 1
       })
     }
   };
@@ -1088,7 +1149,7 @@ function insertTextAtCursor(textarea, text = "") {
 }
 
 function renderBaseImagePreview(dataUrl = "") {
-  const value = String(dataUrl || "").trim();
+  const value = ensureImageDataUrl(dataUrl);
   el.novelAiBaseImage.value = value;
   el.novelAiBaseImagePreview.innerHTML = "";
   el.novelAiBaseImagePreview.classList.toggle("has-image", Boolean(value));
@@ -1100,18 +1161,55 @@ function renderBaseImagePreview(dataUrl = "") {
   img.src = value;
   img.alt = "Image2Image";
   el.novelAiBaseImagePreview.appendChild(img);
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "nai-base-image-remove";
+  removeButton.dataset.baseImageRemove = "true";
+  removeButton.setAttribute("aria-label", "移除 Image2Image 圖片");
+  removeButton.textContent = "移除";
+  el.novelAiBaseImagePreview.appendChild(removeButton);
+}
+
+function clearBaseImagePreview() {
+  renderBaseImagePreview("");
+  renderCostPreview();
+  saveSettingsDraft();
 }
 
 function referenceRangeHtml(field, label, value, options = {}) {
   const min = options.min ?? 0;
   const max = options.max ?? 1;
+  const normalizedValue = clampFiniteNumber(value, options.defaultValue ?? 0, min, max);
   return `
     <label class="nai-reference-range">
       <span>${label}</span>
-      <input data-reference-field="${field}" type="range" min="${min}" max="${max}" step="0.01" value="${Number(value).toFixed(2)}" />
-      <b>${Number(value).toFixed(2)}</b>
+      <input data-reference-field="${field}" type="range" min="${min}" max="${max}" step="0.01" value="${normalizedValue.toFixed(2)}" />
+      <input class="nai-reference-number" data-reference-field="${field}" type="number" min="${min}" max="${max}" step="0.01" value="${normalizedValue.toFixed(2)}" />
     </label>
   `;
+}
+
+function syncRangeInputVisual(input) {
+  if (!input || input.type !== "range") {
+    return;
+  }
+  const min = Number(input.min || 0);
+  const max = Number(input.max || 100);
+  const value = clampFiniteNumber(input.value, min, min, max);
+  const progress = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  input.style.setProperty("--range-progress", `${Math.max(0, Math.min(100, progress))}%`);
+}
+
+function syncReferenceFieldControls(sourceInput, value) {
+  const field = sourceInput?.dataset?.referenceField || "";
+  const row = sourceInput?.closest?.(".nai-reference-range");
+  if (!field || !row) {
+    return;
+  }
+  row.querySelectorAll(`[data-reference-field="${field}"]`).forEach((input) => {
+    input.value = Number(value).toFixed(2);
+    syncRangeInputVisual(input);
+  });
 }
 
 function renderReferenceList(container, images = [], emptyText = "拖入圖片加入。", type = "vibe") {
@@ -1129,12 +1227,12 @@ function renderReferenceList(container, images = [], emptyText = "拖入圖片�
     card.dataset.imageId = item.id;
     const controls = type === "vibe"
       ? [
-        referenceRangeHtml("strength", "Reference Strength", item.strength, { min: 0, max: 1 }),
-        referenceRangeHtml("informationExtracted", "Information Extracted", item.informationExtracted, { min: 0, max: 1 })
+        referenceRangeHtml("strength", "Reference Strength", item.strength, { min: -1, max: 1, defaultValue: 0.6 }),
+        referenceRangeHtml("informationExtracted", "Information Extracted", item.informationExtracted, { min: 0, max: 1, defaultValue: 1 })
       ].join("")
       : [
-        referenceRangeHtml("strength", "Strength", item.strength, { min: -1, max: 2 }),
-        referenceRangeHtml("fidelity", "Fidelity", item.fidelity, { min: -1, max: 2 })
+        referenceRangeHtml("strength", "Strength", item.strength, { min: -1, max: 1, defaultValue: 1 }),
+        referenceRangeHtml("fidelity", "Fidelity", item.fidelity, { min: -1, max: 1, defaultValue: 1 })
       ].join("");
     card.innerHTML = `
       <img alt="" />
@@ -1153,6 +1251,7 @@ function renderReferenceList(container, images = [], emptyText = "拖入圖片�
 function renderAllReferences() {
   renderReferenceList(el.novelAiVibeList, novelAiVibeImages, "拖入圖片後選擇 Vibe Transfer。", "vibe");
   renderReferenceList(el.novelAiPreciseList, novelAiPreciseImages, "拖入圖片後選擇 Precise Reference。", "precise");
+  updateRangeValues();
 }
 
 function getSelectedSizePreset() {
@@ -1571,7 +1670,7 @@ function getFormSettings() {
       images: normalizeImageItems(novelAiVibeImages, "nai_vibe", {
         strength: 0.6,
         informationExtracted: 1,
-        strengthMin: 0,
+        strengthMin: -1,
         strengthMax: 1
       })
     },
@@ -1581,9 +1680,9 @@ function getFormSettings() {
         strength: 1,
         fidelity: 1,
         strengthMin: -1,
-        strengthMax: 2,
+        strengthMax: 1,
         fidelityMin: -1,
-        fidelityMax: 2
+        fidelityMax: 1
       })
     }
   };
@@ -1625,8 +1724,20 @@ function setFormSettings(settings = {}, options = {}) {
   el.novelAiStrength.value = normalized.strength ?? 0.7;
   el.novelAiNoise.value = normalized.noise ?? 0;
   if (options.includeReferenceImages) {
-    novelAiVibeImages = normalizeImageItems(normalized.vibeTransfer.images, "nai_vibe");
-    novelAiPreciseImages = normalizeImageItems(normalized.preciseReference.images, "nai_precise");
+    novelAiVibeImages = normalizeImageItems(normalized.vibeTransfer.images, "nai_vibe", {
+      strength: 0.6,
+      informationExtracted: 1,
+      strengthMin: -1,
+      strengthMax: 1
+    });
+    novelAiPreciseImages = normalizeImageItems(normalized.preciseReference.images, "nai_precise", {
+      strength: 1,
+      fidelity: 1,
+      strengthMin: -1,
+      strengthMax: 1,
+      fidelityMin: -1,
+      fidelityMax: 1
+    });
   }
   if (options.includeBaseImage && normalized.baseImage) {
     renderBaseImagePreview(normalized.baseImage);
@@ -1690,6 +1801,22 @@ async function loadNovelAiDefaults() {
   }
 }
 
+function sanitizeNovelAiDefaultSettings(settings = {}) {
+  const normalized = normalizeSettings(settings);
+  normalized.baseImage = "";
+  normalized.vibeTransfer.images = [];
+  normalized.preciseReference.images = [];
+  return normalized;
+}
+
+function buildNovelAiDefaultsPayload(settings = getFormSettings()) {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    settings: sanitizeNovelAiDefaultSettings(settings)
+  };
+}
+
 async function saveNovelAiDefaults() {
   if (!el.novelAiSaveDefaultsBtn) {
     return;
@@ -1698,13 +1825,9 @@ async function saveNovelAiDefaults() {
   el.novelAiSaveDefaultsBtn.disabled = true;
   el.novelAiSaveDefaultsBtn.textContent = "保存中...";
   try {
-    const settings = getFormSettings();
-    settings.baseImage = "";
-    settings.vibeTransfer.images = [];
-    settings.preciseReference.images = [];
     const payload = await request("/api/novelai/defaults", {
       method: "PUT",
-      body: JSON.stringify({ settings })
+      body: JSON.stringify(buildNovelAiDefaultsPayload(getFormSettings()))
     });
     showToast(payload?.defaults?.updatedAt ? "已將目前 NovelAI 內容設為預設。" : "已保存 NovelAI 預設。");
   } catch (error) {
@@ -1732,6 +1855,51 @@ async function applyNovelAiDefaults() {
     showToast("已套用 NovelAI 預設。");
   } catch (error) {
     showToast(error.message || "NovelAI 預設套用失敗。", "error");
+  }
+}
+
+async function downloadNovelAiDefaults() {
+  try {
+    const defaults = await loadNovelAiDefaults();
+    const payload = defaults?.settings
+      ? buildNovelAiDefaultsPayload(defaults.settings)
+      : buildNovelAiDefaultsPayload(getFormSettings());
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+    triggerBlobDownload(blob, "novelai-defaults.json");
+    showToast("已下載預設 JSON。");
+  } catch (error) {
+    showToast(error.message || "預設下載失敗。", "error");
+  }
+}
+
+async function injectNovelAiDefaultsFromFile(file) {
+  if (!file) {
+    return;
+  }
+  try {
+    const parsed = JSON.parse(await file.text());
+    const source = parsed?.settings && typeof parsed.settings === "object" ? parsed.settings : parsed;
+    const payload = buildNovelAiDefaultsPayload(source);
+    const saved = await request("/api/novelai/defaults", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+    const settings = saved?.defaults?.settings && typeof saved.defaults.settings === "object"
+      ? saved.defaults.settings
+      : payload.settings;
+    setFormSettings(settings, {
+      save: true,
+      clearBaseImage: true,
+      replaceFixedPromptSnippets: true,
+      replaceRandomPromptSnippets: true
+    });
+    showToast("已注入並啟用 NovelAI 預設。");
+  } catch (error) {
+    showToast(error.message || "預設 JSON 注入失敗。", "error");
+  } finally {
+    if (el.novelAiDefaultsFile) {
+      el.novelAiDefaultsFile.value = "";
+    }
   }
 }
 
@@ -1793,6 +1961,7 @@ function updateRangeValues() {
     const input = document.getElementById(node.dataset.rangeValueFor);
     node.textContent = Number(input?.value || 0).toFixed(2);
   });
+  document.querySelectorAll('input[type="range"]').forEach((input) => syncRangeInputVisual(input));
 }
 
 function formatStatus(payload = novelAiStatusPayload) {
@@ -1846,9 +2015,47 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function readImageFileAsDataUrl(file) {
-  if (!file?.type?.startsWith("image/")) {
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("此圖片格式無法在瀏覽器轉換，請改用 PNG、JPG 或 WebP。"));
+    img.src = dataUrl;
+  });
+}
+
+async function convertImageDataUrlToPng(dataUrl) {
+  const image = await loadImageFromDataUrl(dataUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (!width || !height) {
+    throw new Error("圖片尺寸讀取失敗。");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("瀏覽器無法轉換圖片。");
+  }
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/png");
+}
+
+async function normalizeImageForNovelAi(file) {
+  const dataUrl = ensureUploadImageDataUrl(await blobToDataUrl(file), file);
+  if (/^data:image\/(?:png|jpe?g);base64,/iu.test(dataUrl)) {
+    return dataUrl;
+  }
+  return convertImageDataUrlToPng(dataUrl);
+}
+
+async function readImageFileAsDataUrl(file, options = {}) {
+  if (!isImageFile(file)) {
     throw new Error("請選擇圖片檔案。");
+  }
+  if (options.normalizeForNovelAi) {
+    return normalizeImageForNovelAi(file);
   }
   return blobToDataUrl(file);
 }
@@ -2103,8 +2310,7 @@ function renderMainImage(item = null) {
       applyMetadataToForm(item.metadata || item.settings || {});
       showToast("已把圖片設定還原到表單");
     }),
-    makeActionButton("下載", "secondary", () => downloadImage(item)),
-    makeActionButton("收藏", "secondary", () => favoriteImage(item))
+    makeActionButton("下載", "secondary", () => openDownloadDialog(item))
   );
   card.append(preview, meta, actions);
   el.novelAiOutputGrid.appendChild(card);
@@ -2383,6 +2589,21 @@ function cleanNativeNovelAiPngMetadata(bytes) {
   return concatBytes(output);
 }
 
+function stripPngTextMetadata(bytes) {
+  const chunks = parsePngChunks(bytes);
+  if (!chunks.length) {
+    return bytes;
+  }
+  const output = [bytes.slice(0, 8)];
+  chunks.forEach((chunk) => {
+    if (chunk.type === "tEXt" || chunk.type === "iTXt" || chunk.type === "zTXt") {
+      return;
+    }
+    output.push(bytes.slice(chunk.start, chunk.end));
+  });
+  return concatBytes(output);
+}
+
 function buildNovelAiCompatibleComment(item = {}) {
   const existingMetadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
   const settings = normalizeSettings(existingMetadata.settings || item.settings || existingMetadata);
@@ -2513,7 +2734,45 @@ function injectPngMetadataForDownload(blob, item = {}) {
   });
 }
 
-async function downloadImage(item = {}) {
+function stripPngMetadataForDownload(blob) {
+  return blob.arrayBuffer().then((buffer) => {
+    const bytes = new Uint8Array(buffer);
+    if (findPngIendOffset(bytes) < 0) {
+      return blob;
+    }
+    return new Blob([stripPngTextMetadata(bytes)], { type: "image/png" });
+  });
+}
+
+function openDownloadDialog(item = {}) {
+  novelAiPendingDownloadItem = item;
+  if (typeof el.novelAiDownloadDialog?.showModal === "function") {
+    el.novelAiDownloadDialog.showModal();
+  } else {
+    el.novelAiDownloadDialog?.setAttribute("open", "open");
+  }
+}
+
+function closeDownloadDialog() {
+  if (el.novelAiDownloadDialog?.open && typeof el.novelAiDownloadDialog.close === "function") {
+    el.novelAiDownloadDialog.close();
+  } else {
+    el.novelAiDownloadDialog?.removeAttribute("open");
+  }
+  novelAiPendingDownloadItem = null;
+}
+
+async function handleDownloadChoice(mode = "cancel") {
+  const item = novelAiPendingDownloadItem;
+  closeDownloadDialog();
+  if (!item || mode === "cancel") {
+    return;
+  }
+  await downloadImage(item, { includeMetadata: mode === "metadata" });
+}
+
+async function downloadImage(item = {}, options = {}) {
+  const includeMetadata = options.includeMetadata !== false;
   try {
     let blob = item.dataUrl
       ? dataUrlToBlob(item.dataUrl)
@@ -2525,10 +2784,12 @@ async function downloadImage(item = {}) {
       });
     const fileName = sanitizeDownloadFileName(item.fileName || `novelai-${item.id || Date.now()}.png`);
     if (blob.type === "image/png" || /\.png$/iu.test(fileName)) {
-      blob = await injectPngMetadataForDownload(blob, item);
+      blob = includeMetadata
+        ? await injectPngMetadataForDownload(blob, item)
+        : await stripPngMetadataForDownload(blob);
     }
     triggerBlobDownload(blob, fileName);
-    showToast("已下載圖片，包含設定 metadata");
+    showToast(includeMetadata ? "已下載圖片，包含設定 metadata" : "已下載純圖片");
   } catch (error) {
     showToast(error.message || "圖片下載失敗", "error");
   }
@@ -2685,11 +2946,11 @@ function getImageFilesFromTransfer(dataTransfer) {
   const itemFiles = Array.from(dataTransfer?.items || [])
     .filter((item) => item.kind === "file")
     .map((item) => item.getAsFile())
-    .filter((file) => file?.type?.startsWith("image/"));
+    .filter((file) => isImageFile(file));
   if (itemFiles.length) {
     return itemFiles;
   }
-  return Array.from(dataTransfer?.files || []).filter((file) => file?.type?.startsWith("image/"));
+  return Array.from(dataTransfer?.files || []).filter((file) => isImageFile(file));
 }
 
 function transferHasImage(dataTransfer) {
@@ -2703,6 +2964,19 @@ function transferHasImage(dataTransfer) {
 function setDropActive(active) {
   document.body.classList.toggle("is-novelai-drop-active", Boolean(active));
   el.novelAiDropOverlay?.setAttribute("aria-hidden", active ? "false" : "true");
+}
+
+function renderDropChoiceText(files = []) {
+  const firstFile = files[0];
+  el.novelAiDropChoiceText.replaceChildren();
+  const summary = document.createElement("span");
+  summary.textContent = files.length > 1 ? `已接收到 ${files.length} 張圖片` : "已接收到";
+  el.novelAiDropChoiceText.appendChild(summary);
+  const name = document.createElement("span");
+  name.className = "nai-drop-choice-name";
+  name.title = files.length > 1 ? files.map((file) => file?.name || "圖片").join("\n") : firstFile?.name || "圖片";
+  name.textContent = files.length > 1 ? `${firstFile?.name || "圖片"} 等 ${files.length} 張` : firstFile?.name || "圖片";
+  el.novelAiDropChoiceText.appendChild(name);
 }
 
 async function addFilesToCollection(files = [], target = "vibe") {
@@ -2735,7 +3009,7 @@ async function showDropChoiceDialog(files = []) {
     img.alt = firstFile.name || "Dropped image";
     el.novelAiDropChoicePreview.appendChild(img);
   }
-  el.novelAiDropChoiceText.textContent = files.length > 1 ? `已接收到 ${files.length} 張圖片。` : `已接收到 ${firstFile?.name || "圖片"}。`;
+  renderDropChoiceText(files);
   if (typeof el.novelAiDropChoiceDialog.showModal === "function") {
     el.novelAiDropChoiceDialog.showModal();
   } else {
@@ -2763,7 +3037,7 @@ async function handleDropChoice(action = "cancel") {
       await addFilesToCollection(files, "vibe");
       showToast(`已加入 ${files.length} 張 Vibe Transfer 圖片`);
     } else if (action === "img2img") {
-      renderBaseImagePreview(await readImageFileAsDataUrl(files[0]));
+      renderBaseImagePreview(await readImageFileAsDataUrl(files[0], { normalizeForNovelAi: true }));
       renderCostPreview();
       saveSettingsDraft();
       showToast("已設定 Image2Image 圖片");
@@ -2791,10 +3065,26 @@ function handleReferenceListAction(type, event) {
       return;
     }
     const field = fieldInput.dataset.referenceField;
-    list[index][field] = Number(fieldInput.value);
-    const valueLabel = fieldInput.parentElement?.querySelector("b");
-    if (valueLabel) {
-      valueLabel.textContent = Number(fieldInput.value).toFixed(2);
+    const fallback = Number(list[index][field] ?? 0);
+    const parsedValue = Number(fieldInput.value);
+    if (!Number.isFinite(parsedValue)) {
+      if (event.type === "change") {
+        syncReferenceFieldControls(fieldInput, fallback);
+      }
+      return;
+    }
+    const min = Number(fieldInput.min || -Infinity);
+    const max = Number(fieldInput.max || Infinity);
+    const value = clampFiniteNumber(parsedValue, fallback, min, max);
+    list[index][field] = value;
+    if (fieldInput.type === "range" || event.type === "change") {
+      syncReferenceFieldControls(fieldInput, value);
+    } else {
+      const range = fieldInput.closest(".nai-reference-range")?.querySelector('input[type="range"]');
+      if (range) {
+        range.value = value.toFixed(2);
+        syncRangeInputVisual(range);
+      }
     }
     if (type === "vibe") {
       novelAiVibeImages = [...list];
@@ -2999,15 +3289,38 @@ function bindEvents() {
   el.novelAiLoopGenerateBtn.addEventListener("click", loopGenerateImages);
   el.novelAiSaveDefaultsBtn?.addEventListener("click", saveNovelAiDefaults);
   el.novelAiApplyDefaultsBtn?.addEventListener("click", applyNovelAiDefaults);
+  el.novelAiDownloadDefaultsBtn?.addEventListener("click", downloadNovelAiDefaults);
+  el.novelAiInjectDefaultsBtn?.addEventListener("click", () => el.novelAiDefaultsFile?.click());
+  el.novelAiDefaultsFile?.addEventListener("change", async () => {
+    await injectNovelAiDefaultsFromFile(el.novelAiDefaultsFile.files?.[0]);
+  });
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
   el.novelAiRefreshAlbumBtn.addEventListener("click", renderHistory);
   window.addEventListener("keydown", onHistoryKeyboardNavigation);
-  el.novelAiBaseImagePreview.addEventListener("click", () => el.novelAiBaseImageFile.click());
+  el.novelAiBaseImagePreview.addEventListener("click", (event) => {
+    if (event.target?.closest?.("[data-base-image-remove]")) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearBaseImagePreview();
+      showToast("已移除 Image2Image 圖片");
+      return;
+    }
+    el.novelAiBaseImageFile.click();
+  });
+  el.novelAiBaseImagePreview.addEventListener("keydown", (event) => {
+    if (event.target?.closest?.("[data-base-image-remove]")) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      el.novelAiBaseImageFile.click();
+    }
+  });
   el.novelAiBaseImageFile.addEventListener("change", async () => {
     try {
       const file = el.novelAiBaseImageFile.files?.[0];
       if (file) {
-        renderBaseImagePreview(await readImageFileAsDataUrl(file));
+        renderBaseImagePreview(await readImageFileAsDataUrl(file, { normalizeForNovelAi: true }));
         renderCostPreview();
         saveSettingsDraft();
       }
@@ -3018,9 +3331,7 @@ function bindEvents() {
     }
   });
   el.novelAiClearBaseImageBtn.addEventListener("click", () => {
-    renderBaseImagePreview("");
-    renderCostPreview();
-    saveSettingsDraft();
+    clearBaseImagePreview();
   });
   el.novelAiAddCharacterBtn.addEventListener("click", () => {
     const current = collectCharacters();
@@ -3159,8 +3470,10 @@ function bindEvents() {
     saveSettingsDraft();
   });
   el.novelAiVibeList.addEventListener("click", (event) => handleReferenceListAction("vibe", event));
+  el.novelAiVibeList.addEventListener("input", (event) => handleReferenceListAction("vibe", event));
   el.novelAiVibeList.addEventListener("change", (event) => handleReferenceListAction("vibe", event));
   el.novelAiPreciseList.addEventListener("click", (event) => handleReferenceListAction("precise", event));
+  el.novelAiPreciseList.addEventListener("input", (event) => handleReferenceListAction("precise", event));
   el.novelAiPreciseList.addEventListener("change", (event) => handleReferenceListAction("precise", event));
   el.novelAiImportMetadataBtn.addEventListener("click", () => el.novelAiMetadataFile.click());
   el.novelAiMetadataFile.addEventListener("change", async () => {
@@ -3172,8 +3485,15 @@ function bindEvents() {
       await handleDropChoice(button.dataset.dropAction);
     }
   });
+  el.novelAiDownloadDialog?.addEventListener("click", async (event) => {
+    const button = event.target?.closest?.("[data-download-mode]");
+    if (button) {
+      await handleDownloadChoice(button.dataset.downloadMode);
+    }
+  });
   bindDialogBackdropClose(el.novelAiDropChoiceDialog, { close: closeDropChoiceDialog });
   bindDialogBackdropClose(el.novelAiContentDialog, { close: closeImageContentDialog });
+  bindDialogBackdropClose(el.novelAiDownloadDialog, { close: closeDownloadDialog });
   bindDialogBackdropClose(el.novelAiImageViewerDialog, { close: closeImageViewerDialog });
   if (el.novelAiImageViewerStage) {
     el.novelAiImageViewerStage.addEventListener("wheel", onImageViewerWheel, { passive: false });

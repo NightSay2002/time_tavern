@@ -4472,7 +4472,7 @@ body.novelai-bright-body textarea {
 
 .nai-reference-range {
   display: grid;
-  grid-template-columns: minmax(118px, 1fr) minmax(92px, 1.2fr) 48px;
+  grid-template-columns: minmax(118px, 1fr) minmax(92px, 1.2fr) 64px;
   gap: 8px;
   align-items: center;
   color: #5b3a6c;
@@ -4480,13 +4480,80 @@ body.novelai-bright-body textarea {
   font-weight: 800;
 }
 
-.nai-reference-range input {
-  accent-color: #d35bc6;
+.nai-reference-range input[type="range"],
+.nai-range-row input[type="range"],
+.nai-random-bias-row input[type="range"] {
+  --range-progress: 0%;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: var(--cursor-pointer);
 }
 
-.nai-reference-range b {
-  color: #9a4ec4;
-  text-align: right;
+.nai-reference-range input[type="range"]::-webkit-slider-runnable-track,
+.nai-range-row input[type="range"]::-webkit-slider-runnable-track,
+.nai-random-bias-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 10px;
+  border: 1px solid rgba(137, 111, 150, 0.46);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #d35bc6 0 var(--range-progress), #f5f2f7 var(--range-progress) 100%);
+}
+
+.nai-reference-range input[type="range"]::-webkit-slider-thumb,
+.nai-range-row input[type="range"]::-webkit-slider-thumb,
+.nai-random-bias-row input[type="range"]::-webkit-slider-thumb {
+  width: 26px;
+  height: 26px;
+  margin-top: -9px;
+  border: 0;
+  border-radius: 999px;
+  background: #d35bc6;
+  box-shadow: 0 4px 10px rgba(168, 64, 160, 0.24);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.nai-reference-range input[type="range"]::-moz-range-track,
+.nai-range-row input[type="range"]::-moz-range-track,
+.nai-random-bias-row input[type="range"]::-moz-range-track {
+  height: 10px;
+  border: 1px solid rgba(137, 111, 150, 0.46);
+  border-radius: 999px;
+  background: #f5f2f7;
+}
+
+.nai-reference-range input[type="range"]::-moz-range-progress,
+.nai-range-row input[type="range"]::-moz-range-progress,
+.nai-random-bias-row input[type="range"]::-moz-range-progress {
+  height: 10px;
+  border-radius: 999px;
+  background: #d35bc6;
+}
+
+.nai-reference-range input[type="range"]::-moz-range-thumb,
+.nai-range-row input[type="range"]::-moz-range-thumb,
+.nai-random-bias-row input[type="range"]::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: #d35bc6;
+  box-shadow: 0 4px 10px rgba(168, 64, 160, 0.24);
+}
+
+.nai-reference-number {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 1px solid rgba(218, 154, 235, 0.58);
+  border-radius: 10px;
+  background: #fff;
+  color: #6f3d8a;
+  font: 800 13px/1 "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  text-align: center;
 }
 
 .nai-range-row {
@@ -4499,16 +4566,13 @@ body.novelai-bright-body textarea {
   font-weight: 800;
 }
 
-.nai-range-row input {
-  accent-color: #d35bc6;
-}
-
 .nai-range-row b {
   color: #9a4ec4;
   text-align: right;
 }
 
 .nai-image-drop-card {
+  position: relative;
   width: 100%;
   min-height: 168px;
   display: grid;
@@ -4519,6 +4583,16 @@ body.novelai-bright-body textarea {
   background: #fff9fe;
   color: #8d68a2;
   font-weight: 900;
+  cursor: pointer;
+}
+
+.nai-image-drop-card:focus-visible {
+  outline: 3px solid rgba(95, 145, 246, 0.42);
+  outline-offset: 2px;
+}
+
+.nai-image-drop-card.has-image {
+  min-height: 220px;
 }
 
 .nai-image-drop-card img {
@@ -4527,6 +4601,27 @@ body.novelai-bright-body textarea {
   max-height: 260px;
   display: block;
   object-fit: contain;
+}
+
+.nai-base-image-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid rgba(105, 58, 126, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #5b326f;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 8px 18px rgba(70, 43, 82, 0.16);
+}
+
+.nai-base-image-remove:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 246, 253, 0.96);
 }
 
 .nai-size-custom,
@@ -4756,15 +4851,22 @@ body.novelai-bright-body textarea {
 
 .nai-main-output .novelai-image-actions {
   right: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  max-width: min(52%, 560px);
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-content: stretch;
+  gap: 5px;
+  width: 78px;
+  max-width: 78px;
 }
 
 .nai-main-output .novelai-image-actions button {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 6px;
   border: 1px solid rgba(45, 107, 190, 0.36);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
   box-shadow: 0 10px 20px rgba(73, 100, 180, 0.16);
 }
 
@@ -4887,9 +4989,12 @@ body.is-novelai-drop-active .nai-drop-overlay {
   display: grid;
 }
 
-.nai-drop-choice-dialog {
+.nai-drop-choice-dialog,
+.nai-download-dialog {
   width: min(520px, calc(100vw - 28px));
+  max-width: calc(100vw - 28px);
   padding: 0;
+  overflow: hidden;
   border: 1px solid rgba(216, 148, 232, 0.42);
   border-radius: 22px;
   background: #fffaff;
@@ -4897,19 +5002,46 @@ body.is-novelai-drop-active .nai-drop-overlay {
   box-shadow: 0 24px 80px rgba(101, 42, 130, 0.28);
 }
 
-.nai-drop-choice-dialog::backdrop {
+.nai-drop-choice-dialog::backdrop,
+.nai-download-dialog::backdrop {
   background: transparent;
 }
 
-.nai-drop-choice-dialog form {
+.nai-drop-choice-dialog form,
+.nai-download-dialog form {
+  min-width: 0;
   display: grid;
   gap: 12px;
   padding: 18px;
 }
 
 .nai-drop-choice-dialog h3,
-.nai-drop-choice-dialog p {
+.nai-drop-choice-dialog p,
+.nai-download-dialog h3,
+.nai-download-dialog p {
+  min-width: 0;
   margin: 0;
+}
+
+.nai-drop-choice-text {
+  display: grid;
+  gap: 3px;
+  color: #56336b;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.nai-drop-choice-name {
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+  overflow: hidden;
+  color: #7a4b95;
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nai-drop-choice-preview {
@@ -4934,10 +5066,14 @@ body.is-novelai-drop-active .nai-drop-overlay {
 }
 
 .nai-drop-choice-actions button {
+  min-width: 0;
   min-height: 44px;
+  overflow: hidden;
   border-radius: 14px;
   font-size: 15px;
   font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nai-drop-choice-actions [data-drop-action="cancel"] {
@@ -4950,6 +5086,18 @@ body.is-novelai-drop-active .nai-drop-overlay {
 
 .nai-drop-choice-actions [data-drop-action="cancel"]:hover {
   background: #ffe8f2;
+}
+
+.nai-download-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.nai-download-actions button {
+  min-height: 46px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 900;
 }
 
 .nai-content-dialog {

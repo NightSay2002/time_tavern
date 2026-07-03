@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260602-history-keyboard1" />
+    <link rel="stylesheet" href="/styles.css?v=20260703-nai-ui-sync1" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -85,7 +85,7 @@
               </div>
               <input id="novelAiBaseImageFile" type="file" accept="image/*" class="hidden" />
               <input id="novelAiBaseImage" type="hidden" />
-              <button id="novelAiBaseImagePreview" type="button" class="nai-image-drop-card">點擊選擇圖片，或直接拖到頁面任何位置</button>
+              <div id="novelAiBaseImagePreview" class="nai-image-drop-card" role="button" tabindex="0">點擊選擇圖片，或直接拖到頁面任何位置</div>
               <label class="nai-range-row">
                 <span>Strength</span>
                 <input id="novelAiStrength" type="range" min="0" max="1" step="0.01" value="0.7" />
@@ -146,10 +146,13 @@
                 <strong>匯入設定</strong>
               </div>
               <input id="novelAiMetadataFile" type="file" accept="image/*" class="hidden" />
+              <input id="novelAiDefaultsFile" type="file" accept="application/json,.json" class="hidden" />
               <button id="novelAiImportMetadataBtn" type="button" class="secondary">選擇圖片讀取 metadata</button>
               <button id="novelAiSaveDefaultsBtn" type="button" class="secondary">保存預設</button>
               <button id="novelAiApplyDefaultsBtn" type="button" class="secondary">啟用預設</button>
-              <p id="novelAiMetadataStatus" class="nai-card-hint">也可以直接把圖片拖進頁面，再選擇「匯入設定」。</p>
+              <button id="novelAiDownloadDefaultsBtn" type="button" class="secondary">下載預設</button>
+              <button id="novelAiInjectDefaultsBtn" type="button" class="secondary">注入預設</button>
+              <p id="novelAiMetadataStatus" class="nai-card-hint">預設仍保存到本體後端；也可以直接把圖片拖進頁面，再選擇「匯入設定」。</p>
             </section>
           </div>
 
@@ -200,7 +203,7 @@
       <form method="dialog">
         <h3>這張圖片要用在哪裡？</h3>
         <div id="novelAiDropChoicePreview" class="nai-drop-choice-preview"></div>
-        <p id="novelAiDropChoiceText">已接收到圖片。</p>
+        <p id="novelAiDropChoiceText" class="nai-drop-choice-text">已接收到圖片。</p>
         <div class="nai-drop-choice-actions">
           <button type="button" data-drop-action="vibe">Vibe Transfer</button>
           <button type="button" data-drop-action="img2img">Image2Image</button>
@@ -221,6 +224,18 @@
       </form>
     </dialog>
 
+    <dialog id="novelAiDownloadDialog" class="nai-download-dialog">
+      <form method="dialog">
+        <h3>下載圖片</h3>
+        <p>選擇下載方式。</p>
+        <div class="nai-download-actions">
+          <button type="button" data-download-mode="metadata">帶 Prompt / metadata</button>
+          <button type="button" data-download-mode="plain" class="secondary">純圖片</button>
+          <button type="button" data-download-mode="cancel" class="muted">取消</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="novelAiImageViewerDialog" class="nai-image-viewer-dialog">
       <form method="dialog">
         <div class="nai-content-dialog-header">
@@ -234,6 +249,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260613-nai-defaults3"></script>
+    <script type="module" src="/novelai.js?v=20260703-nai-ui-sync1"></script>
   </body>
 </html>

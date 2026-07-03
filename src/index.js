@@ -2356,7 +2356,7 @@ function normalizeNovelAiReferenceImages(value = [], defaults = {}) {
           item?.fidelity,
           defaults.fidelity ?? 1,
           defaults.fidelityMin ?? -1,
-          defaults.fidelityMax ?? 2
+          defaults.fidelityMax ?? 1
         )
       };
     })
@@ -2550,7 +2550,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const preciseSource = source.preciseReference || source.precise_reference || {};
   const vibeTransfer = {
     enabled: vibeSource.enabled !== false,
-    strength: clampNumber(vibeSource.strength ?? source.referenceStrength, 0.6, 0, 1),
+    strength: clampNumber(vibeSource.strength ?? source.referenceStrength, 0.6, -1, 1),
     informationExtracted: clampNumber(
       vibeSource.informationExtracted ?? vibeSource.information_extracted ?? source.referenceInformationExtracted,
       1,
@@ -2560,21 +2560,21 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     images: normalizeNovelAiReferenceImages(vibeSource.images || source.vibeImages, {
       strength: vibeSource.strength ?? source.referenceStrength ?? 0.6,
       informationExtracted: vibeSource.informationExtracted ?? vibeSource.information_extracted ?? source.referenceInformationExtracted ?? 1,
-      strengthMin: 0,
+      strengthMin: -1,
       strengthMax: 1
     })
   };
   const preciseReference = {
     enabled: preciseSource.enabled !== false,
-    strength: clampNumber(preciseSource.strength, 1, -1, 2),
-    fidelity: clampNumber(preciseSource.fidelity, 1, -1, 2),
+    strength: clampNumber(preciseSource.strength, 1, -1, 1),
+    fidelity: clampNumber(preciseSource.fidelity, 1, -1, 1),
     images: normalizeNovelAiReferenceImages(preciseSource.images || source.preciseImages || source.character_references, {
       strength: preciseSource.strength ?? 1,
       fidelity: preciseSource.fidelity ?? 1,
       strengthMin: -1,
-      strengthMax: 2,
+      strengthMax: 1,
       fidelityMin: -1,
-      fidelityMax: 2
+      fidelityMax: 1
     })
   };
   const activeVibeImages = vibeTransfer.enabled ? vibeTransfer.images.filter((item) => item.enabled) : [];
