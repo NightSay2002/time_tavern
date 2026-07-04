@@ -330,3 +330,120 @@ Server running:
 - IP: http://192.168.0.110:3234
 Discord bot 已上線：小時分#0046
 Slash 指令已註冊到全域應用程式
+回覆字數不足 300 字，開始第 1 次補寫。
+
+--- 2026-06-29 05:10:51 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+回覆字數不足 300 字，開始第 1 次補寫。
+
+--- 2026-06-30 05:10:45 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+
+--- 2026-07-01 05:10:44 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+回覆字數不足 300 字，開始第 1 次補寫。
+回覆字數不足 300 字，開始第 1 次補寫。
+回覆字數不足 300 字，開始第 1 次補寫。
+回覆字數不足 300 字，開始第 1 次補寫。
+
+--- 2026-07-02 05:10:46 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+回覆字數不足 300 字，開始第 1 次補寫。
+
+--- 2026-07-03 05:10:47 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 登入失敗（第 1 次）： Error: Unexpected server response: 503
+    at ClientRequest.<anonymous> (/Users/pepper/Documents/server_deepseek/node_modules/ws/lib/websocket.js:918:7)
+    at ClientRequest.emit (node:events:508:28)
+    at HTTPParser.parserOnIncomingClient (node:_http_client:780:27)
+    at HTTPParser.parserOnHeadersComplete (node:_http_common:123:17)
+    at TLSSocket.socketOnData (node:_http_client:615:22)
+    at TLSSocket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+    at Readable.push (node:internal/streams/readable:390:5)
+    at TLSWrap.onStreamRead (node:internal/stream_base_commons:189:23)
+Discord bot 登入錯誤看起來不是暫時性網路問題，已停止自動重試。請檢查 Bot Token、Intents 或權限設定。
+Discord bot 已上線：小時分#0046
+全域 Slash 指令註冊失敗： Error: Expected token to be set for this request, but none was present
+    at _REST.resolveRequest (/Users/pepper/Documents/server_deepseek/node_modules/@discordjs/rest/dist/index.js:1381:15)
+    at _REST.queueRequest (/Users/pepper/Documents/server_deepseek/node_modules/@discordjs/rest/dist/index.js:1341:46)
+    at _REST.request (/Users/pepper/Documents/server_deepseek/node_modules/@discordjs/rest/dist/index.js:1307:33)
+    at _REST.put (/Users/pepper/Documents/server_deepseek/node_modules/@discordjs/rest/dist/index.js:1290:17)
+    at ApplicationCommandManager.set (/Users/pepper/Documents/server_deepseek/node_modules/discord.js/src/managers/ApplicationCommandManager.js:171:41)
+    at registerSlashCommands (file:///Users/pepper/Documents/server_deepseek/src/index.js:11675:24)
+    at Client.<anonymous> (file:///Users/pepper/Documents/server_deepseek/src/index.js:12107:10)
+    at Client.emit (node:events:508:28)
+    at WebSocketManager.triggerClientReady (/Users/pepper/Documents/server_deepseek/node_modules/discord.js/src/client/websocket/WebSocketManager.js:401:17)
+    at WebSocketManager.checkShardsReady (/Users/pepper/Documents/server_deepseek/node_modules/discord.js/src/client/websocket/WebSocketManager.js:368:10)
+
+--- 2026-07-03 20:58:54 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+
+--- 2026-07-03 20:58:57 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
+
+--- 2026-07-04 05:10:49 starting deepseek-bot ---
+
+> discord-deepseek-bot@1.0.0 start
+> node src/index.js
+
+Server running:
+- Local: http://localhost:3234
+- IP: http://192.168.0.110:3234
+Discord bot 已上線：小時分#0046
+Slash 指令已註冊到全域應用程式
