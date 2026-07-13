@@ -31,6 +31,7 @@ const el = {
   novelAiClearBaseImageBtn: document.getElementById("novelAiClearBaseImageBtn"),
   novelAiStrength: document.getElementById("novelAiStrength"),
   novelAiNoise: document.getElementById("novelAiNoise"),
+  novelAiAutoCharacterPosition: document.getElementById("novelAiAutoCharacterPosition"),
   novelAiCharacterList: document.getElementById("novelAiCharacterList"),
   novelAiAddCharacterBtn: document.getElementById("novelAiAddCharacterBtn"),
   novelAiVibeList: document.getElementById("novelAiVibeList"),
@@ -804,6 +805,7 @@ function normalizeSettings(value = {}) {
   const comment = source?.Comment && typeof source.Comment === "object" ? source.Comment : {};
   const sourceVibe = source.vibeTransfer || source.vibe_transfer || {};
   const sourcePrecise = source.preciseReference || source.precise_reference || {};
+  const sourceV4Prompt = source.v4_prompt || comment.v4_prompt || {};
   const promptCharacters = source.characters || source.characterPrompts || source.character_prompts ||
     comment.character_prompts || metadataCharacters(comment, source);
   const randomPrompt = normalizeRandomPromptMetadata(
@@ -844,6 +846,9 @@ function normalizeSettings(value = {}) {
     sampler: String(source.sampler || comment.sampler || "k_euler_ancestral").trim(),
     noiseSchedule: String(source.noiseSchedule || source.noise_schedule || comment.noise_schedule || "karras").trim(),
     loopCount: clampIntegerValue(source.loopCount ?? source.loop_count, 1, 0, 9999),
+    characterPositionMode: source.characterPositionMode === "manual" || source.character_position_mode === "manual" || comment.character_position_mode === "manual" || sourceV4Prompt.use_coords === true
+      ? "manual"
+      : "auto",
     baseImage: String(source.baseImage || source.image || "").trim(),
     strength: source.strength === "" || source.strength === undefined ? 0.7 : finiteNumber(source.strength, 0.7),
     noise: source.noise === "" || source.noise === undefined ? 0 : finiteNumber(source.noise, 0),
@@ -890,7 +895,18 @@ function xyFromPositionCell(row = 3, col = 3) {
 
 function positionLabel(x = 0.5, y = 0.5) {
   const { row, col } = positionCellFromXY(x, y);
-  return `R${row} C${col}`;
+  const rows = ["最上", "偏上", "中央", "偏下", "最下"];
+  const columns = ["最左", "偏左", "中央", "偏右", "最右"];
+  return `${rows[row - 1]}・${columns[col - 1]}`;
+}
+
+function syncCharacterPositionMode() {
+  const automatic = el.novelAiAutoCharacterPosition?.checked !== false;
+  el.novelAiCharacterList?.classList.toggle("is-auto-position", automatic);
+  el.novelAiCharacterList?.querySelectorAll(".nai-position-button").forEach((button) => { button.hidden = automatic; });
+  if (automatic) {
+    el.novelAiCharacterList?.querySelectorAll(".nai-position-grid").forEach((grid) => { grid.hidden = true; });
+  }
 }
 
 function collectCharacters() {
@@ -938,7 +954,7 @@ function renderCharacters(characters = novelAiCharactersDraft) {
           <button type="button" class="nai-danger-button" data-novelai-character-action="remove">刪除角色</button>
         </div>
       </div>
-      <button type="button" class="nai-position-button" data-novelai-character-action="toggle-position">位置 ${positionLabel(character.x, character.y)}</button>
+      <button type="button" class="nai-position-button" data-novelai-character-action="toggle-position">位置：${positionLabel(character.x, character.y)}</button>
       <div class="nai-position-grid" hidden></div>
       <input data-novelai-character-field="x" type="hidden" />
       <input data-novelai-character-field="y" type="hidden" />
@@ -950,7 +966,9 @@ function renderCharacters(characters = novelAiCharactersDraft) {
       for (let c = 1; c <= 5; c += 1) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = `${r},${c}`;
+        button.textContent = r === row && c === col ? "●" : "";
+        button.title = positionLabel((c - 1) / 4, (r - 1) / 4);
+        button.setAttribute("aria-label", button.title);
         button.dataset.novelaiCharacterAction = "select-position";
         button.dataset.row = String(r);
         button.dataset.col = String(c);
@@ -966,6 +984,7 @@ function renderCharacters(characters = novelAiCharactersDraft) {
     card.querySelector('[data-novelai-character-field="negativePrompt"]').value = character.negativePrompt || "";
     el.novelAiCharacterList.appendChild(card);
   });
+  syncCharacterPositionMode();
   updateNovelAiDuplicateWarnings();
 }
 
@@ -1659,6 +1678,7 @@ function getFormSettings() {
     sampler: el.novelAiSampler?.value || "k_euler_ancestral",
     noiseSchedule: el.novelAiNoiseSchedule?.value || "karras",
     loopCount: numberValue(el.novelAiLoopCount, 1, { integer: true, min: 0, max: 9999 }),
+    characterPositionMode: el.novelAiAutoCharacterPosition?.checked === false ? "manual" : "auto",
     sizePreset: getSelectedSizePreset(),
     qualityToggle: true,
     baseImage: String(el.novelAiBaseImage?.value || "").trim(),
@@ -1720,6 +1740,9 @@ function setFormSettings(settings = {}, options = {}) {
   setSelectValue(el.novelAiNoiseSchedule, normalized.noiseSchedule);
   if (el.novelAiLoopCount) {
     el.novelAiLoopCount.value = String(normalized.loopCount ?? 1);
+  }
+  if (el.novelAiAutoCharacterPosition) {
+    el.novelAiAutoCharacterPosition.checked = normalized.characterPositionMode !== "manual";
   }
   el.novelAiStrength.value = normalized.strength ?? 0.7;
   el.novelAiNoise.value = normalized.noise ?? 0;
@@ -1802,11 +1825,7 @@ async function loadNovelAiDefaults() {
 }
 
 function sanitizeNovelAiDefaultSettings(settings = {}) {
-  const normalized = normalizeSettings(settings);
-  normalized.baseImage = "";
-  normalized.vibeTransfer.images = [];
-  normalized.preciseReference.images = [];
-  return normalized;
+  return normalizeSettings(settings);
 }
 
 function buildNovelAiDefaultsPayload(settings = getFormSettings()) {
@@ -1848,7 +1867,9 @@ async function applyNovelAiDefaults() {
     }
     setFormSettings(settings, {
       save: true,
-      clearBaseImage: true,
+      includeReferenceImages: true,
+      includeBaseImage: true,
+      clearBaseImage: !settings.baseImage,
       replaceFixedPromptSnippets: true,
       replaceRandomPromptSnippets: true
     });
@@ -1889,7 +1910,9 @@ async function injectNovelAiDefaultsFromFile(file) {
       : payload.settings;
     setFormSettings(settings, {
       save: true,
-      clearBaseImage: true,
+      includeReferenceImages: true,
+      includeBaseImage: true,
+      clearBaseImage: !settings.baseImage,
       replaceFixedPromptSnippets: true,
       replaceRandomPromptSnippets: true
     });
@@ -2640,8 +2663,8 @@ function buildNovelAiCompatibleComment(item = {}) {
           centers: [{ x: character.x ?? 0.5, y: character.y ?? 0.5 }]
         }))
       },
-      use_coords: true,
-      use_order: true,
+      use_coords: settings.characterPositionMode === "manual" && (settings.characters || []).some((character) => character.enabled !== false),
+      use_order: (settings.characters || []).some((character) => character.enabled !== false),
       legacy_uc: false
     },
     v4_negative_prompt: parameters.v4_negative_prompt || {
@@ -3273,6 +3296,8 @@ function bindEvents() {
       applySizePreset(event.target.value);
     } else if (event?.target === el.novelAiWidth || event?.target === el.novelAiHeight) {
       updateSizePresetFromDimensions();
+    } else if (event?.target === el.novelAiAutoCharacterPosition) {
+      syncCharacterPositionMode();
     }
     novelAiCharactersDraft = collectCharacters();
     updateRangeValues();
@@ -3462,8 +3487,12 @@ function bindEvents() {
       const { x, y } = xyFromPositionCell(Number(button.dataset.row), Number(button.dataset.col));
       card.querySelector('[data-novelai-character-field="x"]').value = x;
       card.querySelector('[data-novelai-character-field="y"]').value = y;
-      card.querySelector(".nai-position-button").textContent = `位置 ${positionLabel(x, y)}`;
-      card.querySelectorAll(".nai-position-grid button").forEach((item) => item.classList.toggle("active", item === button));
+      card.querySelector(".nai-position-button").textContent = `位置：${positionLabel(x, y)}`;
+      card.querySelectorAll(".nai-position-grid button").forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("active", active);
+        item.textContent = active ? "●" : "";
+      });
       card.querySelector(".nai-position-grid").hidden = true;
     }
     novelAiCharactersDraft = collectCharacters();

@@ -22,6 +22,7 @@
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
   timeTrackingSettingsBtn: document.getElementById("timeTrackingSettingsBtn"),
   novelAiImageBtn: document.getElementById("novelAiImageBtn"),
+  novelAiStoryboardBtn: document.getElementById("novelAiStoryboardBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
   useDefaultsBtn: document.getElementById("useDefaultsBtn"),
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
@@ -8951,6 +8952,12 @@ function bindEvents() {
   if (el.novelAiImageBtn) {
     el.novelAiImageBtn.addEventListener("click", () => {
       openNovelAiDialog();
+    });
+  }
+
+  if (el.novelAiStoryboardBtn) {
+    el.novelAiStoryboardBtn.addEventListener("click", () => {
+      window.location.href = "/NAI_storyboard";
     });
   }
 

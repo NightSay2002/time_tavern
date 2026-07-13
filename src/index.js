@@ -10,6 +10,14 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ApplicationCommandOptionType, AttachmentBuilder, Client, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits } from "discord.js";
 import { runConversationTurnWorkflow } from "./conversation-turn.js";
+import {
+  buildStoryboardExecutionPlan,
+  composeStoryboardSceneSettings,
+  createStoryboard,
+  normalizeStoryboard,
+  storyboardSummary,
+  validateStoryboard
+} from "./novelai-storyboard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +35,7 @@ const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
 const NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
+const NOVELAI_STORYBOARDS_DIR = path.join(DATA_DIR, "novelai-storyboards");
 const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?:$|_|\d)|(?:^|_)TOKEN(?:$|\d)|(?:^|_)API_KEY(?:$|\d)/iu;
 const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "DISCORD_BOT_TOKEN",
@@ -1458,14 +1467,14 @@ function sanitizeNovelAiDefaultSettings(input = {}) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
     return {};
   }
-  settings.baseImage = "";
+  settings.baseImage = typeof settings.baseImage === "string" ? settings.baseImage.trim() : "";
   settings.vibeTransfer = {
     ...(settings.vibeTransfer && typeof settings.vibeTransfer === "object" ? settings.vibeTransfer : {}),
-    images: []
+    images: Array.isArray(settings.vibeTransfer?.images) ? settings.vibeTransfer.images : []
   };
   settings.preciseReference = {
     ...(settings.preciseReference && typeof settings.preciseReference === "object" ? settings.preciseReference : {}),
-    images: []
+    images: Array.isArray(settings.preciseReference?.images) ? settings.preciseReference.images : []
   };
   settings.fixedPromptSnippets = Array.isArray(settings.fixedPromptSnippets) ? settings.fixedPromptSnippets : [];
   settings.randomPromptSnippets = Array.isArray(settings.randomPromptSnippets) ? settings.randomPromptSnippets : [];
@@ -2512,8 +2521,8 @@ function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}
       base_caption: baseCaption,
       char_captions: charCaptions
     },
-    use_coords: charCaptions.length > 0,
-    use_order: charCaptions.length > 0,
+    use_coords: options.negative !== true && options.useCoords === true && charCaptions.length > 0,
+    use_order: options.negative !== true && charCaptions.length > 0,
     legacy_uc: false
   };
 }
@@ -2546,6 +2555,9 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const strength = clampNumber(source.strength, 0.7, 0, 1);
   const noise = clampNumber(source.noise, 0, 0, 1);
   const characters = normalizeNovelAiCharacters(source.characters || source.characterPrompts);
+  const characterPositionMode = source.characterPositionMode === "manual" || source.character_position_mode === "manual" || source.useCoords === true || source.use_coords === true
+    ? "manual"
+    : "auto";
   const vibeSource = source.vibeTransfer || source.vibe_transfer || {};
   const preciseSource = source.preciseReference || source.precise_reference || {};
   const vibeTransfer = {
@@ -2631,7 +2643,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   }
 
   if (isNovelAiV4Model(model)) {
-    parameters.v4_prompt = buildNovelAiV4Condition(prompt, characters);
+    parameters.v4_prompt = buildNovelAiV4Condition(prompt, characters, { useCoords: characterPositionMode === "manual" });
     parameters.v4_negative_prompt = buildNovelAiV4Condition(negativePrompt, characters, { negative: true });
   }
 
@@ -2669,6 +2681,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     strength: baseImage ? strength : "",
     noise: baseImage ? noise : "",
     hasBaseImage: Boolean(baseImage),
+    characterPositionMode,
     characters,
     vibeTransfer: {
       enabled: vibeTransfer.enabled,
@@ -2919,6 +2932,7 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
       ucPreset: settings.ucPreset,
       noise_schedule: settings.noiseSchedule,
       model: settings.model,
+      character_position_mode: settings.characterPositionMode || "auto",
       character_prompts: settings.characters || [],
       vibe_transfer: settings.vibeTransfer || {},
       precise_reference: settings.preciseReference || {},
@@ -2928,6 +2942,413 @@ function buildNovelAiImageMetadata(settings = {}, apiPayload = {}) {
     }),
     NovelAIMetadata: fullMetadata
   };
+}
+
+const novelAiStoryboardRunLocks = new Map();
+
+function isSafeStoryboardId(value = "") {
+  return /^[A-Za-z0-9_-]+$/u.test(safeText(value));
+}
+
+function ensureNovelAiStoryboardsDir() {
+  ensureDataFile();
+  fs.mkdirSync(NOVELAI_STORYBOARDS_DIR, { recursive: true });
+}
+
+function getNovelAiStoryboardDir(storyboardId = "") {
+  if (!isSafeStoryboardId(storyboardId)) {
+    throw new Error("Storyboard ID 不正確。");
+  }
+  return path.join(NOVELAI_STORYBOARDS_DIR, storyboardId);
+}
+
+function getNovelAiStoryboardFile(storyboardId = "") {
+  return path.join(getNovelAiStoryboardDir(storyboardId), "storyboard.json");
+}
+
+function getNovelAiStoryboardRunsDir(storyboardId = "") {
+  return path.join(getNovelAiStoryboardDir(storyboardId), "runs");
+}
+
+function getNovelAiStoryboardRunDir(storyboardId = "", runId = "") {
+  if (!isSafeStoryboardId(runId)) {
+    throw new Error("Storyboard run ID 不正確。");
+  }
+  return path.join(getNovelAiStoryboardRunsDir(storyboardId), runId);
+}
+
+function getNovelAiStoryboardRunFile(storyboardId = "", runId = "") {
+  return path.join(getNovelAiStoryboardRunDir(storyboardId, runId), "run.json");
+}
+
+function getNovelAiStoryboardRunImagesDir(storyboardId = "", runId = "") {
+  return path.join(getNovelAiStoryboardRunDir(storyboardId, runId), "images");
+}
+
+function readNovelAiStoryboard(storyboardId = "") {
+  const filePath = getNovelAiStoryboardFile(storyboardId);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    return normalizeStoryboard(JSON.parse(fs.readFileSync(filePath, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+function writeNovelAiStoryboard(input = {}, options = {}) {
+  ensureNovelAiStoryboardsDir();
+  const incoming = input?.storyboard && typeof input.storyboard === "object" ? input.storyboard : input;
+  let storyboard;
+  if (options.create === true && !Array.isArray(incoming?.nodes)) {
+    storyboard = createStoryboard({
+      name: incoming?.name,
+      description: incoming?.description,
+      includeMetadata: incoming?.includeMetadata,
+      globalSettings: incoming?.globalSettings
+    });
+  } else {
+    storyboard = normalizeStoryboard(incoming, { newId: options.create === true });
+  }
+  if (options.storyboardId) {
+    const existing = readNovelAiStoryboard(options.storyboardId);
+    if (!existing) {
+      throw new Error("Storyboard 不存在。");
+    }
+    storyboard.id = existing.id;
+    storyboard.createdAt = existing.createdAt;
+    storyboard.updatedAt = nowIso();
+  }
+  const validation = validateStoryboard(storyboard);
+  if (validation.errors.length) {
+    throw new Error(validation.errors[0]);
+  }
+  storyboard = validation.storyboard;
+  const directory = getNovelAiStoryboardDir(storyboard.id);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(getNovelAiStoryboardFile(storyboard.id), `${JSON.stringify(storyboard, null, 2)}\n`, "utf8");
+  return storyboard;
+}
+
+function listNovelAiStoryboards() {
+  ensureNovelAiStoryboardsDir();
+  return fs.readdirSync(NOVELAI_STORYBOARDS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && isSafeStoryboardId(entry.name))
+    .map((entry) => readNovelAiStoryboard(entry.name))
+    .filter(Boolean)
+    .map(storyboardSummary)
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+}
+
+function deleteNovelAiStoryboard(storyboardId = "") {
+  const storyboard = readNovelAiStoryboard(storyboardId);
+  if (!storyboard) {
+    return false;
+  }
+  fs.rmSync(getNovelAiStoryboardDir(storyboardId), { recursive: true, force: true });
+  return true;
+}
+
+function normalizeStoryboardImageItem(item = {}, storyboardId = "", runId = "") {
+  const imageId = safeText(item.id);
+  return {
+    id: imageId,
+    taskKey: safeText(item.taskKey),
+    sceneId: safeText(item.sceneId),
+    sceneName: safeText(item.sceneName),
+    sceneImageIndex: Number(item.sceneImageIndex || 0) || 0,
+    roundIndex: Math.max(1, Number(item.roundIndex || 1) || 1),
+    roundCount: Math.max(1, Number(item.roundCount || 1) || 1),
+    outputIndex: Number(item.outputIndex || 0) || 0,
+    fileName: safeText(item.fileName) || "storyboard.png",
+    mimeType: safeText(item.mimeType) || "image/png",
+    size: Number(item.size || 0) || 0,
+    metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : {},
+    createdAt: safeText(item.createdAt) || nowIso(),
+    imageUrl: imageId
+      ? `/api/novelai/storyboards/${encodeURIComponent(storyboardId)}/runs/${encodeURIComponent(runId)}/images/${encodeURIComponent(imageId)}`
+      : ""
+  };
+}
+
+function normalizeStoryboardRun(input = {}, storyboardId = "") {
+  const runId = safeText(input.id) || newId("nai_story_run");
+  const images = (Array.isArray(input.images) ? input.images : [])
+    .map((item) => normalizeStoryboardImageItem(item, storyboardId, runId));
+  const validStatuses = new Set(["queued", "generating", "paused", "failed", "completed"]);
+  const plan = Array.isArray(input.plan) ? cloneData(input.plan, []) : [];
+  return {
+    id: runId,
+    storyboardId,
+    storyboardName: safeText(input.storyboardName) || "Storyboard",
+    status: validStatuses.has(input.status) ? input.status : "queued",
+    snapshot: input.snapshot && typeof input.snapshot === "object" ? normalizeStoryboard(input.snapshot) : null,
+    plan,
+    nextIndex: Math.min(plan.length, Math.max(0, Number(input.nextIndex || 0) || 0)),
+    images,
+    pauseRequested: Boolean(input.pauseRequested),
+    error: safeText(input.error),
+    revisions: Array.isArray(input.revisions) ? cloneData(input.revisions, []) : [],
+    createdAt: safeText(input.createdAt) || nowIso(),
+    updatedAt: safeText(input.updatedAt) || nowIso()
+  };
+}
+
+function readNovelAiStoryboardRun(storyboardId = "", runId = "") {
+  const filePath = getNovelAiStoryboardRunFile(storyboardId, runId);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const run = normalizeStoryboardRun(JSON.parse(fs.readFileSync(filePath, "utf8")), storyboardId);
+    const lockKey = `${storyboardId}:${runId}`;
+    if (run.status === "generating" && !novelAiStoryboardRunLocks.has(lockKey)) {
+      run.status = "failed";
+      run.error = run.error || "上次生成在完成前中斷，可以套用最新版設定後續跑。";
+      return writeNovelAiStoryboardRun(storyboardId, run);
+    }
+    return run;
+  } catch {
+    return null;
+  }
+}
+
+function writeNovelAiStoryboardRun(storyboardId = "", run = {}) {
+  const normalized = normalizeStoryboardRun({ ...run, updatedAt: nowIso() }, storyboardId);
+  const runDirectory = getNovelAiStoryboardRunDir(storyboardId, normalized.id);
+  fs.mkdirSync(getNovelAiStoryboardRunImagesDir(storyboardId, normalized.id), { recursive: true });
+  const persisted = {
+    ...normalized,
+    images: normalized.images.map(({ imageUrl, ...item }) => item)
+  };
+  fs.writeFileSync(getNovelAiStoryboardRunFile(storyboardId, normalized.id), `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+  return normalized;
+}
+
+function storyboardRunSummary(run = {}) {
+  return {
+    id: run.id,
+    storyboardId: run.storyboardId,
+    storyboardName: run.storyboardName,
+    status: run.status,
+    completedCount: run.images.length,
+    totalCount: run.images.length + Math.max(0, run.plan.length - run.nextIndex),
+    error: run.error,
+    revisions: run.revisions,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt
+  };
+}
+
+function listNovelAiStoryboardRuns(storyboardId = "") {
+  const directory = getNovelAiStoryboardRunsDir(storyboardId);
+  if (!fs.existsSync(directory)) {
+    return [];
+  }
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && isSafeStoryboardId(entry.name))
+    .map((entry) => readNovelAiStoryboardRun(storyboardId, entry.name))
+    .filter(Boolean)
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+}
+
+function getStoryboardCompletedCounts(run = {}) {
+  return run.images.filter((image) => !image.taskKey).reduce((counts, image) => {
+    counts[image.sceneId] = (counts[image.sceneId] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function getStoryboardCompletedTaskKeys(run = {}) {
+  return run.images.map((image) => safeText(image.taskKey)).filter(Boolean);
+}
+
+function createNovelAiStoryboardRun(storyboardId = "") {
+  const storyboard = readNovelAiStoryboard(storyboardId);
+  if (!storyboard) {
+    throw new Error("Storyboard 不存在。");
+  }
+  const active = listNovelAiStoryboardRuns(storyboardId)
+    .find((run) => run.status !== "completed");
+  if (active) {
+    throw new Error("這個 Storyboard 已有未完成執行，請先續跑或刪除該紀錄。");
+  }
+  const execution = buildStoryboardExecutionPlan(storyboard);
+  const run = {
+    id: newId("nai_story_run"),
+    storyboardId,
+    storyboardName: storyboard.name,
+    status: "queued",
+    snapshot: execution.storyboard,
+    plan: execution.plan,
+    nextIndex: 0,
+    images: [],
+    pauseRequested: false,
+    error: "",
+    revisions: [],
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  return writeNovelAiStoryboardRun(storyboardId, run);
+}
+
+function deleteNovelAiStoryboardRun(storyboardId = "", runId = "") {
+  const run = readNovelAiStoryboardRun(storyboardId, runId);
+  if (!run || run.status === "generating") {
+    return false;
+  }
+  fs.rmSync(getNovelAiStoryboardRunDir(storyboardId, runId), { recursive: true, force: true });
+  return true;
+}
+
+function pauseNovelAiStoryboardRun(storyboardId = "", runId = "") {
+  const run = readNovelAiStoryboardRun(storyboardId, runId);
+  if (!run) {
+    throw new Error("Storyboard 執行紀錄不存在。");
+  }
+  run.pauseRequested = true;
+  if (run.status !== "generating" && run.status !== "completed") {
+    run.status = "paused";
+  }
+  return writeNovelAiStoryboardRun(storyboardId, run);
+}
+
+function resumeNovelAiStoryboardRun(storyboardId = "", runId = "") {
+  const run = readNovelAiStoryboardRun(storyboardId, runId);
+  const latest = readNovelAiStoryboard(storyboardId);
+  if (!run || !latest) {
+    throw new Error("Storyboard 或執行紀錄不存在。");
+  }
+  if (run.status === "generating" || run.status === "completed") {
+    throw new Error(run.status === "completed" ? "這次執行已完成。" : "這次執行仍在生成中。");
+  }
+  const execution = buildStoryboardExecutionPlan(latest, {
+    completedCounts: getStoryboardCompletedCounts(run),
+    completedTaskKeys: getStoryboardCompletedTaskKeys(run),
+    existingOutputCount: run.images.length
+  });
+  run.snapshot = execution.storyboard;
+  run.storyboardName = latest.name;
+  run.plan = execution.plan;
+  run.nextIndex = 0;
+  run.pauseRequested = false;
+  run.error = "";
+  run.status = execution.plan.length ? "queued" : "completed";
+  run.revisions.push({
+    at: nowIso(),
+    fromOutputIndex: run.images.length + 1,
+    message: "未完成部分已套用最新版 Storyboard 設定。"
+  });
+  return writeNovelAiStoryboardRun(storyboardId, run);
+}
+
+async function withNovelAiStoryboardRunLock(storyboardId = "", runId = "", operation) {
+  const key = `${storyboardId}:${runId}`;
+  if (novelAiStoryboardRunLocks.has(key)) {
+    throw new Error("這次 Storyboard 執行已有生成請求進行中。");
+  }
+  const task = Promise.resolve().then(operation);
+  novelAiStoryboardRunLocks.set(key, task);
+  try {
+    return await task;
+  } finally {
+    novelAiStoryboardRunLocks.delete(key);
+  }
+}
+
+async function generateNextNovelAiStoryboardImage(storyboardId = "", runId = "") {
+  return withNovelAiStoryboardRunLock(storyboardId, runId, async () => {
+    let run = readNovelAiStoryboardRun(storyboardId, runId);
+    if (!run || !run.snapshot) {
+      throw new Error("Storyboard 執行紀錄不存在。");
+    }
+    if (run.status === "completed") {
+      return run;
+    }
+    if (run.status === "failed") {
+      throw new Error("這次執行已失敗，請先套用最新版設定後續跑。");
+    }
+    if (run.status === "paused") {
+      throw new Error("這次執行已暫停，請先按續跑。");
+    }
+    const task = run.plan[run.nextIndex];
+    if (!task) {
+      run.status = "completed";
+      return writeNovelAiStoryboardRun(storyboardId, run);
+    }
+    run.status = "generating";
+    run.error = "";
+    run = writeNovelAiStoryboardRun(storyboardId, run);
+    try {
+      const settings = composeStoryboardSceneSettings(run.snapshot, task.sceneId);
+      const result = await generateNovelAiImages({ settings });
+      const generated = result.images[0];
+      const parsed = parseImageDataUrl(generated?.dataUrl || "");
+      if (!parsed || parsed.mimeType !== "image/png") {
+        throw new Error("Storyboard 只接受 NovelAI PNG 輸出。");
+      }
+      const imageId = newId("nai_story_img");
+      const imagePath = path.join(getNovelAiStoryboardRunImagesDir(storyboardId, runId), `${imageId}.png`);
+      fs.writeFileSync(imagePath, parsed.buffer);
+      const item = normalizeStoryboardImageItem({
+        id: imageId,
+        taskKey: task.taskKey,
+        sceneId: task.sceneId,
+        sceneName: task.sceneName,
+        sceneImageIndex: task.sceneImageIndex,
+        roundIndex: task.roundIndex,
+        roundCount: task.roundCount,
+        outputIndex: task.outputIndex,
+        fileName: task.fileName,
+        mimeType: "image/png",
+        size: parsed.buffer.length,
+        metadata: {
+          source: "time_tavern_nai_storyboard",
+          storyboardId,
+          runId,
+          taskKey: task.taskKey,
+          sceneId: task.sceneId,
+          sceneName: task.sceneName,
+          roundIndex: task.roundIndex,
+          roundCount: task.roundCount,
+          settings: result.settings,
+          request: result.request,
+          generation: generated.metadata || {}
+        },
+        createdAt: nowIso()
+      }, storyboardId, runId);
+      run.images.push(item);
+      run.nextIndex += 1;
+      run.error = "";
+      const latestRunState = readNovelAiStoryboardRun(storyboardId, runId);
+      run.pauseRequested = Boolean(latestRunState?.pauseRequested || run.pauseRequested);
+      run.status = run.nextIndex >= run.plan.length
+        ? "completed"
+        : run.pauseRequested ? "paused" : "queued";
+      run.pauseRequested = false;
+      return writeNovelAiStoryboardRun(storyboardId, run);
+    } catch (error) {
+      run.status = "failed";
+      run.pauseRequested = false;
+      run.error = safeText(error?.message) || "Storyboard 生成失敗。";
+      writeNovelAiStoryboardRun(storyboardId, run);
+      throw error;
+    }
+  });
+}
+
+function getNovelAiStoryboardImage(storyboardId = "", runId = "", imageId = "") {
+  if (!isSafeStoryboardId(imageId)) {
+    return null;
+  }
+  const run = readNovelAiStoryboardRun(storyboardId, runId);
+  const image = run?.images.find((item) => item.id === imageId);
+  if (!image) {
+    return null;
+  }
+  const filePath = path.join(getNovelAiStoryboardRunImagesDir(storyboardId, runId), `${imageId}.png`);
+  return fs.existsSync(filePath) ? { image, filePath } : null;
 }
 
 function ensureNovelAiAlbumDir() {
@@ -9759,6 +10180,125 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/novelai/storyboards" && method === "GET") {
+      sendJson(res, 200, { storyboards: listNovelAiStoryboards() });
+      return;
+    }
+
+    if (pathname === "/api/novelai/storyboards" && method === "POST") {
+      const body = await readBody(req);
+      const storyboard = writeNovelAiStoryboard(body, { create: true });
+      sendJson(res, 201, { storyboard, storyboards: listNovelAiStoryboards() });
+      return;
+    }
+
+    const storyboardImageMatch = pathname.match(/^\/api\/novelai\/storyboards\/([^/]+)\/runs\/([^/]+)\/images\/([^/]+)$/u);
+    if (storyboardImageMatch && method === "GET") {
+      const [storyboardId, runId, imageId] = storyboardImageMatch.slice(1).map(decodeURIComponent);
+      const item = getNovelAiStoryboardImage(storyboardId, runId, imageId);
+      if (!item) {
+        sendJson(res, 404, { error: "Storyboard 圖片不存在。" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": item.image.mimeType || "image/png",
+        "Content-Length": item.image.size || fs.statSync(item.filePath).size,
+        "Cache-Control": "no-store"
+      });
+      fs.createReadStream(item.filePath).pipe(res);
+      return;
+    }
+
+    const storyboardRunActionMatch = pathname.match(/^\/api\/novelai\/storyboards\/([^/]+)\/runs\/([^/]+)\/(next|pause|resume)$/u);
+    if (storyboardRunActionMatch && method === "POST") {
+      const storyboardId = decodeURIComponent(storyboardRunActionMatch[1]);
+      const runId = decodeURIComponent(storyboardRunActionMatch[2]);
+      const action = storyboardRunActionMatch[3];
+      const run = action === "next"
+        ? await generateNextNovelAiStoryboardImage(storyboardId, runId)
+        : action === "pause"
+          ? pauseNovelAiStoryboardRun(storyboardId, runId)
+          : resumeNovelAiStoryboardRun(storyboardId, runId);
+      sendJson(res, 200, { run, summary: storyboardRunSummary(run) });
+      return;
+    }
+
+    const storyboardRunMatch = pathname.match(/^\/api\/novelai\/storyboards\/([^/]+)\/runs\/([^/]+)$/u);
+    if (storyboardRunMatch && method === "GET") {
+      const storyboardId = decodeURIComponent(storyboardRunMatch[1]);
+      const runId = decodeURIComponent(storyboardRunMatch[2]);
+      const run = readNovelAiStoryboardRun(storyboardId, runId);
+      if (!run) {
+        sendJson(res, 404, { error: "Storyboard 執行紀錄不存在。" });
+        return;
+      }
+      sendJson(res, 200, { run, summary: storyboardRunSummary(run) });
+      return;
+    }
+
+    if (storyboardRunMatch && method === "DELETE") {
+      const storyboardId = decodeURIComponent(storyboardRunMatch[1]);
+      const runId = decodeURIComponent(storyboardRunMatch[2]);
+      if (!deleteNovelAiStoryboardRun(storyboardId, runId)) {
+        sendJson(res, 409, { error: "執行紀錄不存在或仍在生成中。" });
+        return;
+      }
+      sendJson(res, 200, {
+        runs: listNovelAiStoryboardRuns(storyboardId).map(storyboardRunSummary)
+      });
+      return;
+    }
+
+    const storyboardRunsMatch = pathname.match(/^\/api\/novelai\/storyboards\/([^/]+)\/runs$/u);
+    if (storyboardRunsMatch && method === "GET") {
+      const storyboardId = decodeURIComponent(storyboardRunsMatch[1]);
+      if (!readNovelAiStoryboard(storyboardId)) {
+        sendJson(res, 404, { error: "Storyboard 不存在。" });
+        return;
+      }
+      sendJson(res, 200, {
+        runs: listNovelAiStoryboardRuns(storyboardId).map(storyboardRunSummary)
+      });
+      return;
+    }
+
+    if (storyboardRunsMatch && method === "POST") {
+      const storyboardId = decodeURIComponent(storyboardRunsMatch[1]);
+      const run = createNovelAiStoryboardRun(storyboardId);
+      sendJson(res, 201, { run, summary: storyboardRunSummary(run) });
+      return;
+    }
+
+    const storyboardMatch = pathname.match(/^\/api\/novelai\/storyboards\/([^/]+)$/u);
+    if (storyboardMatch && method === "GET") {
+      const storyboardId = decodeURIComponent(storyboardMatch[1]);
+      const storyboard = readNovelAiStoryboard(storyboardId);
+      if (!storyboard) {
+        sendJson(res, 404, { error: "Storyboard 不存在。" });
+        return;
+      }
+      sendJson(res, 200, { storyboard });
+      return;
+    }
+
+    if (storyboardMatch && method === "PUT") {
+      const storyboardId = decodeURIComponent(storyboardMatch[1]);
+      const body = await readBody(req);
+      const storyboard = writeNovelAiStoryboard(body, { storyboardId });
+      sendJson(res, 200, { storyboard, storyboards: listNovelAiStoryboards() });
+      return;
+    }
+
+    if (storyboardMatch && method === "DELETE") {
+      const storyboardId = decodeURIComponent(storyboardMatch[1]);
+      if (!deleteNovelAiStoryboard(storyboardId)) {
+        sendJson(res, 404, { error: "Storyboard 不存在。" });
+        return;
+      }
+      sendJson(res, 200, { storyboards: listNovelAiStoryboards() });
+      return;
+    }
+
     if (pathname === "/api/novelai/defaults" && method === "GET") {
       sendJson(res, 200, {
         defaults: readNovelAiDefaultsPayload()
@@ -10672,7 +11212,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "GET") {
-      const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+      const relativePath = pathname === "/"
+        ? "index.html"
+        : pathname === "/NAI_storyboard" || pathname === "/NAI_storyboard/"
+          ? "storyboard.html"
+          : pathname.replace(/^\/+/, "");
       const normalizedPath = path.normalize(relativePath).replace(/^([.][.][/\\])+/, "");
       const basePath = path.resolve(PUBLIC_DIR);
       const filePath = path.resolve(basePath, normalizedPath);

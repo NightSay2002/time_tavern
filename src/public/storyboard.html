@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NAI Storyboard｜時分居酒屋</title>
+    <link rel="icon" type="image/png" href="/assets/img/icon.png" />
+    <link rel="stylesheet" href="/vendor/drawflow.min.css?v=0.0.60" />
+    <link rel="stylesheet" href="/styles.css?v=20260712-nai-storyboard4" />
+  </head>
+  <body class="novelai-bright-body storyboard-body">
+    <main class="storyboard-shell">
+      <aside class="storyboard-settings-panel" aria-label="Storyboard 與 NovelAI 設定">
+        <header class="nai-panel-header storyboard-header">
+          <a class="nai-back-link" href="/novelai.html" aria-label="返回 NovelAI">‹</a>
+          <div>
+            <h1>NAI Storyboard</h1>
+            <p id="storyboardNovelAiStatus">Anlas: -</p>
+          </div>
+          <button id="storyboardRefreshStatusBtn" type="button" class="nai-icon-button" title="刷新餘額">↻</button>
+        </header>
+
+        <div class="storyboard-settings-scroll">
+          <section class="nai-card storyboard-library-card">
+            <div class="nai-card-title nai-title-row">
+              <strong>Storyboard</strong>
+              <span id="storyboardSaveStatus" class="storyboard-save-status">已保存</span>
+            </div>
+            <button id="storyboardOpenPickerBtn" type="button" class="secondary storyboard-current-button">
+              <span class="storyboard-current-copy">
+                <span>目前 Storyboard</span>
+                <strong id="storyboardCurrentName">尚未選擇</strong>
+                <small id="storyboardCurrentDescription">打開列表選擇 Storyboard</small>
+              </span>
+              <span class="storyboard-current-action" aria-hidden="true">選擇 ›</span>
+            </button>
+            <label>名稱<input id="storyboardName" type="text" maxlength="100" /></label>
+            <label>簡介<textarea id="storyboardDescription" rows="3" maxlength="500" placeholder="簡短說明這個 Storyboard 的內容"></textarea></label>
+            <div class="storyboard-button-grid">
+              <button id="storyboardNewBtn" type="button">新增</button>
+              <button id="storyboardSaveBtn" type="button" class="secondary">保存</button>
+              <button id="storyboardExportBtn" type="button" class="secondary">匯出</button>
+              <button id="storyboardImportBtn" type="button" class="secondary">匯入</button>
+              <button id="storyboardDeleteBtn" type="button" class="nai-danger-button">刪除</button>
+            </div>
+            <input id="storyboardImportFile" class="hidden" type="file" accept="application/json,.json" />
+            <label class="nai-switch storyboard-metadata-toggle">
+              <input id="storyboardIncludeMetadata" type="checkbox" checked /> 下載圖片保留 Prompt / metadata
+            </label>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title"><strong>模型</strong></div>
+            <select id="storyboardModel"></select>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title"><strong>Base Prompt</strong></div>
+            <textarea id="storyboardPrompt" rows="7" placeholder="masterpiece, best quality"></textarea>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title nai-title-row">
+              <strong>Fixed Prompt</strong>
+              <button id="storyboardAddFixedBtn" type="button" class="secondary">新增</button>
+            </div>
+            <p class="nai-card-hint">在 Prompt 使用 ||名字||。</p>
+            <div id="storyboardFixedList" class="storyboard-snippet-list"></div>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title nai-title-row">
+              <strong>Random Prompt</strong>
+              <button id="storyboardAddRandomBtn" type="button" class="secondary">新增</button>
+            </div>
+            <p class="nai-card-hint">每行一項，每張圖重新抽選。</p>
+            <div id="storyboardRandomList" class="storyboard-snippet-list"></div>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title"><strong>Undesired Content</strong></div>
+            <textarea id="storyboardNegativePrompt" rows="5"></textarea>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title"><strong>Character Positions (Global)</strong></div>
+            <label class="nai-switch nai-switch-field">
+              <input id="storyboardAutoCharacterPosition" type="checkbox" checked /> AI 自動安排角色位置
+            </label>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title nai-title-row">
+              <strong>Vibe Transfer</strong>
+              <button id="storyboardAddVibeBtn" type="button" class="secondary">加入圖片</button>
+            </div>
+            <input id="storyboardVibeFile" class="hidden" type="file" accept="image/*" multiple />
+            <div id="storyboardVibeList" class="storyboard-reference-list"></div>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title nai-title-row">
+              <strong>Image2Image</strong>
+              <button id="storyboardClearBaseImageBtn" type="button" class="muted">清除</button>
+            </div>
+            <input id="storyboardBaseImageFile" class="hidden" type="file" accept="image/*" />
+            <button id="storyboardBaseImagePreview" type="button" class="nai-image-drop-card">選擇圖片</button>
+            <div class="storyboard-two-column">
+              <label>Strength<input id="storyboardStrength" type="number" min="0" max="1" step="0.01" value="0.7" /></label>
+              <label>Noise<input id="storyboardNoise" type="number" min="0" max="1" step="0.01" value="0" /></label>
+            </div>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title nai-title-row">
+              <strong>Precise Reference</strong>
+              <button id="storyboardAddPreciseBtn" type="button" class="secondary">加入圖片</button>
+            </div>
+            <input id="storyboardPreciseFile" class="hidden" type="file" accept="image/*" multiple />
+            <div id="storyboardPreciseList" class="storyboard-reference-list"></div>
+          </section>
+
+          <section class="nai-card">
+            <div class="nai-card-title"><strong>Image Settings</strong></div>
+            <label>尺寸
+              <select id="storyboardSizePreset">
+                <option value="portrait">Normal Portrait 832x1216</option>
+                <option value="landscape">Normal Landscape 1216x832</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <div class="storyboard-two-column">
+              <label>寬<input id="storyboardWidth" type="number" min="64" max="2048" step="64" value="832" /></label>
+              <label>高<input id="storyboardHeight" type="number" min="64" max="2048" step="64" value="1216" /></label>
+            </div>
+          </section>
+
+          <details class="nai-card nai-ai-settings" open>
+            <summary><strong>AI Settings</strong></summary>
+            <div class="nai-field-grid">
+              <label>Steps<input id="storyboardSteps" type="number" min="1" max="50" value="28" /></label>
+              <label>Guidance<input id="storyboardScale" type="number" min="0" max="20" step="0.1" value="6" /></label>
+              <label class="nai-switch nai-switch-field"><input id="storyboardVarietyPlus" type="checkbox" checked /> Variety+</label>
+              <label>Seed<input id="storyboardSeed" type="number" min="-1" step="1" placeholder="N/A" /></label>
+              <label>Sampler<select id="storyboardSampler"></select></label>
+              <label>CFG Rescale<input id="storyboardCfgRescale" type="number" min="0" max="1" step="0.01" value="0" /></label>
+              <label>Noise Schedule<select id="storyboardNoiseSchedule"></select></label>
+            </div>
+          </details>
+
+          <section class="nai-card nai-metadata-card">
+            <div class="nai-card-title"><strong>NAI 預設</strong></div>
+            <input id="storyboardDefaultsFile" class="hidden" type="file" accept="application/json,.json" />
+            <button id="storyboardSaveDefaultsBtn" type="button" class="secondary">保存預設</button>
+            <button id="storyboardApplyDefaultsBtn" type="button" class="secondary">啟用預設</button>
+            <button id="storyboardDownloadDefaultsBtn" type="button" class="secondary">下載預設</button>
+            <button id="storyboardInjectDefaultsBtn" type="button" class="secondary">注入預設</button>
+          </section>
+        </div>
+      </aside>
+
+      <section class="storyboard-workspace" aria-label="Storyboard 畫布">
+        <div class="storyboard-toolbar">
+          <div class="storyboard-toolbar-group">
+            <button id="storyboardAddCharacterBtn" type="button">新增角色</button>
+            <button id="storyboardAddSceneBtn" type="button">新增場景</button>
+            <button id="storyboardDeleteNodeBtn" type="button" class="nai-danger-button">刪除</button>
+          </div>
+          <div class="storyboard-toolbar-group storyboard-zoom-controls">
+            <button id="storyboardZoomOutBtn" type="button" class="nai-icon-button" title="縮小">−</button>
+            <button id="storyboardCenterBtn" type="button" class="secondary">置中</button>
+            <button id="storyboardZoomInBtn" type="button" class="nai-icon-button" title="放大">＋</button>
+          </div>
+          <div class="storyboard-toolbar-group storyboard-run-controls">
+            <span id="storyboardProgressText">尚未開始</span>
+            <button id="storyboardStartBtn" type="button">開始</button>
+            <button id="storyboardStopBtn" type="button" class="nai-danger-button" disabled>停止</button>
+          </div>
+        </div>
+        <div id="storyboardCanvas" class="storyboard-canvas"></div>
+      </section>
+
+      <aside class="storyboard-inspector-panel" aria-label="節點設定">
+        <section class="storyboard-inspector-section">
+          <header>
+            <div><strong>節點設定</strong><span id="storyboardSelectionLabel">未選擇節點</span></div>
+          </header>
+          <div id="storyboardInspector" class="storyboard-inspector"></div>
+        </section>
+      </aside>
+    </main>
+
+    <button id="storyboardOpenRunsBtn" type="button" class="storyboard-runs-fab">
+      執行紀錄 <span id="storyboardRunBadge">0</span>
+    </button>
+
+    <dialog id="storyboardRunsDialog" class="storyboard-runs-dialog">
+      <section class="storyboard-runs-dialog-shell">
+        <section class="storyboard-runs-section">
+          <header>
+            <div><strong>執行紀錄</strong><span>獨立於 NAI 歷史</span></div>
+            <div class="storyboard-runs-header-actions">
+              <button id="storyboardRefreshRunsBtn" type="button" class="nai-icon-button" title="刷新">↻</button>
+              <button id="storyboardCloseRunsBtn" type="button" class="muted">關閉</button>
+            </div>
+          </header>
+          <div id="storyboardRunList" class="storyboard-run-list"></div>
+          <div id="storyboardRunDetail" class="storyboard-run-detail"></div>
+        </section>
+      </section>
+    </dialog>
+
+    <dialog id="storyboardLoopDialog" class="storyboard-loop-dialog">
+      <section class="storyboard-loop-dialog-shell">
+        <header>
+          <div><h2>往返設定</h2><p id="storyboardLoopDialogText">選擇這條連線的往返次數</p></div>
+          <button id="storyboardCloseLoopBtn" type="button" class="muted">關閉</button>
+        </header>
+        <label>往返次數（0 表示不往返）
+          <input id="storyboardLoopRepeatInput" type="number" min="0" max="20" step="1" value="0" />
+        </label>
+        <button id="storyboardSaveLoopBtn" type="button">保存往返設定</button>
+      </section>
+    </dialog>
+
+    <dialog id="storyboardPickerDialog" class="storyboard-picker-dialog">
+      <section class="storyboard-picker-shell">
+        <header class="storyboard-picker-header">
+          <div>
+            <h2>選擇 Storyboard</h2>
+            <p>打開既有 Storyboard，或直接管理存檔。</p>
+          </div>
+          <button id="storyboardClosePickerBtn" type="button" class="muted">關閉</button>
+        </header>
+        <div id="storyboardPickerGrid" class="storyboard-picker-grid"></div>
+        <footer class="storyboard-picker-pagination">
+          <button id="storyboardPickerPrevBtn" type="button" class="secondary">上一頁</button>
+          <span id="storyboardPickerPageInfo">第 1 / 1 頁</span>
+          <button id="storyboardPickerNextBtn" type="button" class="secondary">下一頁</button>
+        </footer>
+      </section>
+    </dialog>
+
+    <dialog id="storyboardImageDialog" class="nai-image-viewer-dialog">
+      <form method="dialog">
+        <div class="nai-content-dialog-header">
+          <h3 id="storyboardImageDialogTitle">Storyboard 圖片</h3>
+          <button type="submit" class="muted">關閉</button>
+        </div>
+        <div class="nai-image-viewer-stage"><img id="storyboardImageDialogImage" alt="Storyboard 圖片" /></div>
+      </form>
+    </dialog>
+
+    <div id="storyboardToast" class="toast"></div>
+    <script src="/vendor/drawflow.min.js?v=0.0.60"></script>
+    <script type="module" src="/storyboard.js?v=20260712-nai-storyboard4"></script>
+  </body>
+</html>
