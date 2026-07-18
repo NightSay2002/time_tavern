@@ -5474,6 +5474,9 @@ function renderMessages(state, options = {}) {
 
     const menu = document.createElement("details");
     menu.className = "discord-message-menu";
+    menu.addEventListener("toggle", () => {
+      wrapper.classList.toggle("has-open-menu", menu.open);
+    });
     const menuSummary = document.createElement("summary");
     menuSummary.textContent = "⋯";
     menu.appendChild(menuSummary);

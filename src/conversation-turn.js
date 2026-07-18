@@ -101,8 +101,10 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
     });
     requireDependency(deps, "appendConversationMessage")(userMessage);
     deps.markPendingAssistantFeedbackApplied?.(pendingAssistantFeedback, userMessage);
-    deps.updateTimeTrackingFromMessage?.(currentState, userMessage);
   }
+
+  deps.resolvePendingTimeTrackingBeforeUserTurn?.(currentState, storedUserContent);
+  deps.updateTimeTrackingFromMessage?.(currentState, userMessage);
 
   const runtimeUserName = requireDependency(deps, "resolveRuntimeUserName")(currentState, turnExtra, input);
   deps.attachTriggeredLorebooksToUserMessage?.(userMessage, currentState, runtimeUserName);

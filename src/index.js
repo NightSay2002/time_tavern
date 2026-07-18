@@ -1041,6 +1041,34 @@ function normalizeTimeTrackingAutoPeriodConfig(input = {}) {
   };
 }
 
+function normalizePendingTimeTrackingTransition(input = {}, fallback = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const transitionSource = safeText(source.source);
+  if (!["auto", "assistant_text"].includes(transitionSource)) {
+    return null;
+  }
+  const fallbackYear = normalizeTimeTrackingYear(fallback.currentYear);
+  const currentYear = normalizeTimeTrackingYear(source.currentYear, fallbackYear);
+  const currentMonth = Math.floor(Number(source.currentMonth));
+  const currentDate = Math.floor(Number(source.currentDate));
+  if (!isValidMonthDate(currentMonth, currentDate, currentYear)) {
+    return null;
+  }
+  const currentDayNumber = Math.floor(Number(source.currentDayNumber));
+  if (!Number.isFinite(currentDayNumber) || currentDayNumber < 1) {
+    return null;
+  }
+  return {
+    source: transitionSource,
+    currentDayNumber,
+    currentPeriod: normalizeTimePeriod(source.currentPeriod),
+    currentYear,
+    currentMonth,
+    currentDate,
+    createdAt: safeText(source.createdAt) || nowIso()
+  };
+}
+
 function normalizeTimeTrackingState(input = {}) {
   const defaults = createDefaultTimeTrackingState();
   const source = input && typeof input === "object" ? input : {};
@@ -1056,7 +1084,7 @@ function normalizeTimeTrackingState(input = {}) {
     : defaults.currentDate;
   const resolvedMonth = isValidMonthDate(month, date, currentYear) ? month : fallbackMonth;
   const resolvedDate = isValidMonthDate(month, date, currentYear) ? date : fallbackDate;
-  return {
+  const normalized = {
     enabled: source.enabled !== false,
     currentDayNumber: Number.isFinite(currentDayNumber) && currentDayNumber > 0 ? currentDayNumber : 1,
     currentPeriod: normalizeTimePeriod(source.currentPeriod || source.period || source.timeOfDay),
@@ -1066,6 +1094,13 @@ function normalizeTimeTrackingState(input = {}) {
     autoPeriod: normalizeTimeTrackingAutoPeriodConfig(source.autoPeriod || source.autoTime || source.autoSwitch),
     config: normalizeTimeTrackingConfig(source.config || source.rules || source),
     updatedAt: safeText(source.updatedAt) || defaults.updatedAt
+  };
+  return {
+    ...normalized,
+    pendingTransition: normalizePendingTimeTrackingTransition(
+      source.pendingTransition || source.pendingTimeTransition,
+      normalized
+    )
   };
 }
 
@@ -5280,6 +5315,45 @@ function getTimePeriodTransitionLabel(timeTracking = {}) {
   return `${currentLabel}->${nextLabel}`;
 }
 
+function formatTimeTrackingPoint(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const periodLabel = TIME_PERIOD_LABELS[normalized.currentPeriod] || TIME_PERIOD_LABELS[TIME_PERIOD_MORNING];
+  return `第${normalized.currentDayNumber}天${periodLabel}${normalized.currentYear}年${normalized.currentMonth}月${normalized.currentDate}日`;
+}
+
+function createPendingTimeTrackingTransition(targetTimeTracking = {}, source = "auto") {
+  const target = normalizeTimeTrackingState(targetTimeTracking);
+  return {
+    source: source === "assistant_text" ? "assistant_text" : "auto",
+    currentDayNumber: target.currentDayNumber,
+    currentPeriod: target.currentPeriod,
+    currentYear: target.currentYear,
+    currentMonth: target.currentMonth,
+    currentDate: target.currentDate,
+    createdAt: nowIso()
+  };
+}
+
+function getPendingTimeTrackingTarget(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const pendingTransition = normalizePendingTimeTrackingTransition(
+    normalized.pendingTransition,
+    normalized
+  );
+  if (!pendingTransition) {
+    return null;
+  }
+  return normalizeTimeTrackingState({
+    ...normalized,
+    ...pendingTransition,
+    pendingTransition: null,
+    autoPeriod: {
+      ...normalized.autoPeriod,
+      turnsSinceChange: 0
+    }
+  });
+}
+
 function resetAutoTimePeriodCounter(timeTracking = {}) {
   const normalized = normalizeTimeTrackingState(timeTracking);
   return {
@@ -5314,6 +5388,9 @@ function shouldWarnBeforeAutoTimePeriodSwitch(timeTracking = {}) {
   if (!normalized.enabled || !autoPeriod.enabled) {
     return false;
   }
+  if (normalized.pendingTransition?.source === "auto") {
+    return true;
+  }
   return autoPeriod.turnsSinceChange >= Math.max(0, autoPeriod.roundsPerPeriod - 1);
 }
 
@@ -5323,7 +5400,20 @@ function formatAutoTimePeriodWarning(timeTracking = {}) {
   if (!normalized.enabled || !autoPeriod.enabled || !shouldWarnBeforeAutoTimePeriodSwitch(normalized)) {
     return "";
   }
-  return `代碼即將自動切換時間 ${getTimePeriodTransitionLabel(normalized)}，如果不想切換，請在對話中加入 {保持時間}，會延後 ${autoPeriod.roundsPerPeriod} 回合`;
+  const pendingTarget = getPendingTimeTrackingTarget(normalized);
+  const transitionLabel = pendingTarget
+    ? `${formatTimeTrackingPoint(normalized)} -> ${formatTimeTrackingPoint(pendingTarget)}`
+    : getTimePeriodTransitionLabel(normalized);
+  return `代碼即將自動切換時間 ${transitionLabel}，如果不想切換，請在下一次對話中加入 {保持時間}，會延後 ${autoPeriod.roundsPerPeriod} 回合`;
+}
+
+function formatAssistantTimeTransitionWarning(timeTracking = {}) {
+  const normalized = normalizeTimeTrackingState(timeTracking);
+  const pendingTarget = getPendingTimeTrackingTarget(normalized);
+  if (!normalized.enabled || normalized.pendingTransition?.source !== "assistant_text" || !pendingTarget) {
+    return "";
+  }
+  return `AI 對話即將切換時間 ${formatTimeTrackingPoint(normalized)} -> ${formatTimeTrackingPoint(pendingTarget)}，如果不想切換，請在下一次對話中加入 {保持時間}`;
 }
 
 function hasKeepTimeDirective(text = "") {
@@ -5334,6 +5424,55 @@ function hasKeepTimeDirective(text = "") {
 function stripKeepTimeDirective(text = "") {
   KEEP_TIME_DIRECTIVE_PATTERN.lastIndex = 0;
   return safeText(text).replace(KEEP_TIME_DIRECTIVE_PATTERN, "").trim();
+}
+
+function resolvePendingTimeTrackingBeforeUserTurn(currentState, userInput = "") {
+  if (!currentState || typeof currentState !== "object") {
+    return { applied: false, kept: false };
+  }
+  let timeTracking = normalizeTimeTrackingState(currentState.timeTracking);
+  if (!timeTracking.enabled) {
+    currentState.timeTracking = timeTracking;
+    return { applied: false, kept: false };
+  }
+
+  let pendingTransition = timeTracking.pendingTransition;
+  if (!pendingTransition && shouldWarnBeforeAutoTimePeriodSwitch(timeTracking)) {
+    pendingTransition = createPendingTimeTrackingTransition(
+      advanceTimeTrackingPeriod(timeTracking),
+      "auto"
+    );
+    timeTracking = normalizeTimeTrackingState({
+      ...timeTracking,
+      pendingTransition
+    });
+  }
+  if (!pendingTransition) {
+    currentState.timeTracking = timeTracking;
+    return { applied: false, kept: false };
+  }
+
+  const keepTime = hasKeepTimeDirective(userInput);
+  if (keepTime) {
+    currentState.timeTracking = normalizeTimeTrackingState({
+      ...timeTracking,
+      pendingTransition: null,
+      autoPeriod: {
+        ...timeTracking.autoPeriod,
+        turnsSinceChange: 0
+      },
+      updatedAt: nowIso()
+    });
+    return { applied: false, kept: true };
+  }
+
+  const target = getPendingTimeTrackingTarget(timeTracking);
+  currentState.timeTracking = normalizeTimeTrackingState({
+    ...(target || timeTracking),
+    pendingTransition: null,
+    updatedAt: nowIso()
+  });
+  return { applied: Boolean(target), kept: false };
 }
 
 function detectTimePeriodFromText(text = "", config = DEFAULT_TIME_TRACKING_CONFIG, options = {}) {
@@ -5453,11 +5592,36 @@ function updateTimeTrackingFromMessage(currentState, message = {}) {
 }
 
 function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", userInput = "") {
-  const textUpdate = updateTimeTrackingFromText(currentState, assistantText);
   let timeTracking = normalizeTimeTrackingState(currentState?.timeTracking);
+  if (!timeTracking.enabled) {
+    currentState.timeTracking = timeTracking;
+    return { autoTimeWarning: "" };
+  }
+
+  const assistantTextCandidate = {
+    timeTracking: normalizeTimeTrackingState({
+      ...timeTracking,
+      pendingTransition: null
+    })
+  };
+  const textUpdate = updateTimeTrackingFromText(assistantTextCandidate, assistantText);
+  if (textUpdate.changed) {
+    currentState.timeTracking = normalizeTimeTrackingState({
+      ...timeTracking,
+      pendingTransition: createPendingTimeTrackingTransition(
+        assistantTextCandidate.timeTracking,
+        "assistant_text"
+      ),
+      updatedAt: nowIso()
+    });
+    return {
+      autoTimeWarning: formatAssistantTimeTransitionWarning(currentState.timeTracking)
+    };
+  }
+
   const autoPeriod = normalizeTimeTrackingAutoPeriodConfig(timeTracking.autoPeriod);
   const keepTime = hasKeepTimeDirective(userInput);
-  if (!timeTracking.enabled || !autoPeriod.enabled || textUpdate.changed) {
+  if (!autoPeriod.enabled) {
     currentState.timeTracking = timeTracking;
     return { autoTimeWarning: "" };
   }
@@ -5474,9 +5638,23 @@ function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", 
   }
 
   const nextCount = autoPeriod.turnsSinceChange + 1;
-  if (nextCount >= autoPeriod.roundsPerPeriod) {
-    currentState.timeTracking = normalizeTimeTrackingState(advanceTimeTrackingPeriod(timeTracking));
-    return { autoTimeWarning: "" };
+  const warningThreshold = Math.max(1, autoPeriod.roundsPerPeriod - 1);
+  if (nextCount >= warningThreshold) {
+    currentState.timeTracking = normalizeTimeTrackingState({
+      ...timeTracking,
+      autoPeriod: {
+        ...autoPeriod,
+        turnsSinceChange: nextCount
+      },
+      pendingTransition: createPendingTimeTrackingTransition(
+        advanceTimeTrackingPeriod(timeTracking),
+        "auto"
+      ),
+      updatedAt: nowIso()
+    });
+    return {
+      autoTimeWarning: formatAutoTimePeriodWarning(currentState.timeTracking)
+    };
   }
 
   currentState.timeTracking = normalizeTimeTrackingState({
@@ -5487,9 +5665,7 @@ function updateTimeTrackingAfterAssistantTurn(currentState, assistantText = "", 
     },
     updatedAt: nowIso()
   });
-  return {
-    autoTimeWarning: formatAutoTimePeriodWarning(currentState.timeTracking)
-  };
+  return { autoTimeWarning: "" };
 }
 
 function formatTimeTrackingPromptBlock(currentState = state, options = {}) {
@@ -9333,6 +9509,7 @@ function createConversationTurnDeps(options = {}) {
     createMessageRecord,
     appendConversationMessage,
     markPendingAssistantFeedbackApplied,
+    resolvePendingTimeTrackingBeforeUserTurn,
     updateTimeTrackingFromMessage,
     resolveRuntimeUserName: (currentState, turnExtra = {}) =>
       resolveUserDisplayName(currentState.userProfile, turnExtra.discordUserName || ""),
@@ -9892,7 +10069,6 @@ async function regenerateLatestAssistantReply({
     const { latestUser, removedAssistant } = removeLatestAssistantTurnForReload(state);
     const latestUserIndex = state.conversation.findIndex((item) => item?.id === latestUser?.id);
     restoreNarrativeStateForReplay(state, latestUserIndex);
-    updateTimeTrackingFromMessage(state, latestUser);
     const result = await runConversationTurnWorkflow(
       createConversationTurnDeps(),
       {
@@ -10438,6 +10614,7 @@ const server = http.createServer(async (req, res) => {
         ...current,
         ...body,
         ...dateFields,
+        pendingTransition: null,
         config: normalizeTimeTrackingConfig(body?.config || current.config)
       });
       saveState(state);

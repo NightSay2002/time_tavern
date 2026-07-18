@@ -1340,6 +1340,11 @@ button {
   padding: 4px 18px 12px 24px;
   border-radius: 0;
   contain: layout style;
+  z-index: 0;
+}
+
+.discord-message.has-open-menu {
+  z-index: 10;
 }
 
 .discord-message:hover {
