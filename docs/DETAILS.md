@@ -27,11 +27,11 @@
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`custom`。 |
 | `CHAT_API_KEY` | 空 | 主聊天、補寫、角色卡助手、大模型處理使用。 |
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
-| `CHAT_API_MODEL` | `deepseek-reasoner` | 主對話模型。 |
+| `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
 | `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改 `max_completion_tokens`。 |
-| `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature。 |
+| `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature，可設定 `0–2` 並支援小數。 |
 | `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | 大模型內容處理可按順序使用不同 key。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |

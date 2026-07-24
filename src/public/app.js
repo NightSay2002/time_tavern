@@ -425,46 +425,6 @@ const CHAT_COMMAND_MENU_ITEMS = [
         help: "要載入的對話存檔 ID。"
       }
     ]
-  },
-  {
-    id: "role-picker",
-    command: "角色卡",
-    title: "選擇角色卡",
-    description: "切換或啟動角色卡。",
-    hint: "面板",
-    action: "rolePicker"
-  },
-  {
-    id: "model-content",
-    command: "模型內容",
-    title: "查看/編輯模型內容",
-    description: "查看目前各大模型保存的內容。",
-    hint: "面板",
-    action: "modelContent"
-  },
-  {
-    id: "time-settings",
-    command: "統計時間",
-    title: "統計判斷編輯",
-    description: "編輯時間、天數與自動切換規則。",
-    hint: "面板",
-    action: "timeSettings"
-  },
-  {
-    id: "novelai-image",
-    command: "NovelAI 跑圖",
-    title: "NovelAI 跑圖",
-    description: "打開 NovelAI 圖像生成、歷史與收藏相簿。",
-    hint: "面板",
-    action: "novelAiImage"
-  },
-  {
-    id: "env-settings",
-    command: "環境設定",
-    title: "環境設定",
-    description: "調整頭像、背景、API 與顯示設定。",
-    hint: "面板",
-    action: "envSettings"
   }
 ];
 const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
@@ -754,7 +714,7 @@ const ENV_FIELD_GROUPS = [
         key: "CHAT_API_MODEL",
         label: "API輸出模型",
         type: "text",
-        placeholder: "deepseek-reasoner / gpt-4.1 / gemini-2.5-flash",
+        placeholder: "deepseek-v4-pro / gpt-4.1 / gemini-2.5-flash",
         help: "主聊天、大模型處理、補寫與角色卡助手都會使用此模型。"
       },
       {
@@ -785,7 +745,11 @@ const ENV_FIELD_GROUPS = [
         label: "溫度",
         type: "number",
         placeholder: "0.5",
-        help: "選填。留空時一般對話使用 0.5，寫卡助手使用 0.9。"
+        min: "0",
+        max: "2",
+        step: "0.1",
+        inputMode: "decimal",
+        help: "選填，可設定 0 至 2（支援 0.1 等小數）。留空時一般對話使用 0.5，寫卡助手使用 0.9。"
       }
     ]
   },
@@ -2333,6 +2297,20 @@ function createEnvField(field, parsedEnv) {
     input.value = getEnvFieldValue(parsedEnv, field.key);
     if (field.autocomplete) {
       input.autocomplete = field.autocomplete;
+    }
+    if (field.type === "number") {
+      if (field.min !== undefined) {
+        input.min = String(field.min);
+      }
+      if (field.max !== undefined) {
+        input.max = String(field.max);
+      }
+      if (field.step !== undefined) {
+        input.step = String(field.step);
+      }
+      if (field.inputMode) {
+        input.inputMode = field.inputMode;
+      }
     }
   }
 
@@ -3903,12 +3881,6 @@ function renderChatCommandMenu() {
     body.append(title, description);
 
     option.append(icon, body);
-    if (chatCommandMenuShowAll && item.hint) {
-      const hint = document.createElement("span");
-      hint.className = "chat-command-hint";
-      hint.textContent = item.hint;
-      option.appendChild(hint);
-    }
     option.addEventListener("mousedown", (event) => event.preventDefault());
     option.addEventListener("click", () => runChatCommandMenuItem(item));
     el.chatCommandMenu.appendChild(option);
@@ -3960,8 +3932,16 @@ function clearChatInputValue() {
 
 function openRoleCardPicker() {
   roleCardPickerPage = 1;
-  renderRoleCardPicker(appState);
+  const loading = document.createElement("p");
+  loading.className = "form-hint";
+  loading.textContent = "正在載入角色卡...";
+  el.roleCardPickerGrid?.replaceChildren(loading);
   el.roleCardPickerDialog?.showModal();
+  window.requestAnimationFrame(() => {
+    if (el.roleCardPickerDialog?.open) {
+      renderRoleCardPicker(appState, { force: true });
+    }
+  });
 }
 
 function openSessionPicker() {
@@ -4129,25 +4109,6 @@ async function runChatCommandAction(action = "", args = []) {
   if (action === "sessionList") {
     openSessionPicker();
     return;
-  }
-  if (action === "rolePicker") {
-    openRoleCardPicker();
-    return;
-  }
-  if (action === "modelContent") {
-    await openContextCompressionDialog();
-    return;
-  }
-  if (action === "timeSettings") {
-    await openTimeTrackingDialog();
-    return;
-  }
-  if (action === "novelAiImage") {
-    await openNovelAiDialog();
-    return;
-  }
-  if (action === "envSettings") {
-    await openEnvSettingsDialog();
   }
 }
 
@@ -4376,7 +4337,10 @@ function applyMobilePage() {
   }
 
   if (el.mobileInfoToggleBtn) {
-    el.mobileInfoToggleBtn.textContent = mobileInfoOpen ? "▾" : "▸";
+    const toggleLabel = mobileInfoOpen ? "關閉導覽" : "開啟導覽";
+    el.mobileInfoToggleBtn.textContent = mobileInfoOpen ? "×" : "☰";
+    el.mobileInfoToggleBtn.setAttribute("aria-label", toggleLabel);
+    el.mobileInfoToggleBtn.title = toggleLabel;
     el.mobileInfoToggleBtn.setAttribute("aria-expanded", mobileInfoOpen ? "true" : "false");
   }
 
@@ -4390,131 +4354,32 @@ function fillProfile(state) {
 }
 
 function renderRoleCards(state) {
-  el.roleCardList.innerHTML = "";
-
-  getAssistantCards(state).forEach((assistantCard) => {
-    const assistantItem = document.createElement("div");
-    assistantItem.className = "role-card";
-
-    const assistantTitle = document.createElement("h3");
-    const assistantName = getAssistantCardName(assistantCard);
-    assistantTitle.textContent = state.activeAssistantMode === assistantCard.id
-      ? `${assistantName}（目前使用）`
-      : assistantName;
-
-    const assistantDesc = document.createElement("p");
-    assistantDesc.textContent = assistantCard.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
-
-    const assistantActions = document.createElement("div");
-    assistantActions.className = "inline-actions";
-
-    const assistantStartBtn = document.createElement("button");
-    assistantStartBtn.className = "secondary";
-    assistantStartBtn.type = "button";
-    const isPendingAssistantStart = pendingRoleCardStartId === assistantCard.id;
-    assistantStartBtn.textContent = isPendingAssistantStart ? "處理中..." : "啟用助手並重置";
-    assistantStartBtn.disabled = Boolean(pendingRoleCardStartId);
-    assistantStartBtn.addEventListener("click", () => startAssistantCard(assistantCard.id));
-
-    const assistantPromptBtn = document.createElement("button");
-    assistantPromptBtn.className = "secondary";
-    assistantPromptBtn.type = "button";
-    assistantPromptBtn.textContent = "編輯";
-    assistantPromptBtn.addEventListener("click", () => openAssistantPromptDialog(assistantCard));
-
-    assistantActions.append(assistantStartBtn, assistantPromptBtn);
-    if (!assistantCard.locked) {
-      const assistantDeleteBtn = document.createElement("button");
-      assistantDeleteBtn.className = "muted";
-      assistantDeleteBtn.type = "button";
-      assistantDeleteBtn.textContent = "刪除";
-      assistantDeleteBtn.disabled = Boolean(pendingRoleCardStartId);
-      assistantDeleteBtn.addEventListener("click", () => removeAssistantCard(assistantCard));
-      assistantActions.append(assistantDeleteBtn);
-    }
-    assistantItem.append(assistantTitle, assistantDesc, assistantActions);
-    el.roleCardList.appendChild(assistantItem);
-  });
-
-  if (state.roleCards.length === 0) {
-    const empty = document.createElement("p");
-    empty.textContent = "尚無角色卡，其上方仍可直接啟用助手。";
-    empty.style.color = "#9eb0d0";
-    empty.style.fontSize = "12px";
-    el.roleCardList.appendChild(empty);
-    renderRoleCardPicker(state);
-    return;
+  el.roleCardList?.replaceChildren();
+  if (el.roleCardPickerDialog?.open) {
+    renderRoleCardPicker(state, { force: true });
   }
-
-  state.roleCards.forEach((card) => {
-    const item = document.createElement("div");
-    item.className = "role-card";
-    const cardDisplayName = card.name || "未命名角色卡";
-
-    const title = document.createElement("h3");
-    title.textContent =
-      state.activeRoleCardId === card.id ? `${cardDisplayName}（目前使用）` : cardDisplayName;
-
-    const desc = document.createElement("p");
-    desc.textContent = truncateText(
-      [buildRoleCardIntro(card, state), buildRoleCardContent(card, state)].filter(Boolean).join("｜"),
-      100
-    );
-
-    const actions = document.createElement("div");
-    actions.className = "inline-actions";
-
-    const startBtn = document.createElement("button");
-    startBtn.className = "secondary";
-    startBtn.type = "button";
-    const isPendingStart = pendingRoleCardStartId === card.id;
-    startBtn.textContent = isPendingStart ? "處理中..." : "作為開始";
-    startBtn.disabled = Boolean(pendingRoleCardStartId);
-    startBtn.addEventListener("click", () => startRoleCard(card.id));
-
-    const editBtn = document.createElement("button");
-    editBtn.className = "secondary";
-    editBtn.type = "button";
-    editBtn.textContent = "編輯";
-    editBtn.disabled = Boolean(pendingRoleCardStartId);
-    editBtn.addEventListener("click", () => openRoleCardDialog(card));
-
-    const exportBtn = document.createElement("button");
-    exportBtn.className = "secondary";
-    exportBtn.type = "button";
-    exportBtn.textContent = "匯出";
-    exportBtn.disabled = Boolean(pendingRoleCardStartId);
-    exportBtn.addEventListener("click", () => exportRoleCard(card));
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "muted";
-    deleteBtn.type = "button";
-    deleteBtn.textContent = "刪除";
-    deleteBtn.disabled = Boolean(pendingRoleCardStartId);
-    deleteBtn.addEventListener("click", () => removeRoleCard(card));
-
-    actions.append(startBtn, editBtn, exportBtn, deleteBtn);
-    item.append(title, desc, actions);
-    el.roleCardList.appendChild(item);
-  });
-
-  renderRoleCardPicker(state);
 }
 
-function renderRoleCardPicker(state = appState) {
-  if (!el.roleCardPickerGrid || !state) {
+function renderRoleCardPicker(state = appState, options = {}) {
+  if (!el.roleCardPickerGrid || !state || (!options.force && !el.roleCardPickerDialog?.open)) {
     return;
   }
 
   const roleCards = Array.isArray(state.roleCards) ? state.roleCards : [];
-  const items = [
-    ...getAssistantCards(state).map((assistantCard) => ({ type: "assistant", id: assistantCard.id, assistantCard })),
-    ...roleCards.map((card) => ({ type: "card", id: card.id, card }))
-  ];
-  const totalPages = Math.max(1, Math.ceil(items.length / ROLE_CARD_PICKER_PAGE_SIZE));
+  const assistantCards = getAssistantCards(state);
+  const itemCount = assistantCards.length + roleCards.length;
+  const totalPages = Math.max(1, Math.ceil(itemCount / ROLE_CARD_PICKER_PAGE_SIZE));
   roleCardPickerPage = Math.min(Math.max(1, roleCardPickerPage), totalPages);
   const startIndex = (roleCardPickerPage - 1) * ROLE_CARD_PICKER_PAGE_SIZE;
-  const pageItems = items.slice(startIndex, startIndex + ROLE_CARD_PICKER_PAGE_SIZE);
+  const endIndex = Math.min(itemCount, startIndex + ROLE_CARD_PICKER_PAGE_SIZE);
+  const pageItems = [];
+  for (let index = startIndex; index < endIndex; index += 1) {
+    if (index < assistantCards.length) {
+      pageItems.push({ type: "assistant", assistantCard: assistantCards[index] });
+    } else {
+      pageItems.push({ type: "card", card: roleCards[index - assistantCards.length] });
+    }
+  }
 
   el.roleCardPickerGrid.innerHTML = "";
 
@@ -4552,6 +4417,8 @@ function createPickerCover(content, fallbackText = "封面", position = "center 
     const img = document.createElement("img");
     img.src = image;
     img.alt = fallbackText;
+    img.loading = "lazy";
+    img.decoding = "async";
     img.style.objectPosition = normalizeCoverPosition(position);
     cover.appendChild(img);
   } else {
@@ -5298,6 +5165,16 @@ async function setAssistantMessageFeedback(messageId = "", feedback = "") {
   }
 }
 
+function getChatInputPlaceholder(state = appState, display = getWebDisplayConfig(state)) {
+  const hasConversationTarget = Boolean(
+    state?.aiSessionStarted && (state.activeRoleCardId || isCharacterCardCreationAssistantActive(state))
+  );
+  if (!hasConversationTarget) {
+    return isMobileLayout() ? "請先選擇角色卡" : "請先選擇角色卡或啟用助手";
+  }
+  return isMobileLayout() ? "輸入訊息" : `傳送訊息給 ${display.aiName || "AI"}`;
+}
+
 function renderChatHeader(state = appState) {
   const display = getWebDisplayConfig(state);
   const activeCard = getActiveRoleCardFromState(state);
@@ -5317,7 +5194,7 @@ function renderChatHeader(state = appState) {
     el.chatHeaderAvatar.appendChild(createAvatarElement(display.aiAvatar, display.aiName, "assistant"));
   }
   if (el.chatInput) {
-    el.chatInput.placeholder = `傳送訊息給 ${display.aiName || "AI"}`;
+    el.chatInput.placeholder = getChatInputPlaceholder(state, display);
   }
 }
 
@@ -5683,9 +5560,7 @@ function renderStatus(state) {
   }
 
   el.chatInput.readOnly = Boolean(pendingRoleCardStartId) || isChatStreaming;
-  el.chatInput.placeholder = hasConversationTarget
-    ? `傳送訊息給 ${display.aiName || "AI"}`
-    : "請先選擇角色卡或啟用助手";
+  el.chatInput.placeholder = getChatInputPlaceholder(state, display);
   el.sendBtn.disabled = Boolean(pendingRoleCardStartId) || !hasConversationTarget || isChatStreaming;
   el.sendBtn.textContent = isChatStreaming ? "生成中..." : pendingRoleCardStartId ? "切換中..." : "送出";
 
@@ -8557,11 +8432,7 @@ function bindEvents() {
   }
 
   if (el.selectRoleCardBtn) {
-    el.selectRoleCardBtn.addEventListener("click", () => {
-      roleCardPickerPage = 1;
-      renderRoleCardPicker(appState);
-      el.roleCardPickerDialog.showModal();
-    });
+    el.selectRoleCardBtn.addEventListener("click", openRoleCardPicker);
   }
 
   if (el.closeRoleCardPickerBtn) {

@@ -39,6 +39,12 @@ npm start
 - 主頁：`http://localhost:3234`
 - NovelAI：`http://localhost:3234/novelai.html`
 
+`npm start` 會先檢查目前追蹤的 GitHub 分支。工作區乾淨且可 fast-forward 時會自動更新；離線、有本機檔案改動或分支已分岔時會保留現況並繼續啟動。需要暫時關閉時可設定：
+
+```env
+TIME_TAVERN_AUTO_UPDATE=0
+```
+
 ## 最少設定
 
 `.env` 至少填對話 API：
@@ -46,8 +52,10 @@ npm start
 ```env
 CHAT_API_PROVIDER=deepseek
 CHAT_API_KEY=你的_API_Key
-CHAT_API_MODEL=deepseek-reasoner
+CHAT_API_MODEL=deepseek-v4-pro
 ```
+
+DeepSeek 預設使用 `deepseek-v4-pro`。`CHAT_API_TEMPERATURE` 可設定 `0–2`，並支援 `0.1` 等小數。
 
 NovelAI 圖片功能另外填：
 
@@ -63,7 +71,7 @@ Discord 不填 `DISCORD_BOT_TOKEN` 也能正常使用本地網頁。
 
 NovelAI 頁第一次打開時，如果瀏覽器沒有本頁 draft，會讀取 `defaults/novelai-defaults.json` 作為初始跑圖設定。
 
-`start-mac.command` 與 `start-win.bat` 會自動檢查 Node/npm、安裝缺少的 `node_modules`、依目前 `PORT` 開瀏覽器，然後執行 `npm start`。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
+`start-mac.command` 與 `start-win.bat` 會自動檢查 Node/npm、安裝缺少的 `node_modules`、執行 `npm start`，並在更新及伺服器啟動完成後依目前 `PORT` 開啟瀏覽器。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
 
 ## 功能
 

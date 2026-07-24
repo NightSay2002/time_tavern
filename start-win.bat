@@ -37,7 +37,7 @@ if not exist "node_modules\discord.js" (
   )
 )
 
-start "" cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:%PORT_VALUE%"
+start "" powershell -NoProfile -WindowStyle Hidden -Command "$url='http://localhost:%PORT_VALUE%'; for($i=0; $i -lt 90; $i++){ try { Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 1 | Out-Null; Start-Process $url; exit } catch {}; Start-Sleep -Seconds 1 }; Start-Process $url"
 call npm start
 
 echo.

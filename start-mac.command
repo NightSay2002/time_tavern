@@ -32,7 +32,16 @@ if [ ! -d "node_modules" ] || [ ! -d "node_modules/discord.js" ]; then
   }
 fi
 
-(sleep 2; open "http://localhost:${PORT_VALUE}") >/dev/null 2>&1 &
+(
+  for _ in {1..90}; do
+    if curl -fsS "http://localhost:${PORT_VALUE}" >/dev/null 2>&1; then
+      open "http://localhost:${PORT_VALUE}"
+      exit 0
+    fi
+    sleep 1
+  done
+  open "http://localhost:${PORT_VALUE}"
+) >/dev/null 2>&1 &
 
 npm start
 EXIT_CODE=$?
