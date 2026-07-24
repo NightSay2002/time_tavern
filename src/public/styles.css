@@ -3546,7 +3546,7 @@ body.novelai-studio-body .novelai-small-preview {
     margin: 0;
     padding: 58px 14px 12px;
     border: 0;
-    border-radius: 0 0 18px 18px;
+    border-radius: 0;
     background: linear-gradient(160deg, rgba(28, 44, 76, 0.97), rgba(14, 24, 43, 0.98));
     box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
   }
@@ -3555,7 +3555,7 @@ body.novelai-studio-body .novelai-small-preview {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     position: static;
-    padding: 10px 14px 14px;
+    padding: 0 14px 14px;
     background: rgba(15, 26, 43, 0.98);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
