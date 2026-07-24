@@ -36,6 +36,7 @@
   --cursor: url("/assets/mini.cur") 0 0, auto;
   --cursor-pointer: url("/assets/mini.cur") 0 0, pointer;
   --app-mobile-viewport-height: 100dvh;
+  --app-mobile-viewport-offset-top: 0px;
   --chat-input-height: 76px;
 }
 
@@ -3336,7 +3337,10 @@ body.novelai-studio-body .novelai-small-preview {
   }
 
   body[data-mobile-page="chat"] {
-    height: var(--app-mobile-viewport-height, 100dvh);
+    height: calc(
+      var(--app-mobile-viewport-height, 100dvh) +
+      var(--app-mobile-viewport-offset-top, 0px)
+    );
     overflow: hidden;
   }
 
@@ -3582,6 +3586,7 @@ body.novelai-studio-body .novelai-small-preview {
   body[data-mobile-page="chat"] .chat-panel {
     height: var(--app-mobile-viewport-height, 100dvh);
     max-height: var(--app-mobile-viewport-height, 100dvh);
+    transform: translateY(var(--app-mobile-viewport-offset-top, 0px));
   }
 
   body[data-mobile-page="controls"] .chat-panel {
@@ -4099,6 +4104,42 @@ body.novelai-studio-body .novelai-small-preview {
     flex-direction: column;
     gap: 10px;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .role-picker-shell,
+  .session-picker-shell {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 14px 12px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    overflow: hidden;
+  }
+
+  .role-picker-grid,
+  .session-picker-content {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .role-picker-grid {
+    grid-auto-rows: max-content;
+    align-content: start;
+    padding: 2px 2px 12px;
+  }
+
+  .role-picker-pagination {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .role-picker-pagination button {
+    min-width: 0;
+    padding-inline: 12px;
   }
 
   .dialog-actions {

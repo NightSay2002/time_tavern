@@ -91,7 +91,7 @@ const TIME_PERIOD_LABELS = {
   [TIME_PERIOD_EVENING]: "晚上"
 };
 const DEFAULT_AUTO_TIME_PERIOD_ROUNDS = 3;
-const KEEP_TIME_DIRECTIVE_PATTERN = /[｛{]\s*保持時間\s*[｝}]/gu;
+const KEEP_TIME_DIRECTIVE_PATTERN = /[｛{]{1,2}\s*保持時間\s*[｝}]{1,2}/gu;
 const ASSISTANT_FEEDBACK_LIKE = "like";
 const ASSISTANT_FEEDBACK_DISLIKE = "dislike";
 const ASSISTANT_FEEDBACK_EMOJIS = {
@@ -1739,6 +1739,47 @@ function saveState(state) {
 function sendJson(res, status, payload) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload), "utf8");
+}
+
+function createHttpEtag(content) {
+  const hash = crypto.createHash("sha256").update(content).digest("base64url").slice(0, 24);
+  return `W/"${hash}"`;
+}
+
+function requestMatchesEtag(req, etag) {
+  const header = String(req.headers["if-none-match"] || "").trim();
+  if (!header) {
+    return false;
+  }
+  return header === "*" || header.split(",").some((value) => value.trim() === etag);
+}
+
+function sendCachedJson(req, res, payload) {
+  const body = Buffer.from(JSON.stringify(payload), "utf8");
+  const etag = createHttpEtag(body);
+  const headers = {
+    "Cache-Control": "private, no-cache",
+    "Content-Type": "application/json; charset=utf-8",
+    ETag: etag,
+    Vary: "Accept-Encoding"
+  };
+
+  if (requestMatchesEtag(req, etag)) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+
+  const acceptsGzip = /\bgzip\b/iu.test(String(req.headers["accept-encoding"] || ""));
+  const responseBody = acceptsGzip
+    ? zlib.gzipSync(body, { level: zlib.constants.Z_BEST_SPEED })
+    : body;
+  if (acceptsGzip) {
+    headers["Content-Encoding"] = "gzip";
+  }
+  headers["Content-Length"] = String(responseBody.length);
+  res.writeHead(200, headers);
+  res.end(responseBody);
 }
 
 function sendText(res, status, text) {
@@ -3587,14 +3628,24 @@ function getContentType(filePath) {
   return "application/octet-stream";
 }
 
-function getStaticHeaders(filePath) {
+function getStaticHeaders(filePath, stat) {
   const headers = { "Content-Type": getContentType(filePath) };
   if (/\.(?:woff2|png|gif|mp3|cur)$/i.test(filePath)) {
     headers["Cache-Control"] = "public, max-age=31536000, immutable";
   } else {
     headers["Cache-Control"] = "no-cache";
   }
+  headers.ETag = `W/"${stat.size.toString(16)}-${Math.trunc(stat.mtimeMs).toString(16)}"`;
+  headers["Last-Modified"] = stat.mtime.toUTCString();
   return headers;
+}
+
+function isStaticFileNotModified(req, headers, stat) {
+  if (req.headers["if-none-match"]) {
+    return requestMatchesEtag(req, headers.ETag);
+  }
+  const modifiedSince = Date.parse(String(req.headers["if-modified-since"] || ""));
+  return Number.isFinite(modifiedSince) && Math.trunc(stat.mtimeMs / 1000) * 1000 <= modifiedSince;
 }
 
 function getActiveRoleCard(state) {
@@ -5404,7 +5455,7 @@ function formatAutoTimePeriodWarning(timeTracking = {}) {
   const transitionLabel = pendingTarget
     ? `${formatTimeTrackingPoint(normalized)} -> ${formatTimeTrackingPoint(pendingTarget)}`
     : getTimePeriodTransitionLabel(normalized);
-  return `代碼即將自動切換時間 ${transitionLabel}，如果不想切換，請在下一次對話中加入 {保持時間}，會延後 ${autoPeriod.roundsPerPeriod} 回合`;
+  return `代碼即將自動切換時間 ${transitionLabel}，如果不想切換，請在下一次對話中加入 {{保持時間}}，會延後 ${autoPeriod.roundsPerPeriod} 回合`;
 }
 
 function formatAssistantTimeTransitionWarning(timeTracking = {}) {
@@ -5413,7 +5464,7 @@ function formatAssistantTimeTransitionWarning(timeTracking = {}) {
   if (!normalized.enabled || normalized.pendingTransition?.source !== "assistant_text" || !pendingTarget) {
     return "";
   }
-  return `AI 對話即將切換時間 ${formatTimeTrackingPoint(normalized)} -> ${formatTimeTrackingPoint(pendingTarget)}，如果不想切換，請在下一次對話中加入 {保持時間}`;
+  return `AI 對話即將切換時間 ${formatTimeTrackingPoint(normalized)} -> ${formatTimeTrackingPoint(pendingTarget)}，如果不想切換，請在下一次對話中加入 {{保持時間}}`;
 }
 
 function hasKeepTimeDirective(text = "") {
@@ -10310,7 +10361,7 @@ const server = http.createServer(async (req, res) => {
     const method = (req.method || "GET").toUpperCase();
 
     if (pathname === "/api/state" && method === "GET") {
-      sendJson(res, 200, statePayload(state));
+      sendCachedJson(req, res, statePayload(state));
       return;
     }
 
@@ -11403,8 +11454,20 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        res.writeHead(200, getStaticHeaders(filePath));
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) {
+          sendJson(res, 404, { error: "Not Found" });
+          return;
+        }
+        const headers = getStaticHeaders(filePath, stat);
+        if (isStaticFileNotModified(req, headers, stat)) {
+          res.writeHead(304, headers);
+          res.end();
+          return;
+        }
+        headers["Content-Length"] = String(stat.size);
+        res.writeHead(200, headers);
         fs.createReadStream(filePath).pipe(res);
         return;
       }

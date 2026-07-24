@@ -365,6 +365,14 @@ const CHAT_COMMAND_MENU_ITEMS = [
     insert: "｛时间流逝——｝"
   },
   {
+    id: "quick-keep-time",
+    command: "{{保持時間}}",
+    title: "保持時間",
+    description: "填入保持目前時間的快捷指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "{{保持時間}}"
+  },
+  {
     id: "quick-continue",
     command: "｛繼續｝",
     title: "繼續",
@@ -4218,7 +4226,12 @@ function isMobileLayout() {
 function getMobileViewportHeight() {
   const visualHeight = window.visualViewport?.height;
   const fallbackHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-  return Math.max(360, Math.round(Number(visualHeight || fallbackHeight || 0)));
+  return Math.max(220, Math.round(Number(visualHeight || fallbackHeight || 0)));
+}
+
+function getMobileViewportOffsetTop() {
+  const offsetTop = Number(window.visualViewport?.offsetTop || 0);
+  return Number.isFinite(offsetTop) ? Math.max(0, Math.round(offsetTop)) : 0;
 }
 
 function getChatInputHeight() {
@@ -4248,6 +4261,7 @@ function updateMobileViewportMetrics() {
   const applyMetrics = () => {
     mobileViewportUpdateFrame = 0;
     document.documentElement.style.setProperty("--app-mobile-viewport-height", `${getMobileViewportHeight()}px`);
+    document.documentElement.style.setProperty("--app-mobile-viewport-offset-top", `${getMobileViewportOffsetTop()}px`);
     document.documentElement.style.setProperty("--chat-input-height", `${getChatInputHeight()}px`);
   };
 
