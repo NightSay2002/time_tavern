@@ -780,46 +780,6 @@ const DISCORD_SLASH_COMMANDS = [
     ]
   },
   {
-    name: "replay",
-    description: "從指定訊息編號建立分支並重寫後續",
-    options: [
-      {
-        name: "message_number",
-        description: "要重寫的訊息編號（1 起算）",
-        type: ApplicationCommandOptionType.Integer,
-        required: true
-      },
-      {
-        name: "content",
-        description: "新的使用者內容",
-        type: ApplicationCommandOptionType.String,
-        required: true
-      }
-    ]
-  },
-  {
-    name: "run_time",
-    description: "依照要求自動推演多輪對話",
-    options: [
-      {
-        name: "number",
-        description: "要自動推演的輪數",
-        type: ApplicationCommandOptionType.Integer,
-        required: true
-      },
-      {
-        name: "message",
-        description: "推演要求，例如劇情方向、互動重點或限制",
-        type: ApplicationCommandOptionType.String,
-        required: true
-      }
-    ]
-  },
-  {
-    name: "keep_time",
-    description: "保持目前時間並繼續對話"
-  },
-  {
     name: "quick_send",
     description: "快速發送常用劇情指令",
     options: [
@@ -850,34 +810,6 @@ const DISCORD_SLASH_COMMANDS = [
   {
     name: "ai_help",
     description: "查看可用指令"
-  },
-  {
-    name: "session_save",
-    description: "保存目前整體對話存檔",
-    options: [
-      {
-        name: "name",
-        description: "存檔名稱",
-        type: ApplicationCommandOptionType.String,
-        required: false
-      }
-    ]
-  },
-  {
-    name: "session_list",
-    description: "列出所有對話存檔"
-  },
-  {
-    name: "session_load",
-    description: "載入對話存檔",
-    options: [
-      {
-        name: "id",
-        description: "存檔 ID",
-        type: ApplicationCommandOptionType.String,
-        required: true
-      }
-    ]
   }
 ];
 
@@ -2120,35 +2052,6 @@ function stripRuntimeSnapshotHistory(snapshot = {}) {
   return output;
 }
 
-function readSavedSessionExternalData(session) {
-  const fallback = {
-    conversation: Array.isArray(session?.snapshot?.conversation)
-      ? cloneData(session.snapshot.conversation, [])
-      : [],
-    aiLogs: Array.isArray(session?.snapshot?.aiLogs)
-      ? cloneData(session.snapshot.aiLogs, [])
-      : []
-  };
-  try {
-    const filePath = getSavedSessionDataFilePath(session);
-    if (!fs.existsSync(filePath)) {
-      return fallback;
-    }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return {
-      conversation: Array.isArray(parsed.conversation)
-        ? cloneData(parsed.conversation, [])
-        : fallback.conversation,
-      aiLogs: Array.isArray(parsed.aiLogs)
-        ? parsed.aiLogs.map((entry) => normalizeAiLog(entry))
-        : fallback.aiLogs
-    };
-  } catch (error) {
-    console.warn(`讀取存檔對話分離檔失敗：${safeText(error?.message) || "未知錯誤"}`);
-    return fallback;
-  }
-}
-
 function writeSavedSessionExternalData(sessionOrId, data = {}) {
   const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
   if (!sessionId) {
@@ -2160,14 +2063,6 @@ function writeSavedSessionExternalData(sessionOrId, data = {}) {
     updatedAt: nowIso()
   };
   fs.writeFileSync(getSavedSessionDataFilePath(sessionId), JSON.stringify(payload, null, 2), "utf8");
-}
-
-function materializeSavedSessionSnapshot(session) {
-  const snapshot = cloneData(session?.snapshot, {});
-  const externalData = readSavedSessionExternalData(session);
-  snapshot.conversation = externalData.conversation;
-  snapshot.aiLogs = externalData.aiLogs;
-  return snapshot;
 }
 
 function normalizeSavedSession(rawSession, index) {
@@ -2197,29 +2092,6 @@ function normalizeSavedSession(rawSession, index) {
   };
 }
 
-function buildSavedSessionSummary(session) {
-  const roleCardId = session.snapshot?.activeRoleCardId || null;
-  const externalData = readSavedSessionExternalData(session);
-  const roleCard = Array.isArray(session.snapshot?.roleCards)
-    ? session.snapshot.roleCards.find((card) => safeText(card?.id) === safeText(roleCardId))
-    : null;
-  const assistantMode = normalizeAssistantMode(session.snapshot?.activeAssistantMode);
-  const assistantCard = assistantMode
-    ? getAssistantCardById(session.snapshot, assistantMode)
-    : null;
-  return {
-    id: session.id,
-    name: session.name,
-    status: session.status,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    roleCardId,
-    roleCardName: safeText(assistantCard?.name) || safeText(roleCard?.name) || "未指定角色卡",
-    assistantMode,
-    messageCount: externalData.conversation.length
-  };
-}
-
 function normalizeConversationForClient(conversation = []) {
   return (Array.isArray(conversation) ? conversation : []).map((message) => {
     if (message?.role !== "assistant") {
@@ -2231,91 +2103,6 @@ function normalizeConversationForClient(conversation = []) {
       content: finalized.content || safeText(message.content)
     };
   });
-}
-
-function buildSavedSessionDetail(session) {
-  const snapshot = materializeSavedSessionSnapshot(session);
-  return {
-    ...buildSavedSessionSummary(session),
-    conversation: normalizeConversationForClient(snapshot.conversation),
-    aiLogCount: Array.isArray(snapshot.aiLogs) ? snapshot.aiLogs.length : 0
-  };
-}
-
-function listSavedSessionSummaries(currentState) {
-  return currentState.savedSessions.map((session) => buildSavedSessionSummary(session));
-}
-
-function getSavedSessionById(currentState, sessionId) {
-  return currentState.savedSessions.find((session) => session.id === sessionId) || null;
-}
-
-function createSavedSessionFromCurrentState(currentState, nameInput = "", options = {}) {
-  const now = nowIso();
-  const sessionId = newId("session");
-  let snapshotSource = captureRuntimeSnapshot(currentState);
-
-  const session = {
-    id: sessionId,
-    name: safeText(nameInput) || `對話存檔 ${currentState.savedSessions.length + 1}`,
-    status: "active",
-    dataFile: getSavedSessionDataFileName(sessionId),
-    snapshot: stripRuntimeSnapshotHistory(snapshotSource),
-    createdAt: now,
-    updatedAt: now
-  };
-  writeSavedSessionExternalData(session, snapshotSource);
-  currentState.savedSessions.push(session);
-  currentState.activeSavedSessionId = null;
-  return session;
-}
-
-function loadSavedSessionIntoRuntime(currentState, sessionId, options = {}) {
-  const session = getSavedSessionById(currentState, sessionId);
-  if (!session) {
-    return null;
-  }
-
-  applyRuntimeSnapshot(currentState, materializeSavedSessionSnapshot(session));
-  sanitizeImageGenerationCompressionState(currentState);
-  currentState.activeSavedSessionId = null;
-
-  return session;
-}
-
-function setSavedSessionStatus(currentState, sessionId, status) {
-  const session = getSavedSessionById(currentState, sessionId);
-  if (!session) {
-    return null;
-  }
-
-  session.status = status;
-  session.updatedAt = nowIso();
-  if (status === "archived" && currentState.activeSavedSessionId === sessionId) {
-    currentState.activeSavedSessionId = null;
-  }
-  return session;
-}
-
-function deleteSavedSession(currentState, sessionId) {
-  const index = currentState.savedSessions.findIndex((session) => session.id === sessionId);
-  if (index < 0) {
-    return null;
-  }
-
-  const [deleted] = currentState.savedSessions.splice(index, 1);
-  try {
-    const filePath = getSavedSessionDataFilePath(deleted);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-  } catch (error) {
-    console.warn(`刪除存檔對話分離檔失敗：${safeText(error?.message) || "未知錯誤"}`);
-  }
-  if (currentState.activeSavedSessionId === sessionId) {
-    currentState.activeSavedSessionId = null;
-  }
-  return deleted;
 }
 
 function deleteRoleCard(currentState, cardId) {
@@ -9734,8 +9521,13 @@ async function runConversationTurnStreaming({
 }
 
 function statePayload(state) {
+  const {
+    savedSessions: _savedSessions,
+    activeSavedSessionId: _activeSavedSessionId,
+    ...publicState
+  } = state;
   return {
-    ...state,
+    ...publicState,
     conversation: normalizeConversationForClient(state.conversation),
     aiLogs: Array.isArray(state.aiLogs)
       ? state.aiLogs.map((entry) => normalizeAiLog(entry))
@@ -9744,7 +9536,6 @@ function statePayload(state) {
     contextCompressionPrompt: getContextCompressionPrompt(),
     characterCardCreationAssistantPrompt: getCharacterCardCreationAssistantPrompt(),
     webDisplay: getWebChatDisplayConfig(state),
-    savedSessionsMeta: listSavedSessionSummaries(state),
     uiActions: createUiActions(state),
     chatApi: {
       provider: getChatApiProvider(),
@@ -10285,12 +10076,6 @@ async function replayConversationFromMessageNumber({
       throw new Error(`訊息編號超出範圍，目前最多只能指定到 ${maxAllowed}。`);
     }
 
-    createSavedSessionFromCurrentState(
-      state,
-      `分支備份 #${normalizedMessageNumber} ${new Date().toLocaleString("zh-Hant")}`,
-      { activate: false }
-    );
-
     restoreNarrativeStateForReplay(state, normalizedMessageNumber - 1);
     state.conversation = state.conversation.slice(0, normalizedMessageNumber - 1);
     syncTurnStateFromConversation(state);
@@ -10316,8 +10101,7 @@ async function replayConversationFromMessageNumber({
     );
 
     return {
-      assistantMessage: result.assistantMessage,
-      backupSession: state.savedSessions[state.savedSessions.length - 1] || null
+      assistantMessage: result.assistantMessage
     };
   });
 }
@@ -10352,12 +10136,6 @@ async function replayConversationFromDiscordMessageId({
       .slice(targetIndex + 1)
       .flatMap((item) => item?.role === "assistant" ? getDiscordReplyMessageIds(item) : []);
 
-    createSavedSessionFromCurrentState(
-      state,
-      `Discord編輯前備份 #${targetIndex + 1} ${new Date().toLocaleString("zh-Hant")}`,
-      { activate: false }
-    );
-
     restoreNarrativeStateForReplay(state, targetIndex);
     state.conversation = state.conversation.slice(0, targetIndex);
     syncTurnStateFromConversation(state);
@@ -10385,8 +10163,7 @@ async function replayConversationFromDiscordMessageId({
 
     return {
       assistantMessage: result.assistantMessage,
-      removedDiscordReplyMessageIds,
-      backupSession: state.savedSessions[state.savedSessions.length - 1] || null
+      removedDiscordReplyMessageIds
     };
   });
 }
@@ -10417,17 +10194,14 @@ function getDiscordGuidance() {
     "請先用邀請連結把 Bot 加到伺服器，之後在 Discord 使用 Slash 指令。",
     authorizeUrl ? `邀請 Bot：${authorizeUrl}` : "",
     "主對話：`/ai content:你的內容`，或 `/ai file:上傳txt檔`",
-    "保持時間：`/keep_time`",
+    "保持時間：在 `/quick_send` 選擇 `{{保持時間}}`，或在對話頻道直接輸入 `{{保持時間}}`",
     "快速發送：`/quick_send template:｛推进剧情到下一个场景｝ inside:補充 message:下一行內容`",
     "開始對話：`/ai_start`，之後該頻道可以直接輸入對話，不需要 `!ai`",
     "停止生成：`/stop`，或在已啟用頻道輸入 `/stop`",
     "玩家座位：`/player_set number:2`，或在已啟用頻道輸入 `/player_set 2`",
     "查看狀態：`/ai_status`",
     "重跑最新回覆：`/reload feedback:不滿意或要改進的地方`",
-    "從指定訊息分支：`/replay message_number:訊息編號 content:新的使用者內容`",
-    "自動推演多輪：`/run_time number:10 message:你的要求`",
-    "存檔指令：`/session_save`、`/session_list`、`/session_load`",
-    `文字指令：伺服器頻道可使用 \`${COMMAND_PREFIX} keep_time\`；DM 若要執行文字指令也請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
+    `文字指令：DM 若要執行文字指令請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
     "網頁也可以直接在對話輸入框送出本地對話。"
   ].filter(Boolean).join("\n");
 }
@@ -10856,121 +10630,6 @@ const server = http.createServer(async (req, res) => {
       }
       sendJson(res, 200, {
         mode: result.mode,
-        state: statePayload(state)
-      });
-      return;
-    }
-
-    if (pathname === "/api/sessions" && method === "GET") {
-      sendJson(res, 200, {
-        activeSavedSessionId: state.activeSavedSessionId,
-        sessions: listSavedSessionSummaries(state)
-      });
-      return;
-    }
-
-    if (pathname === "/api/sessions/save" && method === "POST") {
-      const body = await readBody(req);
-      const created = createSavedSessionFromCurrentState(state, body.name);
-      saveState(state);
-      sendJson(res, 201, {
-        session: buildSavedSessionSummary(created),
-        state: statePayload(state)
-      });
-      return;
-    }
-
-    const sessionDetailMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
-    if (sessionDetailMatch && method === "GET") {
-      const session = getSavedSessionById(state, sessionDetailMatch[1]);
-      if (!session) {
-        sendJson(res, 404, { error: "對話存檔不存在" });
-        return;
-      }
-      sendJson(res, 200, {
-        session: buildSavedSessionDetail(session)
-      });
-      return;
-    }
-
-    const sessionLoadMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/load$/);
-    if (sessionLoadMatch && method === "POST") {
-      const sessionId = sessionLoadMatch[1];
-      const body = await readBody(req);
-      const loaded = loadSavedSessionIntoRuntime(state, sessionId, {
-        restart: Boolean(body.restart)
-      });
-      if (!loaded) {
-        sendJson(res, 404, { error: "對話存檔不存在" });
-        return;
-      }
-      saveState(state);
-      sendJson(res, 200, {
-        session: buildSavedSessionSummary(loaded),
-        state: statePayload(state)
-      });
-      return;
-    }
-
-    const sessionRenameMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
-    if (sessionRenameMatch && method === "PUT") {
-      const sessionId = sessionRenameMatch[1];
-      const body = await readBody(req);
-      const target = getSavedSessionById(state, sessionId);
-      if (!target) {
-        sendJson(res, 404, { error: "對話存檔不存在" });
-        return;
-      }
-      const nextName = safeText(body.name);
-      if (nextName) {
-        target.name = nextName;
-      }
-      target.updatedAt = nowIso();
-      saveState(state);
-      sendJson(res, 200, {
-        session: buildSavedSessionSummary(target),
-        state: statePayload(state)
-      });
-      return;
-    }
-
-    const sessionArchiveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/archive$/);
-    if (sessionArchiveMatch && method === "POST") {
-      const session = setSavedSessionStatus(state, sessionArchiveMatch[1], "archived");
-      if (!session) {
-        sendJson(res, 404, { error: "對話存檔不存在" });
-        return;
-      }
-      saveState(state);
-      sendJson(res, 200, {
-        session: buildSavedSessionSummary(session),
-        state: statePayload(state)
-      });
-      return;
-    }
-
-    const sessionDeleteMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
-    if (sessionDeleteMatch && method === "DELETE") {
-      const deleted = deleteSavedSession(state, sessionDeleteMatch[1]);
-      if (!deleted) {
-        sendJson(res, 404, { error: "對話存檔不存在" });
-        return;
-      }
-      saveState(state);
-      sendJson(res, 200, { state: statePayload(state) });
-      return;
-    }
-
-    const sessionResumeMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/resume$/);
-    if (sessionResumeMatch && method === "POST") {
-      const session = setSavedSessionStatus(state, sessionResumeMatch[1], "active");
-      if (!session) {
-        sendJson(res, 404, { error: "對話存檔不存在" });
-        return;
-      }
-      saveState(state);
-      sendJson(res, 200, {
-        session: buildSavedSessionSummary(session),
         state: statePayload(state)
       });
       return;
@@ -11488,39 +11147,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pathname === "/api/chat/replay" && method === "POST") {
-      const body = await readBody(req);
-      const result = await replayConversationFromMessageNumber({
-        messageNumber: body?.messageNumber,
-        content: body?.content,
-        source: "web",
-        extra: {
-          platform: "web"
-        }
-      });
-      sendJson(res, 200, {
-        ...result,
-        state: statePayload(state)
-      });
-      return;
-    }
-
-    if (pathname === "/api/chat/run-time" && method === "POST") {
-      const body = await readBody(req);
-      const result = await runRuntimeTurns({
-        turns: body?.turns,
-        message: body?.message,
-        userName: resolveUserDisplayName(state.userProfile),
-        source: "web_runtime",
-        platform: "web"
-      });
-      sendJson(res, 200, {
-        ...result,
-        state: statePayload(state)
-      });
-      return;
-    }
-
     if (pathname === "/api/chat/send-stream" && method === "POST") {
       const body = await readBody(req);
       const content = safeText(body.content);
@@ -11650,26 +11276,8 @@ function parseDiscordTextInput(input, options = {}) {
   if (shouldTreatAsStartCommand(keyword)) {
     return { type: "meta", command: "start", args };
   }
-  if (keyword === "session_list" || (keyword === "session" && safeText(args[0]) === "list")) {
-    return { type: "meta", command: "session_list", args: args.slice(keyword === "session" ? 1 : 0) };
-  }
-  if (keyword === "session_save" || (keyword === "session" && safeText(args[0]) === "save")) {
-    return { type: "meta", command: "session_save", args: args.slice(keyword === "session" ? 1 : 0) };
-  }
-  if (keyword === "session_load" || (keyword === "session" && safeText(args[0]) === "load")) {
-    return { type: "meta", command: "session_load", args: args.slice(keyword === "session" ? 1 : 0) };
-  }
   if (keyword === "reload") {
     return { type: "meta", command: "reload", args };
-  }
-  if (keyword === "replay") {
-    return { type: "meta", command: "replay", args };
-  }
-  if (keyword === "run_time") {
-    return { type: "meta", command: "run_time", args };
-  }
-  if (keyword === "keep_time") {
-    return { type: "meta", command: "keep_time", args };
   }
   if (keyword === "player_set") {
     return { type: "meta", command: "player_set", args };
@@ -12001,7 +11609,7 @@ function isUnknownInteractionError(error) {
 }
 
 function shouldDeferSlashCommandEarly(commandName = "") {
-  return ["ai", "ai_start", "reload", "replay", "run_time", "keep_time", "quick_send"].includes(safeText(commandName));
+  return ["ai", "ai_start", "reload", "quick_send"].includes(safeText(commandName));
 }
 
 async function safeSendInteractionError(interaction, content) {
@@ -12053,18 +11661,6 @@ function startTypingIndicator(channel) {
     void tick();
   }, 7000);
   return () => clearInterval(timer);
-}
-
-function formatSavedSessionsText(currentState) {
-  const sessions = listSavedSessionSummaries(currentState);
-  if (sessions.length === 0) {
-    return "目前沒有任何對話存檔。";
-  }
-
-  const lines = sessions.map((item) => {
-    return `${item.id} | ${item.name} | 訊息:${item.messageCount}`;
-  });
-  return lines.join("\n");
 }
 
 async function consumePendingOpening(channelId, fallbackUserName = "") {
@@ -12183,8 +11779,7 @@ function buildDiscordStatusText() {
     `對話設定: 正式模式（API輸出模型=${getChatApiModel("reasoner_history_chat")}｜目前模式上下文=${normalizeDialogueContextRounds(activeConfig?.dialogueContextRounds)} 輪｜模型內容=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
     `目前模式: ${getCurrentConversationTargetLabel(state)}`,
     `待播開場: ${state.pendingOpeningBroadcast ? "是" : "否"}`,
-    `玩家分配: ${playerLines.length > 0 ? playerLines.join("｜") : "尚未分配"}`,
-    `存檔數: ${state.savedSessions.length}`
+    `玩家分配: ${playerLines.length > 0 ? playerLines.join("｜") : "尚未分配"}`
   ];
   return lines.join("\n");
 }
@@ -12369,52 +11964,6 @@ async function handleDiscordChat(message, userContent) {
   await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
 }
 
-async function runSessionTextCommand(message, command, args) {
-  if (command === "session_list") {
-    await sendDiscordLongMessage(message, formatSavedSessionsText(state));
-    return true;
-  }
-
-  if (command === "session_save") {
-    const inputName = safeText(args.join(" "));
-    const session = await withStateLock(async () => {
-      const created = createSavedSessionFromCurrentState(state, inputName);
-      saveState(state);
-      return created;
-    });
-    await sendDiscordLongMessage(message, `已保存存檔：${session.name}\nID: ${session.id}`);
-    return true;
-  }
-
-  if (command === "session_load") {
-    const id = safeText(args[0]);
-    if (!id) {
-      await sendDiscordLongMessage(message, "請提供存檔 ID，例如：!ai session_load <id>");
-      return true;
-    }
-
-    const loaded = await withStateLock(async () => {
-      const found = loadSavedSessionIntoRuntime(state, id, { restart: false });
-      if (!found) {
-        return null;
-      }
-      saveState(state);
-      return found;
-    });
-    if (!loaded) {
-      await sendDiscordLongMessage(message, "找不到指定存檔 ID。");
-      return true;
-    }
-    await sendDiscordLongMessage(
-      message,
-      `已從存檔點載入：${loaded.name}`
-    );
-    return true;
-  }
-
-  return false;
-}
-
 async function runPlayerSetTextCommand(message, args) {
   const result = await setDiscordPlayerSlotFromCommand({
     channelId: message.channelId,
@@ -12445,132 +11994,6 @@ async function runReloadTextCommand(message, args) {
     });
     const sentMessages = await sendDiscordLongMessage(message, formatAssistantMessageForUserDisplay(result.assistantMessage));
     await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
-  } finally {
-    stopTyping();
-  }
-}
-
-async function runReplayTextCommand(message, args) {
-  const messageNumber = Number(args[0] || "");
-  const content = safeText(args.slice(1).join(" "));
-  const stopTyping = startTypingIndicator(message.channel);
-  try {
-    const result = await replayConversationFromMessageNumber({
-      messageNumber,
-      content,
-      source: "discord",
-      extra: {
-        platform: "discord",
-        discordChannelId: message.channelId,
-        discordGuildId: message.guildId,
-        discordUserId: message.author.id,
-        discordUserName: message.author.username
-      }
-    });
-    const sentMessages = await sendDiscordLongMessage(
-      message,
-      [
-        result.backupSession
-          ? `已先建立分支前備份：${result.backupSession.name} (${result.backupSession.id})`
-          : "",
-        formatAssistantMessageForUserDisplay(result.assistantMessage)
-      ].filter(Boolean).join("\n\n")
-    );
-    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
-  } finally {
-    stopTyping();
-  }
-}
-
-function buildRunTimeTurnUserContent(message, turnNumber, totalTurns) {
-  const requestText = safeText(message);
-  return [
-    `用戶要求你現在自行推演${totalTurns}輪,包括用戶及角色`,
-    requestText ? `「${requestText}」這是用戶的要求` : "這是用戶的要求",
-    `現在是第${turnNumber}輪`
-  ].join("\n");
-}
-
-function formatRuntimeTurnBlock(turnNumber, assistantContent) {
-  return [
-    `【第${turnNumber}輪】`,
-    safeText(assistantContent) || "（空白）"
-  ].join("\n");
-}
-
-async function runRuntimeTurns({
-  turns,
-  message,
-  channelId = "",
-  guildId = "",
-  userId = "",
-  userName = "",
-  source = "discord_runtime",
-  platform = "discord"
-}) {
-  const normalizedTurns = Math.floor(Number(turns));
-  const runtimeRequest = safeText(message);
-  if (!Number.isFinite(normalizedTurns) || normalizedTurns < 1) {
-    throw new Error("請提供有效輪數，最少為 1。");
-  }
-  if (!runtimeRequest) {
-    throw new Error("請提供 /run_time 的推演要求。");
-  }
-  if (normalizedTurns > 20) {
-    throw new Error("單次自動推演最多 20 輪。");
-  }
-  if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-    throw new Error("尚未開始。請先在網頁選擇角色卡並開始對話，或使用 /ai_start。");
-  }
-  if (isCharacterCardCreationAssistantActive(state)) {
-    throw new Error("助手模式不支援 /run_time 自動推演。");
-  }
-
-  const transcriptBlocks = [];
-  const pendingOpening = await consumePendingOpening(channelId, userName);
-  if (pendingOpening) {
-    transcriptBlocks.push(["【開場】", pendingOpening].join("\n"));
-  }
-
-  for (let index = 0; index < normalizedTurns; index += 1) {
-    const turnRequest = buildRunTimeTurnUserContent(runtimeRequest, index + 1, normalizedTurns);
-    const result = await runConversationTurn({
-      content: turnRequest,
-      source,
-      extra: {
-        platform,
-        discordChannelId: channelId,
-        discordGuildId: guildId,
-        discordUserId: userId,
-        discordUserName: userName,
-        autoRuntime: true,
-        runtimeTurnIndex: index + 1
-      }
-    });
-
-    transcriptBlocks.push(formatRuntimeTurnBlock(index + 1, formatAssistantMessageForUserDisplay(result.assistantMessage)));
-  }
-
-  return {
-    turns: normalizedTurns,
-    transcriptText: transcriptBlocks.join("\n\n")
-  };
-}
-
-async function runRuntimeTextCommand(message, args) {
-  const turns = Number(args[0] || "");
-  const requestMessage = safeText(args.slice(1).join(" "));
-  const stopTyping = startTypingIndicator(message.channel);
-  try {
-    const result = await runRuntimeTurns({
-      turns,
-      message: requestMessage,
-      channelId: message.channelId,
-      guildId: message.guildId,
-      userId: message.author.id,
-      userName: message.author.username
-    });
-    await sendDiscordLongMessage(message, result.transcriptText);
   } finally {
     stopTyping();
   }
@@ -12691,86 +12114,10 @@ async function handleSlashCommand(interaction) {
     return;
   }
 
-  if (name === "replay") {
-    const messageNumber = interaction.options.getInteger("message_number");
-    const content = safeText(interaction.options.getString("content") || "");
-    if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      await safeSendInteractionText(
-        interaction,
-        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
-        { ephemeral: true }
-      );
-      return;
-    }
-
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
-    }
-    const result = await replayConversationFromMessageNumber({
-      messageNumber,
-      content,
-      source: "discord",
-      extra: {
-        platform: "discord",
-        discordChannelId: interaction.channelId,
-        discordGuildId: interaction.guildId,
-        discordUserId: interaction.user.id,
-        discordUserName: interaction.user.username
-      }
-    });
-    const sentMessages = await sendInteractionLongReply(
-      interaction,
-      [
-        result.backupSession
-          ? `已先建立分支前備份：${result.backupSession.name} (${result.backupSession.id})`
-          : "",
-        formatAssistantMessageForUserDisplay(result.assistantMessage)
-      ].filter(Boolean).join("\n\n")
-    );
-    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
-    return;
-  }
-
-  if (name === "run_time") {
-    const turns = interaction.options.getInteger("number");
-    const requestMessage = safeText(interaction.options.getString("message") || "");
-    if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-      await safeSendInteractionText(
-        interaction,
-        "尚未開始。請先在網頁選擇角色卡並開始對話，或使用 /ai_start。",
-        { ephemeral: true }
-      );
-      return;
-    }
-    if (isCharacterCardCreationAssistantActive(state)) {
-      await safeSendInteractionText(
-        interaction,
-        "助手模式不支援 /run_time 自動推演。",
-        { ephemeral: true }
-      );
-      return;
-    }
-
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
-    }
-    const result = await runRuntimeTurns({
-      turns,
-      message: requestMessage,
-      channelId: interaction.channelId,
-      guildId: interaction.guildId,
-      userId: interaction.user.id,
-      userName: interaction.user.username
-    });
-    await sendInteractionLongReply(interaction, result.transcriptText);
-    return;
-  }
-
-  if (name === "keep_time" || name === "quick_send") {
-    const isKeepTime = name === "keep_time";
-    const templateId = isKeepTime ? "keep_time" : interaction.options.getString("template") || "";
-    const inside = isKeepTime ? "" : interaction.options.getString("inside") || "";
-    const message = isKeepTime ? "" : interaction.options.getString("message") || "";
+  if (name === "quick_send") {
+    const templateId = interaction.options.getString("template") || "";
+    const inside = interaction.options.getString("inside") || "";
+    const message = interaction.options.getString("message") || "";
     const built = buildQuickSendContent(templateId, inside, message);
     if (!built.ok) {
       await safeSendInteractionText(interaction, built.error, { ephemeral: true });
@@ -12826,44 +12173,6 @@ async function handleSlashCommand(interaction) {
       return;
     }
     await sendInteractionLongReply(interaction, result.openingDialogue);
-    return;
-  }
-
-  if (name === "session_save") {
-    const inputName = safeText(interaction.options.getString("name") || "");
-    const session = await withStateLock(async () => {
-      const created = createSavedSessionFromCurrentState(state, inputName);
-      saveState(state);
-      return created;
-    });
-    await safeSendInteractionText(interaction, `已保存存檔：${session.name}\nID: ${session.id}`, { ephemeral: true });
-    return;
-  }
-
-  if (name === "session_list") {
-    await safeSendInteractionText(interaction, formatSavedSessionsText(state), { ephemeral: true });
-    return;
-  }
-
-  if (name === "session_load") {
-    const id = safeText(interaction.options.getString("id") || "");
-    const loaded = await withStateLock(async () => {
-      const found = loadSavedSessionIntoRuntime(state, id, { restart: false });
-      if (!found) {
-        return null;
-      }
-      saveState(state);
-      return found;
-    });
-    if (!loaded) {
-      await safeSendInteractionText(interaction, "找不到指定存檔 ID。", { ephemeral: true });
-      return;
-    }
-    await safeSendInteractionText(
-      interaction,
-      `已從存檔點載入：${loaded.name}`,
-      { ephemeral: true }
-    );
     return;
   }
 
@@ -13085,33 +12394,8 @@ function setupDiscordBot() {
           return;
         }
 
-        const sessionHandled = await runSessionTextCommand(
-          message,
-          parsedInput.command,
-          parsedInput.args || []
-        );
-        if (sessionHandled) {
-          return;
-        }
-
         if (parsedInput.command === "reload") {
           await runReloadTextCommand(message, parsedInput.args || []);
-          return;
-        }
-
-        if (parsedInput.command === "replay") {
-          await runReplayTextCommand(message, parsedInput.args || []);
-          return;
-        }
-
-        if (parsedInput.command === "run_time") {
-          await runRuntimeTextCommand(message, parsedInput.args || []);
-          return;
-        }
-
-        if (parsedInput.command === "keep_time") {
-          const built = buildQuickSendContent("keep_time");
-          await handleDiscordChat(message, built.content);
           return;
         }
 
@@ -13187,9 +12471,6 @@ function setupDiscordBot() {
           [
             [
               "```",
-              result.backupSession
-                ? `已先建立編輯前備份：${result.backupSession.name} (${result.backupSession.id})`
-                : "",
               "已依照你編輯後的訊息，從該則對話重新開始。",
               "```"
             ].filter(Boolean).join("\n"),

@@ -41,7 +41,7 @@ npm start
 
 `npm start` 會先檢查目前追蹤的 GitHub 分支。工作區沒有程式碼改動且可 fast-forward 時會自動更新；離線、有本機程式碼改動或分支已分岔時會保留現況並繼續啟動。
 
-使用者的角色卡、使用者設定、Prompt、目前對話、對話存檔與本機預設都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。舊版若曾把「儲存預設」或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
+使用者的角色卡、使用者設定、Prompt、目前對話與本機預設都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。舊版若曾把「儲存預設」或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
 
 這個檢查只在每次 `npm start` 啟動時執行一次，不會中斷正在運行的 server 做熱更新。每台 server 都需要以 `npm start` 重啟才會拉取；直接執行 `node src/index.js` 會略過更新流程。需要暫時關閉時可在 `.env` 設定：
 
@@ -77,7 +77,7 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 
 `start-mac.command` 與 `start-win.bat` 會自動檢查 Node/npm、安裝缺少的 `node_modules`、執行 `npm start`，並在更新及伺服器啟動完成後依目前 `PORT` 開啟瀏覽器。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
 
-主頁功能按鈕中的「儲存預設」只寫入本機預設；「使用預設」才會套用；「更新預設」會以目前程式版本隨附的發布預設替換本機預設，但不會立即修改正在使用的角色卡、Prompt 或對話存檔。
+主頁功能按鈕中的「儲存預設」只寫入本機預設；「使用預設」才會套用；「更新預設」會以目前程式版本隨附的發布預設替換本機預設，但不會立即修改正在使用的角色卡、Prompt 或目前對話。
 
 ## 功能
 

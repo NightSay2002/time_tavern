@@ -87,7 +87,6 @@ html[lang="zh-Hans"] h2,
 html[lang="zh-Hans"] .role-card h3,
 html[lang="zh-Hans"] .role-picker-cover,
 html[lang="zh-Hans"] .role-picker-card h4,
-html[lang="zh-Hans"] .session-picker-card h4,
 html[lang="zh-Hans"] .markdown-body h1,
 html[lang="zh-Hans"] .markdown-body h2,
 html[lang="zh-Hans"] .markdown-body h3,
@@ -887,24 +886,12 @@ button {
   display: none;
 }
 
-.desktop-session-picker-btn {
-  display: block;
-}
-
-@media (min-width: 981px) {
-  .session-inline-list {
-    display: none;
-  }
-}
-
-.role-picker-dialog,
-.session-picker-dialog {
+.role-picker-dialog {
   width: min(1180px, 94vw);
   max-height: min(92vh, 980px);
 }
 
-.role-picker-shell,
-.session-picker-shell {
+.role-picker-shell {
   gap: 14px;
 }
 
@@ -926,21 +913,6 @@ button {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
-}
-
-.session-picker-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  align-items: start;
-}
-
-.session-picker-content {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.52fr);
-  gap: 14px;
-  align-items: stretch;
 }
 
 .role-picker-card {
@@ -1027,167 +999,6 @@ button {
 
 .role-picker-actions button:first-child {
   grid-column: 1 / -1;
-}
-
-.session-picker-card {
-  height: 300px;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 18% 10%, rgba(77, 141, 255, 0.14), transparent 34%),
-    linear-gradient(160deg, rgba(255, 79, 200, 0.08), rgba(77, 141, 255, 0.06)),
-    rgba(255, 255, 255, 0.04);
-}
-
-.session-picker-card.active {
-  border-color: rgba(77, 141, 255, 0.72);
-  box-shadow: 0 0 22px rgba(77, 141, 255, 0.16), inset 0 0 18px rgba(255, 255, 255, 0.04);
-}
-
-.session-picker-card.previewing {
-  border-color: rgba(255, 214, 242, 0.72);
-  box-shadow: 0 0 22px rgba(255, 79, 200, 0.16), inset 0 0 18px rgba(255, 255, 255, 0.04);
-}
-
-.session-picker-card h4 {
-  margin: 0;
-  font-family: "Pop Gothic", "Noto Sans TC", "PingFang TC", sans-serif;
-  font-size: 23px;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-picker-role,
-.session-picker-meta {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.5;
-  word-break: break-word;
-  overflow: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.session-picker-role::-webkit-scrollbar,
-.session-picker-meta::-webkit-scrollbar {
-  display: none;
-}
-
-.session-picker-role {
-  font-size: 19px;
-  color: #dbe8ff;
-}
-
-.session-picker-meta {
-  font-size: 17px;
-}
-
-.session-picker-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.session-picker-actions button:first-child {
-  grid-column: 1 / -1;
-}
-
-.session-preview-panel {
-  min-height: 300px;
-  max-height: min(65vh, 690px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 22% 8%, rgba(255, 79, 200, 0.14), transparent 34%),
-    linear-gradient(160deg, rgba(77, 141, 255, 0.08), rgba(255, 79, 200, 0.06)),
-    rgba(255, 255, 255, 0.04);
-}
-
-.session-preview-panel > header {
-  display: grid;
-  gap: 4px;
-  padding: 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.session-preview-panel > header strong {
-  overflow: hidden;
-  color: #f8fbff;
-  font-size: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-preview-panel > header span {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.session-preview-messages {
-  min-height: 0;
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  overflow: auto;
-  padding: 12px;
-  overscroll-behavior: contain;
-}
-
-.session-preview-message {
-  display: grid;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  background: rgba(4, 7, 19, 0.34);
-}
-
-.session-preview-message.user {
-  border-color: rgba(77, 141, 255, 0.2);
-}
-
-.session-preview-message.assistant {
-  border-color: rgba(255, 79, 200, 0.2);
-}
-
-.session-preview-message-header {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.session-preview-message-header strong {
-  min-width: 0;
-  overflow: hidden;
-  color: #f8fbff;
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-preview-message-header span {
-  flex: none;
-  color: #8fa5cf;
-  font-size: 12px;
-}
-
-.session-preview-message-body {
-  max-height: 220px;
-  overflow: auto;
-  color: #dbe8ff;
-  font-size: 14px;
-  line-height: 1.55;
 }
 
 .inline-actions {
@@ -3609,10 +3420,6 @@ body.novelai-studio-body .novelai-small-preview {
     overflow-x: clip;
   }
 
-  .desktop-session-picker-btn {
-    display: none;
-  }
-
   .sidebar > *,
   .chat-secondary > * {
     width: min(calc(100% - 24px), 720px);
@@ -3694,23 +3501,12 @@ body.novelai-studio-body .novelai-small-preview {
     min-height: 280px;
   }
 
-  .session-picker-content,
   .role-picker-grid,
-  .session-picker-grid,
   .role-picker-pagination {
     grid-template-columns: 1fr;
   }
 
-  .session-preview-panel {
-    max-height: none;
-  }
-
   .role-picker-card {
-    height: auto;
-    min-height: 0;
-  }
-
-  .session-picker-card {
     height: auto;
     min-height: 0;
   }
@@ -4106,8 +3902,7 @@ body.novelai-studio-body .novelai-small-preview {
     -webkit-overflow-scrolling: touch;
   }
 
-  .role-picker-shell,
-  .session-picker-shell {
+  .role-picker-shell {
     height: 100%;
     max-height: 100%;
     min-height: 0;
@@ -4117,8 +3912,7 @@ body.novelai-studio-body .novelai-small-preview {
     overflow: hidden;
   }
 
-  .role-picker-grid,
-  .session-picker-content {
+  .role-picker-grid {
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;

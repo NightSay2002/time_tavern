@@ -64,13 +64,6 @@
         </div>
 
         <div class="actions-block">
-          <h2>對話存檔</h2>
-          <button id="selectSessionBtn" type="button" class="secondary desktop-session-picker-btn">選擇對話存檔</button>
-          <button id="saveSessionBtn" type="button">保存目前整體對話</button>
-          <div id="sessionList" class="card-list session-inline-list"></div>
-        </div>
-
-        <div class="actions-block">
           <h2>功能按鈕</h2>
           <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
           <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
@@ -215,32 +208,6 @@
           <button id="roleCardPickerPrevBtn" type="button" class="secondary">上一頁</button>
           <span id="roleCardPickerPageInfo">第 1 / 1 頁</span>
           <button id="roleCardPickerNextBtn" type="button" class="secondary">下一頁</button>
-        </div>
-      </section>
-    </dialog>
-
-    <dialog id="sessionPickerDialog" class="dialog session-picker-dialog">
-      <section class="stack session-picker-shell">
-        <div class="role-picker-header">
-          <h3>選擇對話存檔</h3>
-          <button id="closeSessionPickerBtn" type="button" class="muted">關閉</button>
-        </div>
-        <div class="session-picker-content">
-          <div id="sessionPickerGrid" class="session-picker-grid"></div>
-          <aside id="sessionPreviewPanel" class="session-preview-panel" aria-live="polite">
-            <header>
-              <strong id="sessionPreviewTitle">存檔預覽</strong>
-              <span id="sessionPreviewMeta">選擇一個存檔查看對話。</span>
-            </header>
-            <div id="sessionPreviewMessages" class="session-preview-messages">
-              <p class="form-hint">尚未選擇存檔。</p>
-            </div>
-          </aside>
-        </div>
-        <div class="role-picker-pagination">
-          <button id="sessionPickerPrevBtn" type="button" class="secondary">上一頁</button>
-          <span id="sessionPickerPageInfo">第 1 / 1 頁</span>
-          <button id="sessionPickerNextBtn" type="button" class="secondary">下一頁</button>
         </div>
       </section>
     </dialog>

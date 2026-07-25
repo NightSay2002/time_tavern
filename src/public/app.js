@@ -14,9 +14,6 @@
   importRoleCardBtn: document.getElementById("importRoleCardBtn"),
   roleCardImportFile: document.getElementById("roleCardImportFile"),
   roleCardList: document.getElementById("roleCardList"),
-  selectSessionBtn: document.getElementById("selectSessionBtn"),
-  saveSessionBtn: document.getElementById("saveSessionBtn"),
-  sessionList: document.getElementById("sessionList"),
 
   editAiOutputBtn: document.getElementById("editAiOutputBtn"),
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
@@ -80,17 +77,6 @@
   roleCardPickerNextBtn: document.getElementById("roleCardPickerNextBtn"),
   roleCardPickerPageInfo: document.getElementById("roleCardPickerPageInfo"),
   closeRoleCardPickerBtn: document.getElementById("closeRoleCardPickerBtn"),
-
-  sessionPickerDialog: document.getElementById("sessionPickerDialog"),
-  sessionPickerGrid: document.getElementById("sessionPickerGrid"),
-  sessionPreviewPanel: document.getElementById("sessionPreviewPanel"),
-  sessionPreviewTitle: document.getElementById("sessionPreviewTitle"),
-  sessionPreviewMeta: document.getElementById("sessionPreviewMeta"),
-  sessionPreviewMessages: document.getElementById("sessionPreviewMessages"),
-  sessionPickerPrevBtn: document.getElementById("sessionPickerPrevBtn"),
-  sessionPickerNextBtn: document.getElementById("sessionPickerNextBtn"),
-  sessionPickerPageInfo: document.getElementById("sessionPickerPageInfo"),
-  closeSessionPickerBtn: document.getElementById("closeSessionPickerBtn"),
 
   editAiDialog: document.getElementById("editAiDialog"),
   editAiForm: document.getElementById("editAiForm"),
@@ -201,8 +187,6 @@ let selectedCompressionProfileId = "standard";
 let contextCompressionDialogPayload = null;
 let selectedContextCompressionProfileId = "standard";
 let roleCardPickerPage = 1;
-let sessionPickerPage = 1;
-let selectedSessionPreviewId = "";
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
 let coverCropConfirmHandler = null;
@@ -224,7 +208,6 @@ const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
 const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
-const SESSION_PICKER_PAGE_SIZE = 9;
 const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
 const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
@@ -328,112 +311,12 @@ const CHAT_COMMAND_MENU_ITEMS = [
     ]
   },
   {
-    id: "replay",
-    command: "/replay",
-    title: "從指定訊息分支",
-    description: "從指定訊息編號建立分支並重寫後續。",
-    hint: "參數",
-    form: "replay",
-    fields: [
-      {
-        name: "message_number",
-        label: "message_number",
-        type: "number",
-        placeholder: "訊息編號",
-        defaultValue: "",
-        required: true,
-        help: "要重寫的訊息編號，從 1 開始。"
-      },
-      {
-        name: "content",
-        label: "content",
-        type: "text",
-        placeholder: "新的使用者內容",
-        defaultValue: "",
-        required: true,
-        help: "這次分支要送出的新使用者內容。"
-      }
-    ]
-  },
-  {
-    id: "run-time",
-    command: "/run_time",
-    title: "自動推演多輪",
-    description: "依照要求自動推演多輪對話。",
-    hint: "參數",
-    form: "run_time",
-    fields: [
-      {
-        name: "number",
-        label: "number",
-        type: "number",
-        placeholder: "輪數",
-        defaultValue: "",
-        help: "要自動推演多少輪，例如 3。"
-      },
-      {
-        name: "message",
-        label: "message",
-        type: "text",
-        placeholder: "推演要求",
-        defaultValue: "",
-        help: "這次多輪推演要遵守的要求或方向。"
-      }
-    ]
-  },
-  {
     id: "help",
     command: "/ai_help",
     title: "查看可用指令",
     description: "顯示網頁可用的常用指令和功能。",
     hint: "執行",
     action: "help"
-  },
-  {
-    id: "session-save",
-    command: "/session_save",
-    title: "保存目前對話",
-    description: "建立一個可回到此刻的對話存檔。",
-    hint: "參數",
-    form: "session_save",
-    fields: [
-      {
-        name: "name",
-        label: "name",
-        type: "text",
-        placeholder: "存檔名稱",
-        defaultValue: "",
-        required: false,
-        help: "存檔名稱；可留空使用預設時間名稱。"
-      }
-    ]
-  },
-  {
-    id: "session-list",
-    command: "/session_list",
-    title: "載入對話存檔",
-    description: "打開對話存檔列表。",
-    hint: "執行",
-    action: "sessionList"
-  },
-  {
-    id: "session-load",
-    command: "/session_load",
-    title: "載入對話存檔",
-    description: "依照存檔 ID 載入對話存檔。",
-    hint: "參數",
-    form: "session_load",
-    fields: [
-      {
-        name: "id",
-        label: "id",
-        type: "text",
-        placeholder: "存檔 ID",
-        defaultValue: "",
-        required: true,
-        help: "要載入的對話存檔 ID。"
-      }
-    ]
   }
 ];
 const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
@@ -3775,39 +3658,6 @@ async function submitActiveChatCommandForm() {
     clearActiveChatCommandForm();
     return true;
   }
-  if (activeChatCommandForm.form === "replay") {
-    await replayLatestFromCommand(values.message_number, values.content);
-    clearActiveChatCommandForm();
-    return true;
-  }
-  if (activeChatCommandForm.form === "run_time") {
-    const numberValue = values.number;
-    const message = values.message;
-    const turns = Number(numberValue);
-    if (!Number.isFinite(turns) || turns < 1) {
-      focusActiveChatCommandField("number");
-      showToast("請在 number 填入要推演的輪數，例如 3。", "error");
-      return true;
-    }
-    if (!message) {
-      focusActiveChatCommandField("message");
-      showToast("請在 message 填入推演要求。", "error");
-      return true;
-    }
-    await runRuntimeFromCommand([String(Math.floor(turns)), message]);
-    clearActiveChatCommandForm();
-    return true;
-  }
-  if (activeChatCommandForm.form === "session_save") {
-    await saveSession(values.name || "", { promptIfMissing: false });
-    clearActiveChatCommandForm();
-    return true;
-  }
-  if (activeChatCommandForm.form === "session_load") {
-    await loadSession(values.id, false);
-    clearActiveChatCommandForm();
-    return true;
-  }
   return false;
 }
 
@@ -3953,12 +3803,6 @@ function openRoleCardPicker() {
   });
 }
 
-function openSessionPicker() {
-  sessionPickerPage = 1;
-  renderSessionPicker(appState);
-  el.sessionPickerDialog?.showModal();
-}
-
 async function startCurrentChatTarget() {
   const activeCardId = appState?.activeRoleCardId || "";
   if (activeCardId) {
@@ -4009,75 +3853,6 @@ async function reloadLatestAssistantReply(feedback = "") {
   }
 }
 
-async function replayLatestFromCommand(messageNumber, content) {
-  const normalizedMessageNumber = Math.floor(Number(messageNumber || ""));
-  const nextContent = String(content || "").trim();
-  if (!Number.isFinite(normalizedMessageNumber) || normalizedMessageNumber < 1) {
-    throw new Error("請在 message_number 填入有效訊息編號，從 1 開始。");
-  }
-  if (!nextContent) {
-    throw new Error("請在 content 填入新的使用者內容。");
-  }
-  try {
-    isChatStreaming = true;
-    renderStatus(appState);
-    showToast("正在從指定訊息建立分支...");
-    const payload = await request("/api/chat/replay", {
-      method: "POST",
-      body: JSON.stringify({
-        messageNumber: normalizedMessageNumber,
-        content: nextContent
-      })
-    });
-    appState = payload?.state || appState;
-    renderMessages(appState);
-    renderAiLogs(appState);
-    renderStatus(appState);
-    refreshAssistantSelector();
-    realignMobileChat({ scroll: true });
-    showToast(payload?.backupSession ? "已建立分支並保存分支前備份" : "已建立分支");
-  } finally {
-    isChatStreaming = false;
-    if (appState) {
-      renderStatus(appState);
-    }
-  }
-}
-
-async function runRuntimeFromCommand(args = []) {
-  const turns = Number(args[0] || "");
-  const message = String(args.slice(1).join(" ") || "").trim();
-  if (!Number.isFinite(turns) || turns < 1 || !message) {
-    startChatCommandForm(getChatCommandMenuItemByForm("run_time"), {
-      number: Number.isFinite(turns) && turns >= 1 ? String(Math.floor(turns)) : "",
-      message,
-      focusField: Number.isFinite(turns) && turns >= 1 ? "message" : "number"
-    });
-    showToast("請填寫 number 和 message。", "error");
-    return;
-  }
-  try {
-    isChatStreaming = true;
-    renderStatus(appState);
-    showToast("正在自動推演...");
-    const payload = await request("/api/chat/run-time", {
-      method: "POST",
-      body: JSON.stringify({ turns, message })
-    });
-    appState = payload?.state || appState;
-    renderMessages(appState);
-    renderAiLogs(appState);
-    renderStatus(appState);
-    realignMobileChat({ scroll: true });
-    showToast(`已完成 ${payload?.turns || Math.floor(turns)} 輪推演`);
-  } finally {
-    isChatStreaming = false;
-    if (appState) {
-      renderStatus(appState);
-    }
-  }
-}
-
 function showChatCommandHelp() {
   selectedChatCommandIndex = 0;
   openChatCommandMenu({ showAll: true });
@@ -4109,14 +3884,6 @@ async function runChatCommandAction(action = "", args = []) {
   }
   if (action === "help") {
     showChatCommandHelp();
-    return;
-  }
-  if (action === "sessionSave") {
-    await saveSession();
-    return;
-  }
-  if (action === "sessionList") {
-    openSessionPicker();
     return;
   }
 }
@@ -4167,54 +3934,11 @@ async function handleChatSlashCommand(content = "") {
     clearChatInputValue();
     return true;
   }
-  if (command === "replay") {
-    const messageNumber = args[0] || "";
-    const content = args.slice(1).join(" ").trim();
-    if (!messageNumber || !content) {
-      startChatCommandForm(getChatCommandMenuItemByForm("replay"), {
-        message_number: messageNumber,
-        content,
-        focusField: messageNumber ? "content" : "message_number"
-      });
-      return true;
-    }
-    await replayLatestFromCommand(messageNumber, content);
-    clearChatInputValue();
-    return true;
-  }
-  if (command === "run_time") {
-    await runRuntimeFromCommand(args);
-    if (Number.isFinite(Number(args[0] || "")) && Number(args[0] || "") >= 1 && args.slice(1).join(" ").trim()) {
-      clearChatInputValue();
-    }
-    return true;
-  }
   if (command === "ai_help" || command === "help") {
     await runChatCommandAction("help", args);
     clearChatInputValue();
     return true;
   }
-  if (command === "session_save") {
-    await saveSession(args.join(" "), { promptIfMissing: args.length === 0 });
-    clearChatInputValue();
-    return true;
-  }
-  if (command === "session_list") {
-    await runChatCommandAction("sessionList", args);
-    clearChatInputValue();
-    return true;
-  }
-  if (command === "session_load") {
-    const sessionId = args[0] || "";
-    if (!sessionId) {
-      startChatCommandForm(getChatCommandMenuItemByForm("session_load"));
-      return true;
-    }
-    await loadSession(sessionId, false);
-    clearChatInputValue();
-    return true;
-  }
-
   showToast(`未知指令：/${command}`, "error");
   openChatCommandMenu();
   return true;
@@ -4560,279 +4284,6 @@ function createRoleCardPickerTile(card, state) {
   return tile;
 }
 
-function getSessionRoleCardLabel(session) {
-  return session?.roleCardName || session?.assistantMode || "未指定角色卡";
-}
-
-function renderSessions(state) {
-  const sessions = state.savedSessionsMeta || [];
-  el.sessionList.innerHTML = "";
-
-  if (!sessions.length) {
-    const empty = document.createElement("p");
-    empty.textContent = "尚無對話存檔。";
-    empty.style.color = "#9eb0d0";
-    empty.style.fontSize = "12px";
-    el.sessionList.appendChild(empty);
-    renderSessionPicker(state);
-    return;
-  }
-
-  sessions.forEach((session) => {
-    const item = document.createElement("div");
-    item.className = "role-card";
-
-    const title = document.createElement("h3");
-    title.textContent = session.name;
-
-    const desc = document.createElement("p");
-    desc.textContent = `角色卡：${getSessionRoleCardLabel(session)}｜ID:${session.id}｜訊息:${session.messageCount}`;
-
-    const actions = document.createElement("div");
-    actions.className = "inline-actions";
-
-    const continueBtn = document.createElement("button");
-    continueBtn.type = "button";
-    continueBtn.className = "secondary";
-    continueBtn.textContent = "載入續聊";
-    continueBtn.addEventListener("click", () => loadSession(session.id, false));
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.type = "button";
-    deleteBtn.className = "muted";
-    deleteBtn.textContent = "刪除";
-    deleteBtn.addEventListener("click", () => deleteSession(session));
-
-    actions.append(continueBtn, deleteBtn);
-
-    item.append(title, desc, actions);
-    el.sessionList.appendChild(item);
-  });
-
-  renderSessionPicker(state);
-}
-
-function renderSessionPicker(state = appState) {
-  if (!el.sessionPickerGrid || !state) {
-    return;
-  }
-
-  const sessions = Array.isArray(state.savedSessionsMeta) ? state.savedSessionsMeta : [];
-  if (selectedSessionPreviewId && !sessions.some((session) => session.id === selectedSessionPreviewId)) {
-    selectedSessionPreviewId = "";
-    renderSessionPreviewPlaceholder();
-  }
-  const totalPages = Math.max(1, Math.ceil(sessions.length / SESSION_PICKER_PAGE_SIZE));
-  sessionPickerPage = Math.min(Math.max(1, sessionPickerPage), totalPages);
-  const startIndex = (sessionPickerPage - 1) * SESSION_PICKER_PAGE_SIZE;
-  const pageItems = sessions.slice(startIndex, startIndex + SESSION_PICKER_PAGE_SIZE);
-
-  el.sessionPickerGrid.innerHTML = "";
-
-  if (!pageItems.length) {
-    const empty = document.createElement("p");
-    empty.className = "form-hint";
-    empty.textContent = "尚無對話存檔。";
-    el.sessionPickerGrid.appendChild(empty);
-  }
-
-  pageItems.forEach((session) => {
-    el.sessionPickerGrid.appendChild(createSessionPickerTile(session, state));
-  });
-
-  if (el.sessionPickerPageInfo) {
-    el.sessionPickerPageInfo.textContent = `第 ${sessionPickerPage} / ${totalPages} 頁`;
-  }
-  if (el.sessionPickerPrevBtn) {
-    el.sessionPickerPrevBtn.disabled = sessionPickerPage <= 1;
-  }
-  if (el.sessionPickerNextBtn) {
-    el.sessionPickerNextBtn.disabled = sessionPickerPage >= totalPages;
-  }
-}
-
-function createSessionPickerTile(session, state) {
-  const tile = document.createElement("article");
-  tile.className = "session-picker-card";
-  if (selectedSessionPreviewId === session.id) {
-    tile.classList.add("previewing");
-  }
-
-  const title = document.createElement("h4");
-  title.textContent = session.name;
-
-  const role = document.createElement("p");
-  role.className = "session-picker-role";
-  role.textContent = `角色卡：${getSessionRoleCardLabel(session)}`;
-
-  const meta = document.createElement("p");
-  meta.className = "session-picker-meta";
-  const updatedText = session.updatedAt ? new Date(session.updatedAt).toLocaleString("zh-Hant") : "未知時間";
-  meta.textContent = `訊息：${session.messageCount}｜更新：${updatedText}`;
-
-  const actions = document.createElement("div");
-  actions.className = "session-picker-actions";
-
-  const continueBtn = document.createElement("button");
-  continueBtn.type = "button";
-  continueBtn.className = "secondary";
-  continueBtn.textContent = "載入續聊";
-  continueBtn.addEventListener("click", async () => {
-    await loadSession(session.id, false);
-    el.sessionPickerDialog?.close();
-  });
-
-  const previewBtn = document.createElement("button");
-  previewBtn.type = "button";
-  previewBtn.className = "secondary";
-  previewBtn.textContent = "預覽";
-  previewBtn.addEventListener("click", () => previewSession(session.id));
-
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.className = "muted";
-  deleteBtn.textContent = "刪除";
-  deleteBtn.addEventListener("click", () => deleteSession(session));
-
-  actions.append(continueBtn, previewBtn, deleteBtn);
-  tile.append(title, role, meta, actions);
-  return tile;
-}
-
-function renderSessionPreviewPlaceholder(message = "尚未選擇存檔。") {
-  if (el.sessionPreviewTitle) {
-    el.sessionPreviewTitle.textContent = "存檔預覽";
-  }
-  if (el.sessionPreviewMeta) {
-    el.sessionPreviewMeta.textContent = "選擇一個存檔查看對話。";
-  }
-  if (el.sessionPreviewMessages) {
-    const empty = document.createElement("p");
-    empty.className = "form-hint";
-    empty.textContent = message;
-    el.sessionPreviewMessages.replaceChildren(empty);
-  }
-}
-
-function getSessionPreviewAuthorInfo(message = {}, session = {}) {
-  if (message.role === "assistant") {
-    return {
-      name: session.roleCardName || "AI",
-      roleLabel: "assistant"
-    };
-  }
-  if (message.role === "user") {
-    const profileName = String(appState?.userProfile?.displayName || appState?.userProfile?.name || "{{user}}").trim();
-    return {
-      name: profileName || "{{user}}",
-      roleLabel: "user"
-    };
-  }
-  return {
-    name: message.role || "system",
-    roleLabel: message.role || "system"
-  };
-}
-
-function renderSessionPreview(session = {}) {
-  const conversation = Array.isArray(session.conversation) ? session.conversation : [];
-  selectedSessionPreviewId = session.id || "";
-  if (el.sessionPreviewTitle) {
-    el.sessionPreviewTitle.textContent = session.name || "存檔預覽";
-  }
-  if (el.sessionPreviewMeta) {
-    const updatedText = session.updatedAt ? new Date(session.updatedAt).toLocaleString("zh-Hant") : "未知時間";
-    el.sessionPreviewMeta.textContent = `角色卡：${getSessionRoleCardLabel(session)}｜訊息：${conversation.length}｜更新：${updatedText}`;
-  }
-  if (!el.sessionPreviewMessages) {
-    return;
-  }
-  if (!conversation.length) {
-    const empty = document.createElement("p");
-    empty.className = "form-hint";
-    empty.textContent = "這個存檔沒有對話內容。";
-    el.sessionPreviewMessages.replaceChildren(empty);
-    renderSessionPicker(appState);
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
-  conversation.forEach((message, index) => {
-    const author = getSessionPreviewAuthorInfo(message, session);
-    const item = document.createElement("article");
-    item.className = `session-preview-message ${message.role || "unknown"}`;
-
-    const header = document.createElement("div");
-    header.className = "session-preview-message-header";
-    const name = document.createElement("strong");
-    name.textContent = `#${index + 1} ${author.name}`;
-    const meta = document.createElement("span");
-    const timeText = message.createdAt ? formatMessageTimestamp(message.createdAt) : author.roleLabel;
-    meta.textContent = timeText;
-    header.append(name, meta);
-
-    const body = document.createElement("div");
-    body.className = "session-preview-message-body markdown-body";
-    body.innerHTML = renderMarkdownToHtml(message.content || "", {
-      allowHtml: message.role === "assistant"
-    });
-
-    const imageAttachments = getMessageImageAttachments(message);
-    if (imageAttachments.length > 0) {
-      const imageGrid = document.createElement("div");
-      imageGrid.className = "message-image-grid";
-      imageAttachments.forEach((image) => {
-        const link = document.createElement("a");
-        link.className = "message-image-link";
-        link.href = image.imageUrl;
-        link.target = "_blank";
-        link.rel = "noreferrer";
-        link.title = image.prompt || image.fileName;
-        const img = document.createElement("img");
-        img.src = image.imageUrl;
-        img.alt = image.fileName || "generated image";
-        img.loading = "lazy";
-        link.appendChild(img);
-        imageGrid.appendChild(link);
-      });
-      body.appendChild(imageGrid);
-    }
-
-    item.append(header, body);
-    fragment.appendChild(item);
-  });
-  el.sessionPreviewMessages.replaceChildren(fragment);
-  renderSessionPicker(appState);
-}
-
-async function previewSession(sessionId = "") {
-  if (!sessionId) {
-    return;
-  }
-  selectedSessionPreviewId = sessionId;
-  if (el.sessionPreviewTitle) {
-    el.sessionPreviewTitle.textContent = "讀取預覽中...";
-  }
-  if (el.sessionPreviewMeta) {
-    el.sessionPreviewMeta.textContent = "";
-  }
-  if (el.sessionPreviewMessages) {
-    const loading = document.createElement("p");
-    loading.className = "form-hint";
-    loading.textContent = "正在讀取存檔對話...";
-    el.sessionPreviewMessages.replaceChildren(loading);
-  }
-  renderSessionPicker(appState);
-  try {
-    const payload = await request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "GET" });
-    renderSessionPreview(payload.session || {});
-  } catch (error) {
-    selectedSessionPreviewId = "";
-    renderSessionPreviewPlaceholder(error.message || "存檔預覽讀取失敗。");
-    showToast(error.message || "存檔預覽讀取失敗", "error");
-  }
-}
-
 function getActiveRoleCardFromState(state = appState) {
   return (state?.roleCards || []).find((card) => card.id === state?.activeRoleCardId) || null;
 }
@@ -5112,7 +4563,7 @@ async function submitEditUserMessage() {
     renderAiLogs(appState);
     renderStatus(appState);
     refreshAssistantSelector();
-    showToast(payload?.backupSession ? "已刪除後續分支並重新生成，編輯前已備份" : "已刪除後續分支並重新生成");
+    showToast("已刪除後續分支並重新生成");
   } catch (error) {
     appState = previousState;
     if (appState) {
@@ -7743,7 +7194,6 @@ async function refresh() {
   renderConversationModelSettings(state);
   renderAllPromptModeSelects(getActivePromptMode(state));
   renderRoleCards(state);
-  renderSessions(state);
   renderMessages(state);
   renderAiLogs(state);
   renderStatus(state);
@@ -8106,7 +7556,7 @@ async function saveModularPromptConfig() {
 }
 
 async function saveDefaults() {
-  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等設定儲存成這台裝置的本機預設嗎？AI 呼叫紀錄、Discord Bot Token、對話 API Key 與對話存檔不會保存。")) {
+  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等設定儲存成這台裝置的本機預設嗎？AI 呼叫紀錄、Discord Bot Token、對話 API Key 與目前對話不會保存。")) {
     return;
   }
   try {
@@ -8129,7 +7579,7 @@ async function saveDefaults() {
 }
 
 async function applyDefaults() {
-  if (!window.confirm("要使用本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空；對話存檔會保留。")) {
+  if (!window.confirm("要使用本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空。")) {
     return;
   }
   try {
@@ -8156,7 +7606,7 @@ async function applyDefaults() {
 }
 
 async function updateDefaults() {
-  if (!window.confirm("要把本機預設更新為目前程式版本隨附的發布預設嗎？這只會替換可供「使用預設」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或對話存檔。")) {
+  if (!window.confirm("要把本機預設更新為目前程式版本隨附的發布預設嗎？這只會替換可供「使用預設」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或目前對話。")) {
     return;
   }
   try {
@@ -8243,59 +7693,6 @@ async function previewModularPromptConfig() {
       el.modularPreviewCompressionPrompt.value = payload.contextCompressionPrompt || "";
     }
     showToast("Prompt 預覽已更新");
-  } catch (error) {
-    showToast(error.message, "error");
-  }
-}
-
-async function saveSession(nameOverride, options = {}) {
-  const suggested = `對話存檔 ${new Date().toLocaleString("zh-Hant")}`;
-  const promptIfMissing = options.promptIfMissing !== false;
-  let name = "";
-  if (typeof nameOverride === "string") {
-    name = nameOverride.trim();
-  } else if (promptIfMissing) {
-    const input = window.prompt("請輸入存檔名稱", suggested);
-    name = (input || "").trim();
-  }
-
-  try {
-    await request("/api/sessions/save", {
-      method: "POST",
-      body: JSON.stringify({ name })
-    });
-    await refresh();
-    showToast("已保存整體對話存檔");
-  } catch (error) {
-    showToast(error.message, "error");
-  }
-}
-
-async function loadSession(sessionId, restart) {
-  try {
-    await request(`/api/sessions/${sessionId}/load`, {
-      method: "POST",
-      body: JSON.stringify({ restart: false })
-    });
-    await refresh();
-    showToast("已從存檔點載入，可繼續對話");
-  } catch (error) {
-    showToast(error.message, "error");
-  }
-}
-
-async function deleteSession(session) {
-  const ok = window.confirm(`確定要刪除對話存檔「${session.name}」嗎？此操作無法復原。`);
-  if (!ok) {
-    return;
-  }
-
-  try {
-    await request(`/api/sessions/${session.id}`, {
-      method: "DELETE"
-    });
-    await refresh();
-    showToast("對話存檔已刪除");
   } catch (error) {
     showToast(error.message, "error");
   }
@@ -8501,34 +7898,6 @@ function bindEvents() {
       await importRoleCardFromFile(el.roleCardImportFile.files?.[0]);
     });
   }
-  if (el.selectSessionBtn) {
-    el.selectSessionBtn.addEventListener("click", () => {
-      sessionPickerPage = 1;
-      renderSessionPicker(appState);
-      el.sessionPickerDialog.showModal();
-    });
-  }
-
-  if (el.closeSessionPickerBtn) {
-    el.closeSessionPickerBtn.addEventListener("click", () => el.sessionPickerDialog.close());
-  }
-
-  if (el.sessionPickerPrevBtn) {
-    el.sessionPickerPrevBtn.addEventListener("click", () => {
-      sessionPickerPage -= 1;
-      renderSessionPicker(appState);
-    });
-  }
-
-  if (el.sessionPickerNextBtn) {
-    el.sessionPickerNextBtn.addEventListener("click", () => {
-      sessionPickerPage += 1;
-      renderSessionPicker(appState);
-    });
-  }
-
-  el.saveSessionBtn.addEventListener("click", saveSession);
-
   if (el.roleCardCoverImageFile) {
     el.roleCardCoverImageFile.addEventListener("change", async () => {
       const file = el.roleCardCoverImageFile.files?.[0];
@@ -9187,7 +8556,6 @@ function bindEvents() {
     }
   });
   bindDialogBackdropClose(el.roleCardPickerDialog);
-  bindDialogBackdropClose(el.sessionPickerDialog);
 
 }
 

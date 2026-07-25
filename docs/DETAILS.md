@@ -93,13 +93,12 @@ Prompt 與大模型：
 - 自動切換早中晚時，晚上到早上會自動加 1 天。
 - `{{保持時間}}`、`{保持時間}` 與 `｛保持時間｝` 會延後自動切換。
 
-對話與存檔：
+對話與編輯：
 
 - 開始角色卡會清空 runtime 對話、重置模型內容、加入開場。
 - 串流生成會先顯示思考/生成過程，正文出現後替換正式內容。
 - `/stop` 或網頁停止按鈕會取消目前生成。
-- 可保存、載入、刪除、預覽對話存檔。
-- `/replay` 與 Discord 訊息編輯會建立分支重算。
+- 編輯網頁使用者訊息或 Discord 原始訊息時，會刪除後續分支並重新生成。
 
 ## NovelAI 細節
 
@@ -153,14 +152,8 @@ Slash 指令：
 | `/stop` | 無 | 停止目前生成。 |
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
 | `/reload` | `feedback` | 移除最新 AI 回覆並重跑。 |
-| `/replay` | `message_number`、`content` | 從指定訊息重寫分支。 |
-| `/run_time` | `number`、`message` | 自動推演多輪。 |
-| `/keep_time` | 無 | 發送 `{{保持時間}}` 並繼續本輪對話。 |
-| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令。 |
+| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；保持時間請選擇 `{{保持時間}}`。 |
 | `/ai_help` | 無 | 顯示可用指令。 |
-| `/session_save` | `name` | 保存目前對話。 |
-| `/session_list` | 無 | 列出對話存檔。 |
-| `/session_load` | `id` | 載入對話存檔。 |
 
 文字指令：
 
@@ -170,12 +163,6 @@ Slash 指令：
 !ai start
 !ai player_set 2
 !ai reload 這次回覆太短
-!ai replay 12 新的使用者內容
-!ai run_time 5 依照目前事件自然推進
-!ai keep_time
-!ai session_save 存檔名
-!ai session_list
-!ai session_load <id>
 ```
 
 Discord 行為：
@@ -210,13 +197,12 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 - 對話 API key
 - NovelAI API token
 - 目前對話正文
-- 對話存檔本體
 
 三個按鈕的差異：
 
 - 「儲存預設」：把目前設定保存成使用者本機預設。
-- 「使用預設」：以本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定；保留對話存檔。
-- 「更新預設」：把目前程式版本隨附的發布預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或對話存檔。
+- 「使用預設」：以本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定。
+- 「更新預設」：把目前程式版本隨附的發布預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或目前對話。
 
 Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`，所以只更新預設不會立即套用。
 
@@ -227,7 +213,7 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 - `src/public/assets/img/cover.png`
 - `src/public/assets/img/image1.png` 至 `image4.png`
 
-自動更新只處理 Git 追蹤的程式與發布預設。`data/`、`.env`、角色卡、目前對話及對話存檔不會被 Git 更新；舊版追蹤檔中的使用者預設或 Prompt 改動會先遷移到 `data/`。
+自動更新只處理 Git 追蹤的程式與發布預設。`data/`、`.env`、角色卡與目前對話不會被 Git 更新；舊版追蹤檔中的使用者預設或 Prompt 改動會先遷移到 `data/`。
 
 ## HTTP API
 
@@ -248,9 +234,6 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `GET` / `POST` | `/api/novelai/album` | 列出或收藏 NovelAI 圖片。 |
 | `GET` | `/api/novelai/album/:id/image` | 讀取收藏圖片。 |
 | `DELETE` | `/api/novelai/album/:id` | 刪除收藏圖片。 |
-| `GET` / `POST` | `/api/sessions`、`/api/sessions/save` | 列出或保存對話存檔。 |
-| `GET` / `PUT` / `DELETE` | `/api/sessions/:id` | 讀取、改名或刪除存檔。 |
-| `POST` | `/api/sessions/:id/load` | 載入存檔。 |
 | `GET` / `POST` | `/api/role-cards` | 列出或建立角色卡。 |
 | `PUT` / `DELETE` | `/api/role-cards/:id` | 更新或刪除角色卡。 |
 | `POST` | `/api/role-cards/:id/start` | 開始角色卡。 |
@@ -263,8 +246,6 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `POST` | `/api/chat/send-stream` | 網頁串流送出一輪對話。 |
 | `POST` | `/api/chat/stop` | 停止目前生成。 |
 | `POST` | `/api/chat/reload` | 重跑最新 AI 回覆。 |
-| `POST` | `/api/chat/replay` | 從指定訊息重寫分支。 |
-| `POST` | `/api/chat/run-time` | 自動推演多輪。 |
 | `POST` | `/api/modular-prompts/:mode/preview` | 預覽 Prompt 模式。 |
 | `PUT` / `DELETE` | `/api/modular-prompts/:mode` | 保存或刪除 Prompt 模式。 |
 
@@ -272,11 +253,11 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 
 | 檔案或目錄 | 說明 |
 | --- | --- |
-| `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容、存檔 metadata、AI logs 摘要。 |
+| `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容與 AI logs 摘要。 |
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/cardstate.json` | 使用者設定與角色卡分離備份。 |
-| `data/saved-sessions/` | 對話存檔中的 conversation 與 AI logs。 |
+| `data/saved-sessions/` | 舊版對話存檔資料；功能移除後只保留既有本機檔案。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
 | `defaults/app-defaults.json` | 可提交的主功能與 Prompt 發布預設。 |
 | `defaults/novelai-defaults.json` | 可提交的 NovelAI 發布預設。 |
