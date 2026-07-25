@@ -62,6 +62,15 @@ export function parseGitStatusEntries(value = "") {
     });
 }
 
+export function isProjectUpdatePath(filePath = "") {
+  const normalized = String(filePath).replaceAll("\\", "/").replace(/^\.\/+/u, "");
+  return normalized !== ".server-manager" && !normalized.startsWith(".server-manager/");
+}
+
+export function getProjectStatusEntries(value = "") {
+  return parseGitStatusEntries(value).filter((entry) => isProjectUpdatePath(entry.path));
+}
+
 export function isLegacyMutablePath(filePath = "") {
   const normalized = String(filePath).replaceAll("\\", "/");
   return normalized === "defaults/app-defaults.json" ||
@@ -203,6 +212,10 @@ function installUpdatedDependencies(changedFiles = []) {
   });
 }
 
+function hasProjectWorkingTreeChanges() {
+  return getProjectStatusEntries(run("git", ["status", "--porcelain"])).length > 0;
+}
+
 export function updateFromTrackedGitBranch() {
   if (["0", "false", "off"].includes(String(process.env.TIME_TAVERN_AUTO_UPDATE || "").toLowerCase())) {
     console.log("[更新] 已由 TIME_TAVERN_AUTO_UPDATE 關閉自動更新。");
@@ -217,11 +230,11 @@ export function updateFromTrackedGitBranch() {
     migrateLegacyMutableChanges();
     const upstream = run("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
     const remote = upstream.split("/", 1)[0];
-    const cleanBeforeFetch = run("git", ["status", "--porcelain"]).length === 0;
+    const cleanBeforeFetch = !hasProjectWorkingTreeChanges();
     console.log(`[更新] 正在檢查 ${upstream}...`);
     run("git", ["fetch", "--prune", remote]);
 
-    const clean = cleanBeforeFetch && run("git", ["status", "--porcelain"]).length === 0;
+    const clean = cleanBeforeFetch && !hasProjectWorkingTreeChanges();
     const divergence = parseGitDivergence(run("git", ["rev-list", "--left-right", "--count", `HEAD...${upstream}`]));
     const action = chooseUpdateAction({ clean, ...divergence });
 
@@ -230,7 +243,7 @@ export function updateFromTrackedGitBranch() {
       return { action, upstream, ...divergence };
     }
     if (action === "skip-dirty") {
-      console.warn("[更新] 偵測到本機檔案改動，已跳過自動更新並保留現有內容。");
+      console.warn("[更新] 偵測到本機專案檔案改動，已跳過自動更新並保留現有內容。");
       return { action, upstream, ...divergence };
     }
     if (action === "skip-ahead" || action === "skip-diverged") {

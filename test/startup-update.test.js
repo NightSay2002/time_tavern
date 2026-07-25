@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   chooseUpdateAction,
+  getProjectStatusEntries,
   isLegacyMutablePath,
+  isProjectUpdatePath,
   parseGitDivergence,
   parseGitStatusEntries
 } from "../scripts/start-with-update.js";
@@ -32,6 +34,27 @@ test("git porcelain entries preserve index and worktree status", () => {
     [
       { indexStatus: " ", worktreeStatus: "M", path: "defaults/app-defaults.json" },
       { indexStatus: "M", worktreeStatus: " ", path: "src/index.js" }
+    ]
+  );
+});
+
+test("startup update scope ignores server manager runtime files", () => {
+  assert.equal(isProjectUpdatePath(".server-manager/logs/deepseek-bot.log"), false);
+  assert.equal(isProjectUpdatePath(".server-manager/runtime.json"), false);
+  assert.equal(isProjectUpdatePath("src/index.js"), true);
+  assert.equal(isProjectUpdatePath("docs/DETAILS.md"), true);
+  assert.equal(isProjectUpdatePath("new-project-file.js"), true);
+
+  assert.deepEqual(
+    getProjectStatusEntries(
+      " M .server-manager/logs/deepseek-bot.log\n" +
+      "?? .server-manager/runtime.json\n" +
+      " M src/index.js\n" +
+      "?? new-project-file.js\n"
+    ),
+    [
+      { indexStatus: " ", worktreeStatus: "M", path: "src/index.js" },
+      { indexStatus: "?", worktreeStatus: "?", path: "new-project-file.js" }
     ]
   );
 });
