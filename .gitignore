@@ -3,3 +3,4 @@ node_modules/
 npm-debug.log*
 .DS_Store
 data/
+.server-manager/logs/
