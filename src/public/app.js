@@ -252,6 +252,14 @@ const ASSISTANT_FEEDBACK_EMOJIS = {
 };
 const CHAT_COMMAND_MENU_ITEMS = [
   {
+    id: "quick-keep-time",
+    command: "{{保持時間}}",
+    title: "保持時間",
+    description: "填入保持目前時間的快捷指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "{{保持時間}}"
+  },
+  {
     id: "ai-start",
     command: "/ai_start",
     title: "開始目前角色卡對話",
@@ -363,14 +371,6 @@ const CHAT_COMMAND_MENU_ITEMS = [
     description: "填入時間流逝快捷指令到輸入欄，不會立即送出。",
     hint: "填入",
     insert: "｛时间流逝——｝"
-  },
-  {
-    id: "quick-keep-time",
-    command: "{{保持時間}}",
-    title: "保持時間",
-    description: "填入保持目前時間的快捷指令到輸入欄，不會立即送出。",
-    hint: "填入",
-    insert: "{{保持時間}}"
   },
   {
     id: "quick-continue",
