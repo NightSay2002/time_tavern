@@ -39,7 +39,11 @@ npm start
 - 主頁：`http://localhost:3234`
 - NovelAI：`http://localhost:3234/novelai.html`
 
-`npm start` 會先檢查目前追蹤的 GitHub 分支。工作區乾淨且可 fast-forward 時會自動更新；離線、有本機檔案改動或分支已分岔時會保留現況並繼續啟動。需要暫時關閉時可設定：
+`npm start` 會先檢查目前追蹤的 GitHub 分支。工作區沒有程式碼改動且可 fast-forward 時會自動更新；離線、有本機程式碼改動或分支已分岔時會保留現況並繼續啟動。
+
+使用者的角色卡、使用者設定、Prompt、目前對話、對話存檔與本機預設都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。舊版若曾把「儲存預設」或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
+
+這個檢查只在每次 `npm start` 啟動時執行一次，不會中斷正在運行的 server 做熱更新。每台 server 都需要以 `npm start` 重啟才會拉取；直接執行 `node src/index.js` 會略過更新流程。需要暫時關閉時可在 `.env` 設定：
 
 ```env
 TIME_TAVERN_AUTO_UPDATE=0
@@ -67,11 +71,13 @@ Discord 不填 `DISCORD_BOT_TOKEN` 也能正常使用本地網頁。
 
 ## 第一次啟動預設
 
-第一次啟動時，如果本機沒有 `data/app-state.json`，後端會用 `defaults/app-defaults.json` 建立主功能預設。
+第一次啟動時，後端會把發布用的 `defaults/app-defaults.json` 複製成 `data/app-defaults.json`。如果沒有 `data/app-state.json`，再以這份本機預設建立目前狀態。
 
-NovelAI 頁第一次打開時，如果瀏覽器沒有本頁 draft，會讀取 `defaults/novelai-defaults.json` 作為初始跑圖設定。
+NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defaults.json`；瀏覽器沒有本頁 draft 時會讀取本機 NovelAI 預設。
 
 `start-mac.command` 與 `start-win.bat` 會自動檢查 Node/npm、安裝缺少的 `node_modules`、執行 `npm start`，並在更新及伺服器啟動完成後依目前 `PORT` 開啟瀏覽器。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
+
+主頁功能按鈕中的「儲存預設」只寫入本機預設；「使用預設」才會套用；「更新預設」會以目前程式版本隨附的發布預設替換本機預設，但不會立即修改正在使用的角色卡、Prompt 或對話存檔。
 
 ## 功能
 
@@ -82,7 +88,7 @@ NovelAI 頁第一次打開時，如果瀏覽器沒有本頁 draft，會讀取 `d
 - 模型內容：查看、保存、匯出標準壓縮模型與自訂大模型內容。
 - 對話：串流生成、停止、重跑、分支重寫、存檔、AI 呼叫紀錄。
 - 時間統計：天數、日期、早中晚、關鍵字與自動切換。
-- 預設：保存/套用可提交的主功能預設。
+- 預設：儲存、套用或手動更新本機預設。
 
 NovelAI：
 
@@ -119,10 +125,11 @@ src/public/app.js            主頁互動
 src/public/novelai.html      NovelAI 頁
 src/public/novelai.js        NovelAI 互動
 src/public/styles.css        共用樣式
-prompts/modular/*.json       Prompt 模式
-defaults/app-defaults.json   主功能預設
-defaults/novelai-defaults.json NovelAI 預設
-data/                        本機資料，不要提交
+defaults/app-defaults.json     發布用主功能與 Prompt 預設
+defaults/novelai-defaults.json 發布用 NovelAI 預設
+data/app-defaults.json         使用者本機主功能與 Prompt 預設
+data/novelai-defaults.json     使用者本機 NovelAI 預設
+data/                          角色卡、設定、對話與其他本機資料，不要提交
 ```
 
 ## 更多細節

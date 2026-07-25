@@ -26,6 +26,7 @@
   envSettingsBtn: document.getElementById("envSettingsBtn"),
   useDefaultsBtn: document.getElementById("useDefaultsBtn"),
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
+  updateDefaultsBtn: document.getElementById("updateDefaultsBtn"),
   uiLanguageToggleBtn: document.getElementById("uiLanguageToggleBtn"),
   mobilePageChatBtn: document.getElementById("mobilePageChatBtn"),
   mobilePageControlsBtn: document.getElementById("mobilePageControlsBtn"),
@@ -260,6 +261,30 @@ const CHAT_COMMAND_MENU_ITEMS = [
     insert: "{{保持時間}}"
   },
   {
+    id: "quick-next-scene",
+    command: "｛推进剧情到下一个场景｝",
+    title: "推进剧情到下一个场景",
+    description: "填入快捷劇情指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "｛推进剧情到下一个场景｝"
+  },
+  {
+    id: "quick-time-passes",
+    command: "｛时间流逝——｝",
+    title: "时间流逝——",
+    description: "填入時間流逝快捷指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "｛时间流逝——｝"
+  },
+  {
+    id: "quick-continue",
+    command: "｛繼續｝",
+    title: "繼續",
+    description: "填入繼續快捷指令到輸入欄，不會立即送出。",
+    hint: "填入",
+    insert: "｛繼續｝"
+  },
+  {
     id: "ai-start",
     command: "/ai_start",
     title: "開始目前角色卡對話",
@@ -355,30 +380,6 @@ const CHAT_COMMAND_MENU_ITEMS = [
         help: "這次多輪推演要遵守的要求或方向。"
       }
     ]
-  },
-  {
-    id: "quick-next-scene",
-    command: "｛推进剧情到下一个场景｝",
-    title: "推进剧情到下一个场景",
-    description: "填入快捷劇情指令到輸入欄，不會立即送出。",
-    hint: "填入",
-    insert: "｛推进剧情到下一个场景｝"
-  },
-  {
-    id: "quick-time-passes",
-    command: "｛时间流逝——｝",
-    title: "时间流逝——",
-    description: "填入時間流逝快捷指令到輸入欄，不會立即送出。",
-    hint: "填入",
-    insert: "｛时间流逝——｝"
-  },
-  {
-    id: "quick-continue",
-    command: "｛繼續｝",
-    title: "繼續",
-    description: "填入繼續快捷指令到輸入欄，不會立即送出。",
-    hint: "填入",
-    insert: "｛繼續｝"
   },
   {
     id: "help",
@@ -817,7 +818,7 @@ const ENV_FIELD_GROUPS = [
         label: "NovelAI API Token",
         type: "password",
         autocomplete: "off",
-        help: "填入 NovelAI Persistent API Token；不會保存到 GitHub 預設。"
+        help: "填入 NovelAI Persistent API Token；不會保存到任何預設。"
       },
       {
         key: "NOVELAI_IMAGE_API_BASE_URL",
@@ -8105,7 +8106,7 @@ async function saveModularPromptConfig() {
 }
 
 async function saveDefaults() {
-  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等設定儲存成 GitHub 預設嗎？AI 呼叫紀錄、Discord Bot Token 與對話 API Key 不會保存。")) {
+  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等設定儲存成這台裝置的本機預設嗎？AI 呼叫紀錄、Discord Bot Token、對話 API Key 與對話存檔不會保存。")) {
     return;
   }
   try {
@@ -8128,7 +8129,7 @@ async function saveDefaults() {
 }
 
 async function applyDefaults() {
-  if (!window.confirm("要使用 GitHub 預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空；對話存檔會保留。")) {
+  if (!window.confirm("要使用本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空；對話存檔會保留。")) {
     return;
   }
   try {
@@ -8150,6 +8151,29 @@ async function applyDefaults() {
     if (el.useDefaultsBtn) {
       el.useDefaultsBtn.disabled = false;
       el.useDefaultsBtn.textContent = "使用預設";
+    }
+  }
+}
+
+async function updateDefaults() {
+  if (!window.confirm("要把本機預設更新為目前程式版本隨附的發布預設嗎？這只會替換可供「使用預設」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或對話存檔。")) {
+    return;
+  }
+  try {
+    if (el.updateDefaultsBtn) {
+      el.updateDefaultsBtn.disabled = true;
+      el.updateDefaultsBtn.textContent = "更新中...";
+    }
+    const payload = await request("/api/defaults/update", { method: "POST" });
+    appState = payload?.state || appState;
+    const defaults = payload?.defaults || {};
+    showToast(`本機預設已更新：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個；目前使用中的資料沒有改動`);
+  } catch (error) {
+    showToast(error.message || "預設更新失敗", "error");
+  } finally {
+    if (el.updateDefaultsBtn) {
+      el.updateDefaultsBtn.disabled = false;
+      el.updateDefaultsBtn.textContent = "更新預設";
     }
   }
 }
@@ -8867,6 +8891,10 @@ function bindEvents() {
 
   if (el.useDefaultsBtn) {
     el.useDefaultsBtn.addEventListener("click", applyDefaults);
+  }
+
+  if (el.updateDefaultsBtn) {
+    el.updateDefaultsBtn.addEventListener("click", updateDefaults);
   }
 
   if (el.addEnvExtraBtn) {

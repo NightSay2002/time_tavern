@@ -1,11 +1,21 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 
 const SCRIPT_FILE = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_FILE), "..");
+const DATA_DIR = path.join(REPO_ROOT, "data");
+const BUNDLED_APP_DEFAULTS_FILE = path.join(REPO_ROOT, "defaults", "app-defaults.json");
+const LOCAL_APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
+const BUNDLED_NOVELAI_DEFAULTS_FILE = path.join(REPO_ROOT, "defaults", "novelai-defaults.json");
+const LOCAL_NOVELAI_DEFAULTS_FILE = path.join(DATA_DIR, "novelai-defaults.json");
+const LEGACY_PROMPTS_DIR = path.join(REPO_ROOT, "prompts");
 const UPDATE_TIMEOUT_MS = 30_000;
 const INSTALL_TIMEOUT_MS = 180_000;
+
+dotenv.config({ path: path.join(REPO_ROOT, ".env") });
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -38,6 +48,148 @@ export function chooseUpdateAction({ clean, ahead, behind }) {
   return "current";
 }
 
+export function parseGitStatusEntries(value = "") {
+  return String(value)
+    .split(/\r?\n/u)
+    .filter((line) => line.length >= 4)
+    .map((line) => {
+      const rawPath = line.slice(3).trim();
+      return {
+        indexStatus: line[0],
+        worktreeStatus: line[1],
+        path: rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) : rawPath
+      };
+    });
+}
+
+export function isLegacyMutablePath(filePath = "") {
+  const normalized = String(filePath).replaceAll("\\", "/");
+  return normalized === "defaults/app-defaults.json" ||
+    normalized === "defaults/novelai-defaults.json" ||
+    normalized === "prompts" ||
+    normalized.startsWith("prompts/");
+}
+
+function readJson(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+}
+
+function writeJson(filePath, payload) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    fs.renameSync(temporaryFile, filePath);
+  } finally {
+    if (fs.existsSync(temporaryFile)) {
+      fs.unlinkSync(temporaryFile);
+    }
+  }
+}
+
+function mergeLegacyPrompts(defaultsInput = {}) {
+  const defaults = structuredClone(defaultsInput);
+  const modularDirectory = path.join(LEGACY_PROMPTS_DIR, "modular");
+  const modularPromptConfigs = defaults.modularPromptConfigs &&
+    typeof defaults.modularPromptConfigs === "object" &&
+    !Array.isArray(defaults.modularPromptConfigs)
+    ? structuredClone(defaults.modularPromptConfigs)
+    : {};
+
+  if (fs.existsSync(modularDirectory)) {
+    fs.readdirSync(modularDirectory)
+      .filter((fileName) => fileName.endsWith(".json"))
+      .forEach((fileName) => {
+        const config = readJson(path.join(modularDirectory, fileName));
+        const mode = String(config?.mode || path.basename(fileName, ".json")).trim();
+        if (mode && config) {
+          modularPromptConfigs[mode] = config;
+        }
+      });
+  }
+  if (Object.keys(modularPromptConfigs).length > 0) {
+    defaults.modularPromptConfigs = modularPromptConfigs;
+  }
+
+  const assistantPromptFile = path.join(LEGACY_PROMPTS_DIR, "CharacterCardCreationAssistant.txt");
+  if (fs.existsSync(assistantPromptFile) && Array.isArray(defaults.assistantCards)) {
+    const prompt = fs.readFileSync(assistantPromptFile, "utf8").trim();
+    if (prompt) {
+      defaults.assistantCards = defaults.assistantCards.map((card) =>
+        card?.id === "CharacterCardCreationAssistant" ? { ...card, prompt } : card
+      );
+    }
+  }
+
+  const compressionPromptFile = path.join(LEGACY_PROMPTS_DIR, "Context_compression.txt");
+  if (fs.existsSync(compressionPromptFile)) {
+    const prompt = fs.readFileSync(compressionPromptFile, "utf8").trim();
+    if (prompt) {
+      defaults.contextCompressionPrompt = prompt;
+    }
+  }
+  return defaults;
+}
+
+function ensureLocalDefaultsSnapshot() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(LOCAL_APP_DEFAULTS_FILE)) {
+    const bundled = readJson(BUNDLED_APP_DEFAULTS_FILE);
+    if (bundled) {
+      writeJson(LOCAL_APP_DEFAULTS_FILE, mergeLegacyPrompts(bundled));
+    }
+  }
+  if (!fs.existsSync(LOCAL_NOVELAI_DEFAULTS_FILE)) {
+    const bundled = readJson(BUNDLED_NOVELAI_DEFAULTS_FILE);
+    if (bundled) {
+      writeJson(LOCAL_NOVELAI_DEFAULTS_FILE, bundled);
+    }
+  }
+}
+
+function migrateLegacyMutableChanges() {
+  ensureLocalDefaultsSnapshot();
+  const entries = parseGitStatusEntries(
+    run("git", ["status", "--porcelain", "--untracked-files=no"])
+  ).filter((entry) => isLegacyMutablePath(entry.path));
+  if (entries.length === 0) {
+    return [];
+  }
+  if (entries.some((entry) => entry.indexStatus !== " ")) {
+    console.warn("[更新] 預設或舊 Prompt 有已暫存的 Git 改動，為避免覆蓋已跳過自動遷移。");
+    return [];
+  }
+
+  const changedPaths = entries.map((entry) => entry.path);
+  const appDefaultsChanged = changedPaths.includes("defaults/app-defaults.json");
+  const promptsChanged = changedPaths.some((filePath) => filePath === "prompts" || filePath.startsWith("prompts/"));
+  if (appDefaultsChanged || promptsChanged) {
+    const base = appDefaultsChanged
+      ? readJson(BUNDLED_APP_DEFAULTS_FILE)
+      : readJson(LOCAL_APP_DEFAULTS_FILE) || readJson(BUNDLED_APP_DEFAULTS_FILE);
+    if (!base) {
+      throw new Error("無法讀取舊版主功能預設，未變更 Git 工作區。");
+    }
+    writeJson(LOCAL_APP_DEFAULTS_FILE, mergeLegacyPrompts(base));
+  }
+
+  if (changedPaths.includes("defaults/novelai-defaults.json")) {
+    const defaults = readJson(BUNDLED_NOVELAI_DEFAULTS_FILE);
+    if (!defaults) {
+      throw new Error("無法讀取舊版 NovelAI 預設，未變更 Git 工作區。");
+    }
+    writeJson(LOCAL_NOVELAI_DEFAULTS_FILE, defaults);
+  }
+
+  run("git", ["restore", "--worktree", "--", ...changedPaths]);
+  console.log(`[更新] 已保留 ${changedPaths.length} 個使用者預設改動到 data/，並清理舊版追蹤檔。`);
+  return changedPaths;
+}
+
 function installUpdatedDependencies(changedFiles = []) {
   const dependencyFiles = new Set(["package.json", "package-lock.json", "npm-shrinkwrap.json"]);
   if (!changedFiles.some((file) => dependencyFiles.has(file))) {
@@ -62,6 +214,7 @@ export function updateFromTrackedGitBranch() {
       return { action: "not-git" };
     }
 
+    migrateLegacyMutableChanges();
     const upstream = run("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
     const remote = upstream.split("/", 1)[0];
     const cleanBeforeFetch = run("git", ["status", "--porcelain"]).length === 0;

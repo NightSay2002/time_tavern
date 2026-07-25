@@ -13,8 +13,8 @@
 
 第一次啟動是否套用預設：
 
-- 主功能：會。`src/index.js` 在沒有 `data/app-state.json` 時建立預設 state；`createDefaultState()` 會讀取 `defaults/app-defaults.json`。
-- NovelAI：會。`src/public/novelai.js` 在沒有 localStorage draft 時，會呼叫 `/api/novelai/defaults` 讀取 `defaults/novelai-defaults.json`。
+- 主功能：會。後端先把 `defaults/app-defaults.json` 複製到 `data/app-defaults.json`；沒有 `data/app-state.json` 時，`createDefaultState()` 會讀取本機預設。
+- NovelAI：會。後端先建立 `data/novelai-defaults.json`；`src/public/novelai.js` 在沒有 localStorage draft 時，會呼叫 `/api/novelai/defaults` 讀取本機預設。
 - 啟動器本身不需要呼叫「使用預設」API；預設由 server 與 NovelAI 頁面自動讀取。
 
 ## 環境變數
@@ -24,6 +24,7 @@
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
 | `PORT` | `3234` | 本地 HTTP server port。 |
+| `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`custom`。 |
 | `CHAT_API_KEY` | 空 | 主聊天、補寫、角色卡助手、大模型處理使用。 |
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
@@ -36,7 +37,7 @@
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
-| `DISCORD_GUILD_ID` | 空 | 指定 guild 立即註冊 Slash 指令。 |
+| `DISCORD_GUILD_ID` | 空 | 額外指定 guild；啟動時亦會同步所有已加入的 guild。 |
 | `COMMAND_PREFIX` | `!ai` | Discord 文字指令前綴。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
 | `DISCORD_LOGIN_RETRY_INITIAL_MS` | `15000` | Discord 登入第一次重試等待時間。 |
@@ -136,7 +137,7 @@ Random Prompt：
 
 NovelAI 預設：
 
-- 「保存預設」寫入 `defaults/novelai-defaults.json`。
+- 「保存預設」寫入 `data/novelai-defaults.json`。
 - 預設保存 prompt、片段庫、角色 prompt、尺寸、AI Settings。
 - 預設不保存 Image2Image / Vibe Transfer / Precise Reference 的圖片 data URL。
 
@@ -154,6 +155,7 @@ Slash 指令：
 | `/reload` | `feedback` | 移除最新 AI 回覆並重跑。 |
 | `/replay` | `message_number`、`content` | 從指定訊息重寫分支。 |
 | `/run_time` | `number`、`message` | 自動推演多輪。 |
+| `/keep_time` | 無 | 發送 `{{保持時間}}` 並繼續本輪對話。 |
 | `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令。 |
 | `/ai_help` | 無 | 顯示可用指令。 |
 | `/session_save` | `name` | 保存目前對話。 |
@@ -170,6 +172,7 @@ Slash 指令：
 !ai reload 這次回覆太短
 !ai replay 12 新的使用者內容
 !ai run_time 5 依照目前事件自然推進
+!ai keep_time
 !ai session_save 存檔名
 !ai session_list
 !ai session_load <id>
@@ -177,6 +180,7 @@ Slash 指令：
 
 Discord 行為：
 
+- Bot 每次上線都會立即同步 Slash 指令到所有已加入的 Discord 伺服器，並同步全域指令。
 - `/ai_start` 會把該伺服器的對話固定在目前頻道。
 - 第一個發言者自動成為 `user1`，第二個成為 `user2`。
 - `/player_set 2` 可手動把自己設成 `user2`。
@@ -185,7 +189,9 @@ Discord 行為：
 
 ## 預設與發佈
 
-主頁「儲存預設」會保存：
+Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 是隨程式發布的預設。第一次啟動會複製到 `data/`；之後 Git 自動更新不會修改使用者的本機預設。
+
+主頁「儲存預設」會寫入 `data/app-defaults.json`，保存：
 
 - 使用者設定
 - 角色卡
@@ -206,13 +212,22 @@ Discord 行為：
 - 目前對話正文
 - 對話存檔本體
 
-可提交：
+三個按鈕的差異：
+
+- 「儲存預設」：把目前設定保存成使用者本機預設。
+- 「使用預設」：以本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定；保留對話存檔。
+- 「更新預設」：把目前程式版本隨附的發布預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或對話存檔。
+
+Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`，所以只更新預設不會立即套用。
+
+可提交的發布內容：
 
 - `defaults/app-defaults.json`
 - `defaults/novelai-defaults.json`
-- `prompts/modular/*.json`
 - `src/public/assets/img/cover.png`
 - `src/public/assets/img/image1.png` 至 `image4.png`
+
+自動更新只處理 Git 追蹤的程式與發布預設。`data/`、`.env`、角色卡、目前對話及對話存檔不會被 Git 更新；舊版追蹤檔中的使用者預設或 Prompt 改動會先遷移到 `data/`。
 
 ## HTTP API
 
@@ -226,6 +241,7 @@ Discord 行為：
 | `GET` / `PUT` | `/api/context-compression` | 讀取或保存模型內容。 |
 | `POST` | `/api/defaults/save` | 保存主功能預設。 |
 | `POST` | `/api/defaults/apply` | 套用主功能預設。 |
+| `POST` | `/api/defaults/update` | 以發布預設更新本機預設，不立即套用。 |
 | `GET` / `POST` | `/api/novelai/defaults` | 讀取或保存 NovelAI 預設。 |
 | `GET` | `/api/novelai/status` | 讀取 NovelAI token 狀態與 Anlas。 |
 | `POST` | `/api/novelai/generate` | 生成 NovelAI 圖片。 |
@@ -256,13 +272,14 @@ Discord 行為：
 
 | 檔案或目錄 | 說明 |
 | --- | --- |
-| `data/app-state.json` | runtime state、目前對話、模型內容、存檔 metadata、AI logs 摘要。 |
+| `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容、存檔 metadata、AI logs 摘要。 |
+| `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
+| `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/cardstate.json` | 使用者設定與角色卡分離備份。 |
 | `data/saved-sessions/` | 對話存檔中的 conversation 與 AI logs。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
-| `defaults/app-defaults.json` | 可提交的主功能預設。 |
-| `defaults/novelai-defaults.json` | 可提交的 NovelAI 預設。 |
-| `prompts/modular/*.json` | 可提交的 Prompt 模式設定。 |
+| `defaults/app-defaults.json` | 可提交的主功能與 Prompt 發布預設。 |
+| `defaults/novelai-defaults.json` | 可提交的 NovelAI 發布預設。 |
 
 `data/` 可能包含完整對話、角色設定與模型內容，不建議公開。
 

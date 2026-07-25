@@ -25,16 +25,16 @@ const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DEFAULTS_DIR = path.join(__dirname, "..", "defaults");
-const PROMPTS_DIR = path.join(__dirname, "..", "prompts");
-const MODULAR_PROMPTS_DIR = path.join(PROMPTS_DIR, "modular");
 const ENV_FILE = path.join(__dirname, "..", ".env");
-const APP_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "app-defaults.json");
+const BUNDLED_APP_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "app-defaults.json");
+const APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
-const NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
+const BUNDLED_NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
+const NOVELAI_DEFAULTS_FILE = path.join(DATA_DIR, "novelai-defaults.json");
 const NOVELAI_STORYBOARDS_DIR = path.join(DATA_DIR, "novelai-storyboards");
 const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?:$|_|\d)|(?:^|_)TOKEN(?:$|\d)|(?:^|_)API_KEY(?:$|\d)/iu;
 const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
@@ -45,7 +45,9 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "OPENAI_API_KEY",
   "GEMINI_API_KEY"
 ]);
+const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 let appDefaultEnvironmentValuesCache = null;
+ensureLocalDefaultsFiles();
 applyDefaultEnvToProcess();
 const PORT = Number(process.env.PORT || 3234);
 const COMMAND_PREFIX = safeText(process.env.COMMAND_PREFIX) || "!ai";
@@ -58,7 +60,6 @@ const CHAT_API_LENGTH_RETRY_LIMIT = 1;
 const CHAT_API_TEMPERATURE = 0.5;
 const CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE = 0.9;
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
-const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
 const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
@@ -103,6 +104,13 @@ const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
   [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
 };
 const QUICK_SEND_TEMPLATES = [
+  {
+    id: "keep_time",
+    label: "{{保持時間}}",
+    prefix: "{{保持時間}}",
+    suffix: "",
+    allowDetails: false
+  },
   {
     id: "next_scene",
     label: "｛推进剧情到下一个场景｝",
@@ -159,27 +167,110 @@ function envText(key, fallback) {
   return raw.replace(/\\n/g, "\n");
 }
 
-function resolveMaybeRelativePath(filePath = "") {
-  const normalizedPath = safeText(filePath);
-  if (!normalizedPath) {
-    return "";
+function readJsonFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
-  return path.isAbsolute(normalizedPath) ? normalizedPath : path.resolve(process.cwd(), normalizedPath);
 }
 
-function loadTextFileIfExists(filePath, fallback = "") {
-  const resolvedPath = resolveMaybeRelativePath(filePath);
-  if (!resolvedPath) {
-    return fallback;
+function writeJsonFile(filePath, payload) {
+  const directory = path.dirname(filePath);
+  if (!fs.existsSync(directory)) {
+    fs.mkdirSync(directory, { recursive: true });
   }
+  const temporaryFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    fs.renameSync(temporaryFile, filePath);
+  } finally {
+    if (fs.existsSync(temporaryFile)) {
+      fs.unlinkSync(temporaryFile);
+    }
+  }
+}
+
+function mergeLegacyPromptFilesIntoDefaults(input = {}) {
+  const defaults = cloneData(input, {});
+  const legacyPromptsDir = path.join(__dirname, "..", "prompts");
+  const legacyModularPromptsDir = path.join(legacyPromptsDir, "modular");
+  const modularPromptConfigs = defaults.modularPromptConfigs &&
+    typeof defaults.modularPromptConfigs === "object" &&
+    !Array.isArray(defaults.modularPromptConfigs)
+    ? cloneData(defaults.modularPromptConfigs, {})
+    : {};
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
-      return fallback;
+    if (fs.existsSync(legacyModularPromptsDir)) {
+      fs.readdirSync(legacyModularPromptsDir)
+        .filter((fileName) => fileName.endsWith(".json"))
+        .forEach((fileName) => {
+          const config = readJsonFile(path.join(legacyModularPromptsDir, fileName));
+          const mode = safeText(config?.mode || path.basename(fileName, ".json"));
+          if (mode && config) {
+            modularPromptConfigs[mode] = config;
+          }
+        });
     }
-    return fs.readFileSync(resolvedPath, "utf8").trim() || fallback;
   } catch {
-    return fallback;
+    // Legacy Prompt files are optional migration inputs.
+  }
+
+  if (Object.keys(modularPromptConfigs).length > 0) {
+    defaults.modularPromptConfigs = modularPromptConfigs;
+  }
+
+  const assistantPromptFile = path.join(legacyPromptsDir, "CharacterCardCreationAssistant.txt");
+  try {
+    const prompt = fs.existsSync(assistantPromptFile)
+      ? fs.readFileSync(assistantPromptFile, "utf8").trim()
+      : "";
+    if (prompt && Array.isArray(defaults.assistantCards)) {
+      defaults.assistantCards = defaults.assistantCards.map((card) =>
+        safeText(card?.id) === CHARACTER_CARD_CREATION_ASSISTANT_MODE
+          ? { ...card, prompt }
+          : card
+      );
+    }
+  } catch {
+    // Keep the bundled assistant Prompt when legacy migration cannot read the file.
+  }
+
+  const compressionPromptFile = path.join(legacyPromptsDir, "Context_compression.txt");
+  try {
+    const prompt = fs.existsSync(compressionPromptFile)
+      ? fs.readFileSync(compressionPromptFile, "utf8").trim()
+      : "";
+    if (prompt) {
+      defaults.contextCompressionPrompt = prompt;
+    }
+  } catch {
+    // Keep the bundled compression Prompt when legacy migration cannot read the file.
+  }
+
+  return defaults;
+}
+
+function ensureLocalDefaultsFiles() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(APP_DEFAULTS_FILE)) {
+    const bundled = readJsonFile(BUNDLED_APP_DEFAULTS_FILE);
+    if (bundled) {
+      writeJsonFile(APP_DEFAULTS_FILE, mergeLegacyPromptFilesIntoDefaults(bundled));
+    }
+  }
+  if (!fs.existsSync(NOVELAI_DEFAULTS_FILE)) {
+    const bundled = readJsonFile(BUNDLED_NOVELAI_DEFAULTS_FILE);
+    if (bundled) {
+      writeJsonFile(NOVELAI_DEFAULTS_FILE, bundled);
+    }
   }
 }
 
@@ -233,14 +324,24 @@ function normalizeDefaultEnvironmentValues(values = {}) {
 }
 
 function readRawAppDefaults() {
-  try {
-    if (!fs.existsSync(APP_DEFAULTS_FILE)) {
-      return null;
-    }
-    return JSON.parse(fs.readFileSync(APP_DEFAULTS_FILE, "utf8"));
-  } catch {
-    return null;
+  return readJsonFile(APP_DEFAULTS_FILE) || readJsonFile(BUNDLED_APP_DEFAULTS_FILE);
+}
+
+function readBundledAppDefaults() {
+  return readJsonFile(BUNDLED_APP_DEFAULTS_FILE);
+}
+
+function updateLocalAppDefaults(update) {
+  const current = readRawAppDefaults() || {};
+  const next = typeof update === "function" ? update(cloneData(current, {})) : update;
+  if (!next || typeof next !== "object" || Array.isArray(next)) {
+    throw new Error("本機預設格式無效。");
   }
+  writeJsonFile(APP_DEFAULTS_FILE, {
+    ...next,
+    updatedAt: nowIso()
+  });
+  return readJsonFile(APP_DEFAULTS_FILE);
 }
 
 function normalizeDefaultEnvironment(source = {}) {
@@ -313,7 +414,7 @@ function buildEnvContentFromDefaultEnvironment(values = {}) {
     return "";
   }
   return [
-    "# 由 GitHub 預設載入的環境設定。",
+    "# 由本機預設載入的環境設定。",
     "# Discord Bot Token 與對話 API Key 不會寫入預設。",
     ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
@@ -420,29 +521,19 @@ function getActiveAssistantName(currentState = state) {
   return safeText(getActiveAssistantCard(currentState)?.name) || DEFAULT_ASSISTANT_CARD_NAME;
 }
 
-function ensurePromptsDir() {
-  if (!fs.existsSync(PROMPTS_DIR)) {
-    fs.mkdirSync(PROMPTS_DIR, { recursive: true });
-  }
-}
-
 function saveCharacterCardCreationAssistantPrompt(content = "") {
   const nextPrompt = safeText(content) || getCharacterCardCreationAssistantPrompt();
-  ensurePromptsDir();
-  fs.writeFileSync(CHARACTER_CARD_CREATION_ASSISTANT_PROMPT_FILE, `${nextPrompt}\n`, "utf8");
   characterCardCreationAssistantPrompt = nextPrompt;
+  updateLocalAppDefaults((defaults) => ({
+    ...defaults,
+    version: Math.max(3, Number(defaults.version || 0)),
+    assistantCards: normalizeAssistantCards(defaults.assistantCards).map((card) =>
+      card.id === CHARACTER_CARD_CREATION_ASSISTANT_MODE
+        ? { ...card, prompt: nextPrompt, updatedAt: nowIso() }
+        : card
+    )
+  }));
   return characterCardCreationAssistantPrompt;
-}
-
-function envTextOrFile(key, fallback, options = {}) {
-  const fileKey = safeText(options.fileKey) || `${key}_FILE`;
-  const defaultFilePath = safeText(options.defaultFilePath);
-  const fileValue = safeText(process.env[fileKey]);
-  const fileContent = loadTextFileIfExists(fileValue || defaultFilePath, "");
-  if (fileContent) {
-    return fileContent;
-  }
-  return envText(key, fallback);
 }
 
 function renderPromptTemplate(template, variables) {
@@ -603,24 +694,33 @@ function finalizePromptTemplate(template, variables) {
     .trim();
 }
 
-const CHARACTER_CARD_CREATION_ASSISTANT_PROMPT_FILE = path.join(PROMPTS_DIR, "CharacterCardCreationAssistant.txt");
-let characterCardCreationAssistantPrompt = envTextOrFile(
-  "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT",
-  "你是角色卡建立助手，請直接輸出正式正文。",
-  {
-    defaultFilePath: CHARACTER_CARD_CREATION_ASSISTANT_PROMPT_FILE
-  }
-);
+function readStoredAssistantPrompt(defaults = readRawAppDefaults()) {
+  const cards = Array.isArray(defaults?.assistantCards) ? defaults.assistantCards : [];
+  return safeText(cards.find((card) => safeText(card?.id) === CHARACTER_CARD_CREATION_ASSISTANT_MODE)?.prompt);
+}
 
-const CONTEXT_COMPRESSION_PROMPT_FILE = path.join(PROMPTS_DIR, "Context_compression.txt");
+function readStoredContextCompressionPrompt(defaults = readRawAppDefaults()) {
+  const configs = defaults?.modularPromptConfigs &&
+    typeof defaults.modularPromptConfigs === "object" &&
+    !Array.isArray(defaults.modularPromptConfigs)
+    ? defaults.modularPromptConfigs
+    : {};
+  const preferredConfig = configs.multi || configs.single || Object.values(configs)[0];
+  return safeText(
+    defaults?.contextCompressionPrompt ||
+    preferredConfig?.contextCompression?.mainRules ||
+    preferredConfig?.contextCompressionPrompt
+  );
+}
+
+let characterCardCreationAssistantPrompt =
+  readStoredAssistantPrompt() ||
+  "你是角色卡建立助手，請直接輸出正式正文。";
+
 const COMPRESSION_USER_NOTICE_TEXT = "【( •̀ ω •́ )✧模型內容已更新】";
-let contextCompressionPrompt = envTextOrFile(
-  "CONTEXT_COMPRESSION_PROMPT",
-  "你是長篇角色互動的上下文壓縮器。請輸出可供後續正文模型承接的精簡上下文。",
-  {
-    defaultFilePath: CONTEXT_COMPRESSION_PROMPT_FILE
-  }
-);
+let contextCompressionPrompt =
+  readStoredContextCompressionPrompt() ||
+  "你是長篇角色互動的上下文壓縮器。請輸出可供後續正文模型承接的精簡上下文。";
 const GENERATION_STOPPED_MESSAGE = "已停止正在生成的對話。";
 let activeGenerationRequest = null;
 
@@ -716,6 +816,10 @@ const DISCORD_SLASH_COMMANDS = [
     ]
   },
   {
+    name: "keep_time",
+    description: "保持目前時間並繼續對話"
+  },
+  {
     name: "quick_send",
     description: "快速發送常用劇情指令",
     options: [
@@ -731,13 +835,13 @@ const DISCORD_SLASH_COMMANDS = [
       },
       {
         name: "inside",
-        description: "只限前兩個模板：填入括號內，例如 xxxx",
+        description: "限可補充模板：填入括號內，例如 xxxx",
         type: ApplicationCommandOptionType.String,
         required: false
       },
       {
         name: "message",
-        description: "只限前兩個模板：另起一行追加內容，例如 zzzzz",
+        description: "限可補充模板：另起一行追加內容，例如 zzzzz",
         type: ApplicationCommandOptionType.String,
         required: false
       }
@@ -894,6 +998,7 @@ function loadAppDefaults() {
     conversationSettings: normalizeConversationSettings(parsed.conversationSettings),
     contextCompression: normalizeContextCompressionState(parsed.contextCompression),
     timeTracking: normalizeTimeTrackingState(parsed.timeTracking),
+    modularPromptConfigs: normalizeModularPromptConfigs(parsed.modularPromptConfigs),
     environment: normalizeDefaultEnvironment(parsed.environment || parsed.envDefaults || parsed.env),
     updatedAt: safeText(parsed.updatedAt)
   };
@@ -932,6 +1037,7 @@ function createDefaultState() {
     discordPlayers: createDefaultDiscordPlayerState(),
     turnState: createDefaultTurnState(),
     timeTracking: appDefaults?.timeTracking || createDefaultTimeTrackingState(),
+    modularPromptConfigs: cloneData(appDefaults?.modularPromptConfigs, normalizeModularPromptConfigs()),
     conversation: [],
     aiLogs: [],
     savedSessions: [],
@@ -1447,9 +1553,6 @@ function persistCardState(currentState) {
 }
 
 function saveDefaultAppSettings(currentState) {
-  if (!fs.existsSync(DEFAULTS_DIR)) {
-    fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
-  }
   const normalizedRoleCards = Array.isArray(currentState?.roleCards)
     ? currentState.roleCards.map((card) => normalizeRoleCard(card))
     : [];
@@ -1463,8 +1566,11 @@ function saveDefaultAppSettings(currentState) {
       .filter(([cardId]) => normalizedRoleCardIds.has(cardId))
   );
   const activeAssistantMode = normalizeAssistantMode(currentState?.activeAssistantMode);
+  const modularPromptConfigs = normalizeModularPromptConfigs(
+    currentState?.modularPromptConfigs || getModularPromptConfigsPayload()
+  );
   const payload = {
-    version: 2,
+    version: 3,
     userProfile: normalizeUserProfile(currentState?.userProfile),
     roleCards: normalizedRoleCards,
     assistantCards: normalizeAssistantCards(currentState?.assistantCards),
@@ -1474,17 +1580,13 @@ function saveDefaultAppSettings(currentState) {
     conversationSettings: normalizeConversationSettings(currentState?.conversationSettings),
     contextCompression: normalizeContextCompressionState(currentState?.contextCompression),
     timeTracking: normalizeTimeTrackingState(currentState?.timeTracking),
+    modularPromptConfigs,
     environment,
     updatedAt: nowIso()
   };
-  fs.writeFileSync(APP_DEFAULTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  writeJsonFile(APP_DEFAULTS_FILE, payload);
   appDefaultEnvironmentValuesCache = environment.values;
   applyDefaultEnvToProcess();
-
-  const modularPromptConfigs = getModularPromptConfigsPayload();
-  Object.entries(modularPromptConfigs).forEach(([mode, config]) => {
-    saveModularPromptConfig(mode, config);
-  });
 
   return {
     defaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
@@ -1518,14 +1620,14 @@ function sanitizeNovelAiDefaultSettings(input = {}) {
 }
 
 function readNovelAiDefaultsPayload() {
-  if (!fs.existsSync(NOVELAI_DEFAULTS_FILE)) {
+  const parsed = readJsonFile(NOVELAI_DEFAULTS_FILE) || readJsonFile(BUNDLED_NOVELAI_DEFAULTS_FILE);
+  if (!parsed) {
     return {
       version: 1,
       settings: null,
       updatedAt: ""
     };
   }
-  const parsed = JSON.parse(fs.readFileSync(NOVELAI_DEFAULTS_FILE, "utf8"));
   const settingsSource = parsed?.settings && typeof parsed.settings === "object" ? parsed.settings : parsed;
   return {
     version: Number(parsed?.version || 1),
@@ -1535,23 +1637,42 @@ function readNovelAiDefaultsPayload() {
 }
 
 function saveNovelAiDefaultsPayload(input = {}) {
-  if (!fs.existsSync(DEFAULTS_DIR)) {
-    fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
-  }
   const payload = {
     version: 1,
     settings: sanitizeNovelAiDefaultSettings(input),
     updatedAt: nowIso()
   };
-  fs.writeFileSync(NOVELAI_DEFAULTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  writeJsonFile(NOVELAI_DEFAULTS_FILE, payload);
   return payload;
+}
+
+function updateLocalDefaultsFromBundles() {
+  const appDefaults = readBundledAppDefaults();
+  const novelAiDefaults = readJsonFile(BUNDLED_NOVELAI_DEFAULTS_FILE);
+  if (!appDefaults) {
+    throw new Error("找不到發布預設 defaults/app-defaults.json。");
+  }
+  if (!novelAiDefaults) {
+    throw new Error("找不到發布預設 defaults/novelai-defaults.json。");
+  }
+
+  writeJsonFile(APP_DEFAULTS_FILE, appDefaults);
+  writeJsonFile(NOVELAI_DEFAULTS_FILE, novelAiDefaults);
+
+  return {
+    appDefaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
+    novelAiDefaultsFile: path.relative(path.join(__dirname, ".."), NOVELAI_DEFAULTS_FILE),
+    roleCardCount: Array.isArray(appDefaults.roleCards) ? appDefaults.roleCards.length : 0,
+    modularPromptCount: Object.keys(appDefaults.modularPromptConfigs || {}).length,
+    updatedAt: nowIso()
+  };
 }
 
 function applyDefaultAppSettings(currentState) {
   appDefaultEnvironmentValuesCache = null;
   const appDefaults = loadAppDefaults();
   if (!appDefaults) {
-    throw new Error("找不到 GitHub 預設檔 defaults/app-defaults.json。");
+    throw new Error("找不到本機預設 data/app-defaults.json。");
   }
 
   const defaultState = createDefaultState();
@@ -1567,6 +1688,7 @@ function applyDefaultAppSettings(currentState) {
   currentState.conversationSettings = normalizeConversationSettings(defaultState.conversationSettings);
   currentState.contextCompression = normalizeContextCompressionState(defaultState.contextCompression);
   currentState.timeTracking = normalizeTimeTrackingState(defaultState.timeTracking);
+  currentState.modularPromptConfigs = normalizeModularPromptConfigs(appDefaults.modularPromptConfigs);
   currentState.aiSessionStarted = false;
   currentState.pendingOpeningBroadcast = false;
   currentState.lastDiscordChannelId = "";
@@ -1583,7 +1705,13 @@ function applyDefaultAppSettings(currentState) {
   appDefaultEnvironmentValuesCache = environment.values;
   applyDefaultEnvToProcess();
 
-  modularPromptConfigStore = null;
+  modularPromptConfigStore = cloneData(currentState.modularPromptConfigs, {});
+  characterCardCreationAssistantPrompt =
+    readStoredAssistantPrompt(appDefaults) ||
+    getCharacterCardCreationAssistantPrompt();
+  contextCompressionPrompt =
+    readStoredContextCompressionPrompt(appDefaults) ||
+    getContextCompressionPrompt();
   const modularPromptConfigs = getModularPromptConfigsPayload();
   saveState(currentState);
 
@@ -1682,6 +1810,9 @@ function loadState() {
       conversationSettings: normalizeConversationSettings(parsed.conversationSettings),
       contextCompression: normalizeContextCompressionState(parsed.contextCompression),
       timeTracking: normalizeTimeTrackingState(parsed.timeTracking),
+      modularPromptConfigs: normalizeModularPromptConfigs(
+        parsed.modularPromptConfigs || defaults.modularPromptConfigs
+      ),
       aiSessionStarted: Boolean(parsed.aiSessionStarted),
       pendingOpeningBroadcast: Boolean(parsed.pendingOpeningBroadcast),
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
@@ -1727,6 +1858,7 @@ function saveState(state) {
   state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
   state.timeTracking = normalizeTimeTrackingState(state.timeTracking);
   state.assistantCards = normalizeAssistantCards(state.assistantCards);
+  state.modularPromptConfigs = normalizeModularPromptConfigs(state.modularPromptConfigs);
   if (state.activeAssistantMode && !getAssistantCardById(state, state.activeAssistantMode)) {
     state.activeAssistantMode = null;
   }
@@ -4571,50 +4703,27 @@ function normalizeModularPromptConfig(input, mode = "single") {
   };
 }
 
+function normalizeModularPromptConfigs(input = {}) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const configs = {
+    single: normalizeModularPromptConfig(source.single, "single"),
+    multi: normalizeModularPromptConfig(source.multi, "multi"),
+    no_role: normalizeModularPromptConfig(source.no_role, "no_role")
+  };
+  Object.entries(source).forEach(([rawMode, config]) => {
+    const mode = normalizeRoleCardMode(config?.mode || rawMode);
+    configs[mode] = normalizeModularPromptConfig(config, mode);
+  });
+  return configs;
+}
+
 let modularPromptConfigStore = null;
-
-function getModularPromptConfigFilePath(mode = "single") {
-  return path.join(MODULAR_PROMPTS_DIR, `${normalizeRoleCardMode(mode)}.json`);
-}
-
-function loadModularPromptConfig(mode = "single") {
-  const normalizedMode = normalizeRoleCardMode(mode);
-  const filePath = getModularPromptConfigFilePath(normalizedMode);
-  const defaults = createDefaultModularPromptConfig(normalizedMode);
-  try {
-    if (!fs.existsSync(MODULAR_PROMPTS_DIR)) {
-      fs.mkdirSync(MODULAR_PROMPTS_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, `${JSON.stringify(defaults, null, 2)}\n`, "utf8");
-      return defaults;
-    }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return normalizeModularPromptConfig(parsed, normalizedMode);
-  } catch {
-    return defaults;
-  }
-}
 
 function getModularPromptConfigStore() {
   if (!modularPromptConfigStore) {
-    modularPromptConfigStore = {
-      single: loadModularPromptConfig("single"),
-      multi: loadModularPromptConfig("multi"),
-      no_role: loadModularPromptConfig("no_role")
-    };
-    try {
-      if (fs.existsSync(MODULAR_PROMPTS_DIR)) {
-        fs.readdirSync(MODULAR_PROMPTS_DIR)
-          .filter((fileName) => fileName.endsWith(".json"))
-          .forEach((fileName) => {
-            const mode = normalizeRoleCardMode(path.basename(fileName, ".json"));
-            modularPromptConfigStore[mode] = loadModularPromptConfig(mode);
-          });
-      }
-    } catch {
-      // Ignore optional custom prompt mode discovery failures.
-    }
+    modularPromptConfigStore = normalizeModularPromptConfigs(
+      state?.modularPromptConfigs || loadAppDefaults()?.modularPromptConfigs
+    );
   }
   return modularPromptConfigStore;
 }
@@ -4628,17 +4737,26 @@ function getModularPromptConfig(mode = "single") {
   return getModularPromptConfigStore()[normalizedMode] || getModularPromptConfigStore().single;
 }
 
+function persistModularPromptConfigs(configs = getModularPromptConfigStore()) {
+  const normalizedConfigs = normalizeModularPromptConfigs(configs);
+  state.modularPromptConfigs = cloneData(normalizedConfigs, {});
+  updateLocalAppDefaults((defaults) => ({
+    ...defaults,
+    version: Math.max(3, Number(defaults.version || 0)),
+    modularPromptConfigs: normalizedConfigs
+  }));
+  saveState(state);
+  return normalizedConfigs;
+}
+
 function saveModularPromptConfig(mode = "single", config = {}) {
   const normalizedMode = normalizeRoleCardMode(mode);
   const normalized = normalizeModularPromptConfig(config, normalizedMode);
-  if (!fs.existsSync(MODULAR_PROMPTS_DIR)) {
-    fs.mkdirSync(MODULAR_PROMPTS_DIR, { recursive: true });
-  }
-  fs.writeFileSync(getModularPromptConfigFilePath(normalizedMode), `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
   modularPromptConfigStore = {
     ...getModularPromptConfigStore(),
     [normalizedMode]: normalized
   };
+  persistModularPromptConfigs(modularPromptConfigStore);
   return normalized;
 }
 
@@ -4651,13 +4769,9 @@ function deleteModularPromptConfig(mode = "single") {
     return { ok: false, error: "仍有角色卡使用此模式，請先切換那些角色卡的模式。" };
   }
 
-  const filePath = getModularPromptConfigFilePath(normalizedMode);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
   const store = getModularPromptConfigStore();
   delete store[normalizedMode];
-  modularPromptConfigStore = store;
+  modularPromptConfigStore = persistModularPromptConfigs(store);
   return { ok: true, mode: normalizedMode };
 }
 
@@ -10303,6 +10417,7 @@ function getDiscordGuidance() {
     "請先用邀請連結把 Bot 加到伺服器，之後在 Discord 使用 Slash 指令。",
     authorizeUrl ? `邀請 Bot：${authorizeUrl}` : "",
     "主對話：`/ai content:你的內容`，或 `/ai file:上傳txt檔`",
+    "保持時間：`/keep_time`",
     "快速發送：`/quick_send template:｛推进剧情到下一个场景｝ inside:補充 message:下一行內容`",
     "開始對話：`/ai_start`，之後該頻道可以直接輸入對話，不需要 `!ai`",
     "停止生成：`/stop`，或在已啟用頻道輸入 `/stop`",
@@ -10312,7 +10427,7 @@ function getDiscordGuidance() {
     "從指定訊息分支：`/replay message_number:訊息編號 content:新的使用者內容`",
     "自動推演多輪：`/run_time number:10 message:你的要求`",
     "存檔指令：`/session_save`、`/session_list`、`/session_load`",
-    `文字指令：伺服器頻道使用 \`${COMMAND_PREFIX} 指令\`；DM 若要執行文字指令也請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
+    `文字指令：伺服器頻道可使用 \`${COMMAND_PREFIX} keep_time\`；DM 若要執行文字指令也請加 \`${COMMAND_PREFIX}\`，直接打「開始」會當作聊天內容。`,
     "網頁也可以直接在對話輸入框送出本地對話。"
   ].filter(Boolean).join("\n");
 }
@@ -10883,6 +10998,15 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/defaults/apply" && method === "POST") {
       const defaults = applyDefaultAppSettings(state);
+      sendJson(res, 200, {
+        defaults,
+        state: statePayload(state)
+      });
+      return;
+    }
+
+    if (pathname === "/api/defaults/update" && method === "POST") {
+      const defaults = updateLocalDefaultsFromBundles();
       sendJson(res, 200, {
         defaults,
         state: statePayload(state)
@@ -11544,6 +11668,9 @@ function parseDiscordTextInput(input, options = {}) {
   if (keyword === "run_time") {
     return { type: "meta", command: "run_time", args };
   }
+  if (keyword === "keep_time") {
+    return { type: "meta", command: "keep_time", args };
+  }
   if (keyword === "player_set") {
     return { type: "meta", command: "player_set", args };
   }
@@ -11874,7 +12001,7 @@ function isUnknownInteractionError(error) {
 }
 
 function shouldDeferSlashCommandEarly(commandName = "") {
-  return ["ai", "ai_start", "reload", "replay", "run_time", "quick_send"].includes(safeText(commandName));
+  return ["ai", "ai_start", "reload", "replay", "run_time", "keep_time", "quick_send"].includes(safeText(commandName));
 }
 
 async function safeSendInteractionError(interaction, content) {
@@ -12460,30 +12587,38 @@ async function registerSlashCommands(discordClient) {
     console.log("Slash 指令已註冊到全域應用程式");
   } catch (error) {
     console.error("全域 Slash 指令註冊失敗：", error);
-    return;
   }
 
-  const guildId = safeText(DISCORD_GUILD_ID);
-  if (!guildId) {
-    return;
-  }
-
+  const guildIds = new Set(
+    Array.from(discordClient.guilds.cache.keys())
+      .map((guildId) => safeText(guildId))
+      .filter(Boolean)
+  );
+  const configuredGuildId = safeText(DISCORD_GUILD_ID);
   const clientId = getDiscordClientId();
-  if (clientId && guildId === clientId) {
-    console.warn(`已略過 guild Slash 指令註冊：DISCORD_GUILD_ID=${guildId} 看起來是 Bot Client ID，不是伺服器 ID。`);
-    return;
+  if (configuredGuildId && clientId && configuredGuildId === clientId) {
+    console.warn(`已略過 guild Slash 指令註冊：DISCORD_GUILD_ID=${configuredGuildId} 看起來是 Bot Client ID，不是伺服器 ID。`);
+  } else if (configuredGuildId) {
+    guildIds.add(configuredGuildId);
   }
 
-  try {
-    const guild = await discordClient.guilds.fetch(guildId);
-    await guild.commands.set(DISCORD_SLASH_COMMANDS);
-    console.log(`Slash 指令已註冊到 guild: ${guildId}`);
-  } catch (error) {
-    if (error?.code === 10004) {
-      console.warn(`已略過 guild Slash 指令註冊：找不到 DISCORD_GUILD_ID=${guildId}，請確認這是伺服器 ID 且 Bot 已加入該伺服器。`);
-      return;
+  let registeredGuilds = 0;
+  for (const guildId of guildIds) {
+    try {
+      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId);
+      await guild.commands.set(DISCORD_SLASH_COMMANDS);
+      registeredGuilds += 1;
+    } catch (error) {
+      if (error?.code === 10004) {
+        console.warn(`已略過 guild Slash 指令註冊：找不到 guild ${guildId}，請確認 Bot 已加入該伺服器。`);
+        continue;
+      }
+      console.error(`Guild Slash 指令註冊失敗（${guildId}）：`, error);
     }
-    console.error("Guild Slash 指令註冊失敗：", error);
+  }
+
+  if (guildIds.size > 0) {
+    console.log(`Slash 指令已即時同步到 ${registeredGuilds}/${guildIds.size} 個 Discord 伺服器`);
   }
 }
 
@@ -12631,10 +12766,11 @@ async function handleSlashCommand(interaction) {
     return;
   }
 
-  if (name === "quick_send") {
-    const templateId = interaction.options.getString("template") || "";
-    const inside = interaction.options.getString("inside") || "";
-    const message = interaction.options.getString("message") || "";
+  if (name === "keep_time" || name === "quick_send") {
+    const isKeepTime = name === "keep_time";
+    const templateId = isKeepTime ? "keep_time" : interaction.options.getString("template") || "";
+    const inside = isKeepTime ? "" : interaction.options.getString("inside") || "";
+    const message = isKeepTime ? "" : interaction.options.getString("message") || "";
     const built = buildQuickSendContent(templateId, inside, message);
     if (!built.ok) {
       await safeSendInteractionText(interaction, built.error, { ephemeral: true });
@@ -12970,6 +13106,12 @@ function setupDiscordBot() {
 
         if (parsedInput.command === "run_time") {
           await runRuntimeTextCommand(message, parsedInput.args || []);
+          return;
+        }
+
+        if (parsedInput.command === "keep_time") {
+          const built = buildQuickSendContent("keep_time");
+          await handleDiscordChat(message, built.content);
           return;
         }
 
