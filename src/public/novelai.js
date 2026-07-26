@@ -53,6 +53,7 @@ const el = {
   novelAiGenerateLabel: document.getElementById("novelAiGenerateLabel"),
   novelAiOutputGrid: document.getElementById("novelAiOutputGrid"),
   novelAiHistoryGrid: document.getElementById("novelAiHistoryGrid"),
+  novelAiClearHistoryBtn: document.getElementById("novelAiClearHistoryBtn"),
   novelAiRefreshAlbumBtn: document.getElementById("novelAiRefreshAlbumBtn"),
   novelAiHistoryPrevBtn: document.getElementById("novelAiHistoryPrevBtn"),
   novelAiHistoryPageInfo: document.getElementById("novelAiHistoryPageInfo"),
@@ -2365,6 +2366,17 @@ async function deleteHistoryItem(id = "") {
   }
 }
 
+async function clearHistoryItems() {
+  const db = await openNovelAiDb();
+  try {
+    const transaction = db.transaction(NOVELAI_HISTORY_STORE, "readwrite");
+    transaction.objectStore(NOVELAI_HISTORY_STORE).clear();
+    await idbTransactionDone(transaction);
+  } finally {
+    db.close();
+  }
+}
+
 function renderEmpty(container, text = "尚未有圖片。") {
   container.innerHTML = "";
   const empty = document.createElement("div");
@@ -2661,6 +2673,9 @@ function renderHistoryPagination() {
   if (el.novelAiHistoryNextBtn) {
     el.novelAiHistoryNextBtn.disabled = novelAiHistoryPage >= totalPages;
   }
+  if (el.novelAiClearHistoryBtn) {
+    el.novelAiClearHistoryBtn.disabled = novelAiHistoryTotal === 0;
+  }
 }
 
 async function renderHistory() {
@@ -2681,6 +2696,29 @@ async function renderHistory() {
     novelAiHistoryTotal = 0;
     renderEmpty(el.novelAiHistoryGrid, error.message || "本地歷史讀取失敗。");
     renderHistoryPagination();
+  }
+}
+
+async function clearHistoryFromUi() {
+  if (!novelAiHistoryTotal) {
+    return;
+  }
+  const confirmed = window.confirm("確定要清空所有 NovelAI 本地歷史圖片嗎？此操作無法復原。");
+  if (!confirmed) {
+    return;
+  }
+  el.novelAiClearHistoryBtn.disabled = true;
+  try {
+    await clearHistoryItems();
+    novelAiHistoryPage = 1;
+    novelAiHistoryTotal = 0;
+    novelAiSelectedHistoryId = "";
+    await renderHistory();
+    showToast("已清空本地歷史圖片");
+  } catch (error) {
+    showToast(error.message || "本地歷史清空失敗。", "error");
+  } finally {
+    el.novelAiClearHistoryBtn.disabled = novelAiHistoryTotal === 0;
   }
 }
 
@@ -3595,6 +3633,7 @@ function bindEvents() {
     novelAiHistoryPage = 1;
     await renderHistory();
   });
+  el.novelAiClearHistoryBtn?.addEventListener("click", clearHistoryFromUi);
   el.novelAiHistoryPrevBtn?.addEventListener("click", async () => {
     if (novelAiHistoryPage <= 1) {
       return;

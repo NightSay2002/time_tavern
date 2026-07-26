@@ -35,3 +35,9 @@ test("NovelAI only offers metadata import for an importable dropped image", () =
   assert.match(novelAiSource, /async function hasImportableNovelAiMetadata/u);
   assert.match(novelAiSource, /metadataButton\.hidden = !hasMetadata;/u);
 });
+
+test("NovelAI can clear only the local history store after confirmation", () => {
+  assert.match(novelAiHtml, /id="novelAiClearHistoryBtn"/u);
+  assert.match(novelAiSource, /transaction\.objectStore\(NOVELAI_HISTORY_STORE\)\.clear\(\);/u);
+  assert.match(novelAiSource, /window\.confirm\("確定要清空所有 NovelAI 本地歷史圖片嗎？此操作無法復原。"\)/u);
+});

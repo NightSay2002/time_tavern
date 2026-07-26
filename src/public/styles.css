@@ -5174,6 +5174,35 @@ body.novelai-bright-body textarea {
   align-items: flex-start;
 }
 
+.nai-history-header-actions {
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.nai-history-header-actions .nai-icon-button {
+  margin-left: 0;
+}
+
+.nai-history-clear-button {
+  width: auto;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 1px solid rgba(194, 90, 141, 0.5);
+  border-radius: 12px;
+  background: #fff;
+  color: #a3295f;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.nai-history-clear-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+  transform: none;
+}
+
 .nai-history-panel strong {
   color: #553068;
   font-size: 19px;

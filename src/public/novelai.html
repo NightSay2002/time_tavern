@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-novelai-storage-metadata" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-novelai-history-clear" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -192,7 +192,10 @@
             <strong>歷史</strong>
             <span>點擊縮圖切換中間圖片</span>
           </div>
-          <button id="novelAiRefreshAlbumBtn" type="button" class="nai-icon-button" title="刷新歷史">↻</button>
+          <div class="nai-history-header-actions">
+            <button id="novelAiClearHistoryBtn" type="button" class="nai-history-clear-button" disabled>清空</button>
+            <button id="novelAiRefreshAlbumBtn" type="button" class="nai-icon-button" title="刷新歷史" aria-label="刷新歷史">↻</button>
+          </div>
         </header>
         <div id="novelAiHistoryGrid" class="nai-history-list"></div>
         <footer class="nai-history-pagination" aria-label="歷史分頁">
@@ -257,6 +260,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260726-novelai-storage-metadata"></script>
+    <script type="module" src="/novelai.js?v=20260726-novelai-history-clear"></script>
   </body>
 </html>
