@@ -95,7 +95,10 @@ NovelAI：
 - 模型、尺寸、Steps、Guidance、Sampler、Seed、Variety+。
 - Fixed Prompt / Random Prompt 片段庫。
 - Character Prompts、Vibe Transfer、Image2Image、Precise Reference。
+- 拖入圖片時，只有偵測到可讀取的 NovelAI PNG metadata 才會顯示「匯入設定」。
 - 圖片生成、Loop Generate、本地歷史、收藏、下載 metadata。
+- Vibe Transfer、Image2Image、Precise Reference 圖片會保存在此瀏覽器的本地草稿，離開頁面後再返回仍會還原。
+- 本地歷史每頁載入 20 張；新圖片以 Blob 與縮圖保存，避免大量原圖同時載入造成卡頓。
 - 圖片檢視器：點擊主圖放大，拖曳移動，滾輪縮放。
 - NovelAI 預設保存/啟用。
 

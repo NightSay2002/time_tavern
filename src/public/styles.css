@@ -5166,7 +5166,7 @@ body.novelai-bright-body textarea {
 
 .nai-history-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
 
@@ -5196,6 +5196,8 @@ body.novelai-bright-body textarea {
   border: 1px solid rgba(214, 150, 232, 0.34);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.78);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
 }
 
 .nai-history-item.active {
@@ -5240,6 +5242,43 @@ body.novelai-bright-body textarea {
 .nai-history-item span {
   color: #9b7bad;
   font-size: 12px;
+}
+
+.nai-history-pagination {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(216, 148, 232, 0.26);
+  background: rgba(255, 250, 254, 0.96);
+}
+
+.nai-history-pagination .nai-icon-button {
+  width: 36px;
+  min-height: 36px;
+  margin: 0;
+  border-radius: 10px;
+  font-size: 20px;
+}
+
+.nai-history-pagination .nai-icon-button:disabled {
+  cursor: default;
+  opacity: 0.35;
+  transform: none;
+}
+
+.nai-history-pagination span {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #765485;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nai-drop-overlay {

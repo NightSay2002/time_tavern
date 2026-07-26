@@ -54,6 +54,9 @@ const el = {
   novelAiOutputGrid: document.getElementById("novelAiOutputGrid"),
   novelAiHistoryGrid: document.getElementById("novelAiHistoryGrid"),
   novelAiRefreshAlbumBtn: document.getElementById("novelAiRefreshAlbumBtn"),
+  novelAiHistoryPrevBtn: document.getElementById("novelAiHistoryPrevBtn"),
+  novelAiHistoryPageInfo: document.getElementById("novelAiHistoryPageInfo"),
+  novelAiHistoryNextBtn: document.getElementById("novelAiHistoryNextBtn"),
   novelAiStageSize: document.getElementById("novelAiStageSize"),
   novelAiDropOverlay: document.getElementById("novelAiDropOverlay"),
   novelAiDropChoiceDialog: document.getElementById("novelAiDropChoiceDialog"),
@@ -76,6 +79,12 @@ let novelAiPreciseImages = [];
 let novelAiCurrentImages = [];
 let novelAiHistoryItems = [];
 let novelAiSelectedHistoryId = "";
+let novelAiHistoryPage = 1;
+let novelAiHistoryTotal = 0;
+let novelAiHistoryRenderToken = 0;
+let novelAiHistoryObjectUrls = [];
+let novelAiMainImageObjectUrl = "";
+let novelAiImageViewerObjectUrl = "";
 let novelAiPendingDropFiles = [];
 let novelAiPendingDownloadItem = null;
 let novelAiDragDepth = 0;
@@ -100,8 +109,12 @@ const NOVELAI_SETTINGS_STORAGE_KEY = "time_tavern_novelai_settings";
 const NOVELAI_FIXED_PROMPT_STORAGE_KEY = "time_tavern_novelai_fixed_prompt_snippets";
 const NOVELAI_RANDOM_PROMPT_STORAGE_KEY = "time_tavern_novelai_random_prompt_snippets";
 const NOVELAI_HISTORY_DB_NAME = "time_tavern_novelai";
+const NOVELAI_DB_VERSION = 2;
 const NOVELAI_HISTORY_STORE = "history";
-const NOVELAI_HISTORY_LIMIT = 80;
+const NOVELAI_REFERENCE_DRAFT_STORE = "referenceDraft";
+const NOVELAI_REFERENCE_DRAFT_ID = "current";
+const NOVELAI_HISTORY_PAGE_SIZE = 20;
+const NOVELAI_HISTORY_THUMBNAIL_SIZE = 192;
 const NOVELAI_STANDARD_PNG_TEXT_KEYS = new Set([
   "Title",
   "Description",
@@ -214,6 +227,48 @@ function closeImageViewerDialog() {
   } else {
     el.novelAiImageViewerDialog?.removeAttribute("open");
   }
+  releaseImageViewerResource();
+}
+
+function revokeObjectUrl(url = "") {
+  if (url) {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function releaseHistoryImageResources() {
+  novelAiHistoryObjectUrls.forEach(revokeObjectUrl);
+  novelAiHistoryObjectUrls = [];
+}
+
+function releaseMainImageResource() {
+  revokeObjectUrl(novelAiMainImageObjectUrl);
+  novelAiMainImageObjectUrl = "";
+}
+
+function releaseImageViewerResource() {
+  stopImageViewerDrag();
+  if (el.novelAiImageViewerImage) {
+    el.novelAiImageViewerImage.removeAttribute("src");
+  }
+  revokeObjectUrl(novelAiImageViewerObjectUrl);
+  novelAiImageViewerObjectUrl = "";
+}
+
+function createItemImageSource(item = {}, options = {}) {
+  const blob = options.thumbnail && item.thumbnailBlob instanceof Blob
+    ? item.thumbnailBlob
+    : item.imageBlob instanceof Blob
+      ? item.imageBlob
+      : null;
+  if (!blob) {
+    return {
+      src: item.dataUrl || item.imageUrl || "",
+      objectUrl: ""
+    };
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  return { src: objectUrl, objectUrl };
 }
 
 function applyImageViewerTransform() {
@@ -1192,7 +1247,7 @@ function renderBaseImagePreview(dataUrl = "") {
 function clearBaseImagePreview() {
   renderBaseImagePreview("");
   renderCostPreview();
-  saveSettingsDraft();
+  saveSettingsDraft({ includeReferenceImages: true });
 }
 
 function referenceRangeHtml(field, label, value, options = {}) {
@@ -1785,7 +1840,9 @@ function setFormSettings(settings = {}, options = {}) {
   if (options.save !== false) {
     saveFixedPromptSnippets();
     saveRandomPromptSnippets();
-    saveSettingsDraft();
+    saveSettingsDraft({
+      includeReferenceImages: options.includeReferenceImages === true || options.includeBaseImage === true
+    });
   }
 }
 
@@ -1797,9 +1854,14 @@ function hasSettingsDraft(settings = {}) {
   return Boolean(settings && typeof settings === "object" && !Array.isArray(settings) && Object.keys(settings).length > 0);
 }
 
-function saveSettingsDraft() {
+function saveSettingsDraft(options = {}) {
+  const settings = getFormSettings();
+  if (options.includeReferenceImages === true) {
+    void saveReferenceImageDraft(settings).catch((error) => {
+      console.warn("NovelAI 參考圖片草稿保存失敗。", error);
+    });
+  }
   try {
-    const settings = getFormSettings();
     settings.baseImage = "";
     settings.vibeTransfer.images = [];
     settings.preciseReference.images = [];
@@ -2087,6 +2149,9 @@ async function getItemDataUrl(item = {}) {
   if (item.dataUrl) {
     return item.dataUrl;
   }
+  if (item.imageBlob instanceof Blob) {
+    return blobToDataUrl(item.imageBlob);
+  }
   if (!item.imageUrl) {
     throw new Error("找不到圖片資料。");
   }
@@ -2112,46 +2177,177 @@ function idbTransactionDone(transaction) {
   });
 }
 
-function openHistoryDb() {
+function openNovelAiDb() {
   return new Promise((resolve, reject) => {
     if (!window.indexedDB) {
-      reject(new Error("瀏覽器不支援本地歷史資料庫。"));
+      reject(new Error("瀏覽器不支援 NovelAI 本地資料庫。"));
       return;
     }
-    const requestObject = window.indexedDB.open(NOVELAI_HISTORY_DB_NAME, 1);
+    const requestObject = window.indexedDB.open(NOVELAI_HISTORY_DB_NAME, NOVELAI_DB_VERSION);
     requestObject.onupgradeneeded = () => {
       const db = requestObject.result;
+      let historyStore = null;
       if (!db.objectStoreNames.contains(NOVELAI_HISTORY_STORE)) {
-        const store = db.createObjectStore(NOVELAI_HISTORY_STORE, { keyPath: "id" });
-        store.createIndex("createdAt", "createdAt", { unique: false });
+        historyStore = db.createObjectStore(NOVELAI_HISTORY_STORE, { keyPath: "id" });
+      } else {
+        historyStore = requestObject.transaction.objectStore(NOVELAI_HISTORY_STORE);
+      }
+      if (!historyStore.indexNames.contains("createdAt")) {
+        historyStore.createIndex("createdAt", "createdAt", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(NOVELAI_REFERENCE_DRAFT_STORE)) {
+        db.createObjectStore(NOVELAI_REFERENCE_DRAFT_STORE, { keyPath: "id" });
       }
     };
     requestObject.onsuccess = () => resolve(requestObject.result);
-    requestObject.onerror = () => reject(requestObject.error || new Error("本地歷史資料庫開啟失敗。"));
+    requestObject.onerror = () => reject(requestObject.error || new Error("NovelAI 本地資料庫開啟失敗。"));
   });
 }
 
-async function listHistory(limit = NOVELAI_HISTORY_LIMIT) {
-  const db = await openHistoryDb();
+function createReferenceImageDraft(settings = {}) {
+  return {
+    id: NOVELAI_REFERENCE_DRAFT_ID,
+    baseImage: String(settings.baseImage || "").trim(),
+    vibeTransfer: {
+      images: normalizeImageItems(settings.vibeTransfer?.images, "nai_vibe", {
+        strength: 0.6,
+        informationExtracted: 1,
+        strengthMin: -1,
+        strengthMax: 1
+      })
+    },
+    preciseReference: {
+      images: normalizeImageItems(settings.preciseReference?.images, "nai_precise", {
+        strength: 1,
+        fidelity: 1,
+        strengthMin: -1,
+        strengthMax: 1,
+        fidelityMin: -1,
+        fidelityMax: 1
+      })
+    },
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function saveReferenceImageDraft(settings = {}) {
+  const draft = createReferenceImageDraft(settings);
+  const db = await openNovelAiDb();
   try {
-    const items = await idbRequest(db.transaction(NOVELAI_HISTORY_STORE, "readonly").objectStore(NOVELAI_HISTORY_STORE).getAll());
-    return (Array.isArray(items) ? items : [])
-      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-      .slice(0, limit);
+    const transaction = db.transaction(NOVELAI_REFERENCE_DRAFT_STORE, "readwrite");
+    transaction.objectStore(NOVELAI_REFERENCE_DRAFT_STORE).put(draft);
+    await idbTransactionDone(transaction);
   } finally {
     db.close();
   }
+}
+
+async function loadReferenceImageDraft() {
+  const db = await openNovelAiDb();
+  try {
+    const store = db.transaction(NOVELAI_REFERENCE_DRAFT_STORE, "readonly")
+      .objectStore(NOVELAI_REFERENCE_DRAFT_STORE);
+    return await idbRequest(store.get(NOVELAI_REFERENCE_DRAFT_ID));
+  } finally {
+    db.close();
+  }
+}
+
+async function listHistoryPage(page = 1, pageSize = NOVELAI_HISTORY_PAGE_SIZE) {
+  const db = await openNovelAiDb();
+  try {
+    const countStore = db.transaction(NOVELAI_HISTORY_STORE, "readonly").objectStore(NOVELAI_HISTORY_STORE);
+    const total = await idbRequest(countStore.count());
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = Math.min(totalPages, Math.max(1, Math.floor(Number(page) || 1)));
+    const offset = (currentPage - 1) * pageSize;
+    const transaction = db.transaction(NOVELAI_HISTORY_STORE, "readonly");
+    const store = transaction.objectStore(NOVELAI_HISTORY_STORE);
+    const source = store.index("createdAt");
+    const items = await new Promise((resolve, reject) => {
+      const results = [];
+      let advanced = offset === 0;
+      const requestObject = source.openCursor(null, "prev");
+      requestObject.onsuccess = () => {
+        const cursor = requestObject.result;
+        if (!cursor || results.length >= pageSize) {
+          resolve(results);
+          return;
+        }
+        if (!advanced) {
+          advanced = true;
+          cursor.advance(offset);
+          return;
+        }
+        results.push(cursor.value);
+        cursor.continue();
+      };
+      requestObject.onerror = () => reject(requestObject.error || new Error("本地歷史讀取失敗。"));
+    });
+    return { items, total, totalPages, page: currentPage };
+  } finally {
+    db.close();
+  }
+}
+
+function canvasToBlob(canvas, type = "image/webp", quality = 0.82) {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+async function createHistoryThumbnailBlob(imageBlob) {
+  if (!(imageBlob instanceof Blob) || typeof createImageBitmap !== "function") {
+    return null;
+  }
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(imageBlob);
+    const scale = Math.min(1, NOVELAI_HISTORY_THUMBNAIL_SIZE / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) {
+      return null;
+    }
+    context.drawImage(bitmap, 0, 0, width, height);
+    return await canvasToBlob(canvas);
+  } catch {
+    return null;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
+async function prepareHistoryItemForStorage(item = {}) {
+  const stored = { ...item };
+  if (!(stored.imageBlob instanceof Blob) && stored.dataUrl) {
+    const imageBlob = dataUrlToBlob(stored.dataUrl);
+    if (imageBlob) {
+      stored.imageBlob = imageBlob;
+      delete stored.dataUrl;
+    }
+  }
+  if (stored.imageBlob instanceof Blob && !(stored.thumbnailBlob instanceof Blob)) {
+    stored.thumbnailBlob = await createHistoryThumbnailBlob(stored.imageBlob);
+  }
+  return stored;
 }
 
 async function saveHistoryItems(items = []) {
   if (!items.length) {
     return;
   }
-  const db = await openHistoryDb();
+  const storedItems = [];
+  for (const item of items) {
+    storedItems.push(await prepareHistoryItemForStorage(item));
+  }
+  const db = await openNovelAiDb();
   try {
     const transaction = db.transaction(NOVELAI_HISTORY_STORE, "readwrite");
     const store = transaction.objectStore(NOVELAI_HISTORY_STORE);
-    items.forEach((item) => store.put(item));
+    storedItems.forEach((item) => store.put(item));
     await idbTransactionDone(transaction);
   } finally {
     db.close();
@@ -2159,7 +2355,7 @@ async function saveHistoryItems(items = []) {
 }
 
 async function deleteHistoryItem(id = "") {
-  const db = await openHistoryDb();
+  const db = await openNovelAiDb();
   try {
     const transaction = db.transaction(NOVELAI_HISTORY_STORE, "readwrite");
     transaction.objectStore(NOVELAI_HISTORY_STORE).delete(id);
@@ -2263,7 +2459,9 @@ function openImageContentDialog(item = {}) {
 }
 
 function openImageViewerDialog(item = {}) {
-  const imageSrc = item.dataUrl || item.imageUrl || "";
+  releaseImageViewerResource();
+  const imageSource = createItemImageSource(item);
+  const imageSrc = imageSource.src;
   if (!imageSrc) {
     showToast("沒有可檢視的圖片。", "error");
     return;
@@ -2272,6 +2470,7 @@ function openImageViewerDialog(item = {}) {
     window.open(imageSrc, "_blank", "noopener,noreferrer");
     return;
   }
+  novelAiImageViewerObjectUrl = imageSource.objectUrl;
   const title = itemPrompt(item) || item.fileName || "NovelAI Image";
   el.novelAiImageViewerImage.src = imageSrc;
   el.novelAiImageViewerImage.alt = title;
@@ -2296,6 +2495,7 @@ function makeActionButton(text, className, handler) {
 }
 
 function renderMainImage(item = null) {
+  releaseMainImageResource();
   if (!item) {
     novelAiSelectedHistoryId = "";
     updateActiveHistoryItem();
@@ -2312,8 +2512,11 @@ function renderMainImage(item = null) {
   const preview = document.createElement("div");
   preview.className = "novelai-image-preview";
   const img = document.createElement("img");
-  img.src = item.dataUrl || item.imageUrl || "";
+  const imageSource = createItemImageSource(item);
+  novelAiMainImageObjectUrl = imageSource.objectUrl;
+  img.src = imageSource.src;
   img.alt = itemPrompt(item) || item.fileName || "NovelAI image";
+  img.decoding = "async";
   preview.appendChild(img);
   preview.title = "點擊放大檢視";
   preview.addEventListener("click", () => openImageViewerDialog(item));
@@ -2399,6 +2602,7 @@ function onHistoryKeyboardNavigation(event) {
 
 function renderHistoryList(items = []) {
   novelAiHistoryItems = Array.isArray(items) ? items : [];
+  releaseHistoryImageResources();
   el.novelAiHistoryGrid.innerHTML = "";
   if (!novelAiHistoryItems.length) {
     const empty = document.createElement("p");
@@ -2419,12 +2623,23 @@ function renderHistoryList(items = []) {
       </div>
       <button type="button" class="muted" data-history-action="delete">×</button>
     `;
-    card.querySelector("img").src = item.dataUrl || item.imageUrl || "";
+    const image = card.querySelector("img");
+    const imageSource = createItemImageSource(item, { thumbnail: true });
+    if (imageSource.objectUrl) {
+      novelAiHistoryObjectUrls.push(imageSource.objectUrl);
+    }
+    image.src = imageSource.src;
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.fetchPriority = "low";
     card.querySelector("strong").textContent = truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 36);
     card.querySelector("span").textContent = item.createdAt ? new Date(item.createdAt).toLocaleString("zh-Hant") : "";
     card.querySelector('[data-history-action="select"]').addEventListener("click", () => selectHistoryItem(item, { scroll: true }));
     card.querySelector('[data-history-action="delete"]').addEventListener("click", async () => {
       await deleteHistoryItem(item.id);
+      if (novelAiSelectedHistoryId === item.id) {
+        renderMainImage(null);
+      }
       await renderHistory();
       showToast("已刪除本地歷史圖片");
     });
@@ -2433,11 +2648,39 @@ function renderHistoryList(items = []) {
   updateActiveHistoryItem();
 }
 
+function renderHistoryPagination() {
+  const totalPages = Math.max(1, Math.ceil(novelAiHistoryTotal / NOVELAI_HISTORY_PAGE_SIZE));
+  if (el.novelAiHistoryPageInfo) {
+    el.novelAiHistoryPageInfo.textContent = novelAiHistoryTotal
+      ? `${novelAiHistoryPage} / ${totalPages} · ${novelAiHistoryTotal} 張`
+      : "0 張";
+  }
+  if (el.novelAiHistoryPrevBtn) {
+    el.novelAiHistoryPrevBtn.disabled = novelAiHistoryPage <= 1;
+  }
+  if (el.novelAiHistoryNextBtn) {
+    el.novelAiHistoryNextBtn.disabled = novelAiHistoryPage >= totalPages;
+  }
+}
+
 async function renderHistory() {
+  const renderToken = ++novelAiHistoryRenderToken;
   try {
-    renderHistoryList(await listHistory());
+    const result = await listHistoryPage(novelAiHistoryPage);
+    if (renderToken !== novelAiHistoryRenderToken) {
+      return;
+    }
+    novelAiHistoryPage = result.page;
+    novelAiHistoryTotal = result.total;
+    renderHistoryList(result.items);
+    renderHistoryPagination();
   } catch (error) {
+    if (renderToken !== novelAiHistoryRenderToken) {
+      return;
+    }
+    novelAiHistoryTotal = 0;
     renderEmpty(el.novelAiHistoryGrid, error.message || "本地歷史讀取失敗。");
+    renderHistoryPagination();
   }
 }
 
@@ -2799,6 +3042,8 @@ async function downloadImage(item = {}, options = {}) {
   try {
     let blob = item.dataUrl
       ? dataUrlToBlob(item.dataUrl)
+      : item.imageBlob instanceof Blob
+        ? item.imageBlob
       : await fetch(item.imageUrl).then((response) => {
         if (!response.ok) {
           throw new Error(`圖片下載失敗(${response.status})。`);
@@ -2965,6 +3210,17 @@ async function importMetadataFromFile(file) {
   }
 }
 
+async function hasImportableNovelAiMetadata(file) {
+  if (!file) {
+    return false;
+  }
+  try {
+    return Boolean(extractMetadataFromPng(new Uint8Array(await file.arrayBuffer())));
+  } catch {
+    return false;
+  }
+}
+
 function getImageFilesFromTransfer(dataTransfer) {
   const itemFiles = Array.from(dataTransfer?.items || [])
     .filter((item) => item.kind === "file")
@@ -3019,18 +3275,29 @@ async function addFilesToCollection(files = [], target = "vibe") {
   }
   renderAllReferences();
   renderCostPreview();
-  saveSettingsDraft();
+  saveSettingsDraft({ includeReferenceImages: true });
 }
 
 async function showDropChoiceDialog(files = []) {
   novelAiPendingDropFiles = files;
   el.novelAiDropChoicePreview.innerHTML = "";
   const firstFile = files[0];
+  const metadataButton = el.novelAiDropChoiceDialog.querySelector('[data-drop-action="metadata"]');
+  if (metadataButton) {
+    metadataButton.hidden = true;
+  }
   if (firstFile) {
+    const [previewDataUrl, hasMetadata] = await Promise.all([
+      readImageFileAsDataUrl(firstFile),
+      hasImportableNovelAiMetadata(firstFile)
+    ]);
     const img = document.createElement("img");
-    img.src = await readImageFileAsDataUrl(firstFile);
+    img.src = previewDataUrl;
     img.alt = firstFile.name || "Dropped image";
     el.novelAiDropChoicePreview.appendChild(img);
+    if (metadataButton) {
+      metadataButton.hidden = !hasMetadata;
+    }
   }
   renderDropChoiceText(files);
   if (typeof el.novelAiDropChoiceDialog.showModal === "function") {
@@ -3062,7 +3329,7 @@ async function handleDropChoice(action = "cancel") {
     } else if (action === "img2img") {
       renderBaseImagePreview(await readImageFileAsDataUrl(files[0], { normalizeForNovelAi: true }));
       renderCostPreview();
-      saveSettingsDraft();
+      saveSettingsDraft({ includeReferenceImages: true });
       showToast("已設定 Image2Image 圖片");
     } else if (action === "precise") {
       await addFilesToCollection(files, "precise");
@@ -3115,11 +3382,14 @@ function handleReferenceListAction(type, event) {
       novelAiPreciseImages = [...list];
     }
     renderCostPreview();
-    saveSettingsDraft();
+    saveSettingsDraft({ includeReferenceImages: event.type === "change" });
     return;
   }
   const target = event.target?.closest?.("[data-reference-action]");
   if (!target) {
+    return;
+  }
+  if (event.type !== "click") {
     return;
   }
   const card = target.closest(".nai-reference-item");
@@ -3141,7 +3411,7 @@ function handleReferenceListAction(type, event) {
   }
   renderAllReferences();
   renderCostPreview();
-  saveSettingsDraft();
+  saveSettingsDraft({ includeReferenceImages: true });
 }
 
 function getRandomDelayMs(min = 1000, max = 5000) {
@@ -3221,6 +3491,7 @@ async function runNovelAiGenerationOnce(options = {}) {
     novelAiCurrentImages = generatedImages;
     renderMainImage(generatedImages[0] || null);
     await saveHistoryItems(generatedImages);
+    novelAiHistoryPage = 1;
     await renderHistory();
     await refreshStatus();
     if (showSuccessToast) {
@@ -3320,7 +3591,32 @@ function bindEvents() {
     await injectNovelAiDefaultsFromFile(el.novelAiDefaultsFile.files?.[0]);
   });
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
-  el.novelAiRefreshAlbumBtn.addEventListener("click", renderHistory);
+  el.novelAiRefreshAlbumBtn.addEventListener("click", async () => {
+    novelAiHistoryPage = 1;
+    await renderHistory();
+  });
+  el.novelAiHistoryPrevBtn?.addEventListener("click", async () => {
+    if (novelAiHistoryPage <= 1) {
+      return;
+    }
+    novelAiHistoryPage -= 1;
+    await renderHistory();
+    el.novelAiHistoryGrid?.scrollTo?.({ top: 0 });
+  });
+  el.novelAiHistoryNextBtn?.addEventListener("click", async () => {
+    const totalPages = Math.max(1, Math.ceil(novelAiHistoryTotal / NOVELAI_HISTORY_PAGE_SIZE));
+    if (novelAiHistoryPage >= totalPages) {
+      return;
+    }
+    novelAiHistoryPage += 1;
+    await renderHistory();
+    el.novelAiHistoryGrid?.scrollTo?.({ top: 0 });
+  });
+  window.addEventListener("pagehide", () => {
+    releaseHistoryImageResources();
+    releaseMainImageResource();
+    releaseImageViewerResource();
+  });
   window.addEventListener("keydown", onHistoryKeyboardNavigation);
   el.novelAiBaseImagePreview.addEventListener("click", (event) => {
     if (event.target?.closest?.("[data-base-image-remove]")) {
@@ -3347,7 +3643,7 @@ function bindEvents() {
       if (file) {
         renderBaseImagePreview(await readImageFileAsDataUrl(file, { normalizeForNovelAi: true }));
         renderCostPreview();
-        saveSettingsDraft();
+        saveSettingsDraft({ includeReferenceImages: true });
       }
     } catch (error) {
       showToast(error.message || "Image2Image 讀取失敗", "error");
@@ -3524,6 +3820,7 @@ function bindEvents() {
   bindDialogBackdropClose(el.novelAiContentDialog, { close: closeImageContentDialog });
   bindDialogBackdropClose(el.novelAiDownloadDialog, { close: closeDownloadDialog });
   bindDialogBackdropClose(el.novelAiImageViewerDialog, { close: closeImageViewerDialog });
+  el.novelAiImageViewerDialog?.addEventListener("close", releaseImageViewerResource);
   if (el.novelAiImageViewerStage) {
     el.novelAiImageViewerStage.addEventListener("wheel", onImageViewerWheel, { passive: false });
     el.novelAiImageViewerStage.addEventListener("pointerdown", onImageViewerPointerDown);
@@ -3597,9 +3894,32 @@ async function boot() {
   fillSelect(el.novelAiNoiseSchedule, NOVELAI_NOISE_SCHEDULE_OPTIONS, "karras");
   const draftSettings = loadSettingsDraft();
   const hasDraft = hasSettingsDraft(draftSettings);
+  let referenceDraft = null;
+  if (hasDraft) {
+    try {
+      referenceDraft = await loadReferenceImageDraft();
+    } catch (error) {
+      console.warn("NovelAI 參考圖片草稿讀取失敗。", error);
+    }
+  }
   const defaultPayload = hasDraft ? { settings: {} } : await loadNovelAiDefaults();
   const defaultSettings = !hasDraft ? (defaultPayload.settings || {}) : {};
-  const initialSettings = hasDraft ? draftSettings : defaultSettings;
+  const initialSettings = hasDraft && referenceDraft
+    ? {
+      ...draftSettings,
+      baseImage: referenceDraft.baseImage || "",
+      vibeTransfer: {
+        ...(draftSettings.vibeTransfer || {}),
+        images: referenceDraft.vibeTransfer?.images || []
+      },
+      preciseReference: {
+        ...(draftSettings.preciseReference || {}),
+        images: referenceDraft.preciseReference?.images || []
+      }
+    }
+    : hasDraft
+      ? draftSettings
+      : defaultSettings;
   if (hasDraft) {
     novelAiRandomPromptSnippets = loadRandomPromptSnippets();
     novelAiFixedPromptSnippets = loadFixedPromptSnippets(novelAiRandomPromptSnippets);
@@ -3610,7 +3930,9 @@ async function boot() {
   }
   setFormSettings(initialSettings, {
     save: false,
-    clearBaseImage: true,
+    includeReferenceImages: hasDraft,
+    includeBaseImage: hasDraft,
+    clearBaseImage: !hasDraft || !initialSettings.baseImage,
     replaceFixedPromptSnippets: !hasDraft,
     replaceRandomPromptSnippets: !hasDraft
   });
