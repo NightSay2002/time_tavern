@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runConversationTurnWorkflow } from "../src/conversation-turn.js";
+import {
+  hasActiveAssistantTarget,
+  hasActiveConversationTarget,
+  runConversationTurnWorkflow
+} from "../src/conversation-turn.js";
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -56,6 +60,18 @@ function createPendingState() {
     }
   };
 }
+
+test("custom assistants count as active conversation targets", () => {
+  const state = {
+    aiSessionStarted: true,
+    activeRoleCardId: null,
+    activeAssistantMode: "assistant_custom_123"
+  };
+
+  assert.equal(hasActiveAssistantTarget(state), true);
+  assert.equal(hasActiveConversationTarget(state), true);
+  assert.equal(hasActiveConversationTarget({ activeAssistantMode: "  " }), false);
+});
 
 test("applies a pending time transition before generating the current reply", async () => {
   const events = [];

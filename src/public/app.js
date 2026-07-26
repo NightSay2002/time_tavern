@@ -14,6 +14,8 @@
   importRoleCardBtn: document.getElementById("importRoleCardBtn"),
   roleCardImportFile: document.getElementById("roleCardImportFile"),
   roleCardList: document.getElementById("roleCardList"),
+  selectSessionBtn: document.getElementById("selectSessionBtn"),
+  saveSessionBtn: document.getElementById("saveSessionBtn"),
 
   editAiOutputBtn: document.getElementById("editAiOutputBtn"),
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
@@ -77,6 +79,22 @@
   roleCardPickerNextBtn: document.getElementById("roleCardPickerNextBtn"),
   roleCardPickerPageInfo: document.getElementById("roleCardPickerPageInfo"),
   closeRoleCardPickerBtn: document.getElementById("closeRoleCardPickerBtn"),
+
+  sessionPickerDialog: document.getElementById("sessionPickerDialog"),
+  sessionPickerGrid: document.getElementById("sessionPickerGrid"),
+  sessionPickerCount: document.getElementById("sessionPickerCount"),
+  sessionPreviewPanel: document.getElementById("sessionPreviewPanel"),
+  sessionPreviewTitle: document.getElementById("sessionPreviewTitle"),
+  sessionPreviewMeta: document.getElementById("sessionPreviewMeta"),
+  sessionPreviewMessages: document.getElementById("sessionPreviewMessages"),
+  sessionPreviewActions: document.getElementById("sessionPreviewActions"),
+  loadSessionPreviewBtn: document.getElementById("loadSessionPreviewBtn"),
+  deleteSessionPreviewBtn: document.getElementById("deleteSessionPreviewBtn"),
+  sessionPickerPrevBtn: document.getElementById("sessionPickerPrevBtn"),
+  sessionPickerNextBtn: document.getElementById("sessionPickerNextBtn"),
+  sessionPickerPageInfo: document.getElementById("sessionPickerPageInfo"),
+  saveSessionFromDialogBtn: document.getElementById("saveSessionFromDialogBtn"),
+  closeSessionPickerBtn: document.getElementById("closeSessionPickerBtn"),
 
   editAiDialog: document.getElementById("editAiDialog"),
   editAiForm: document.getElementById("editAiForm"),
@@ -187,6 +205,9 @@ let selectedCompressionProfileId = "standard";
 let contextCompressionDialogPayload = null;
 let selectedContextCompressionProfileId = "standard";
 let roleCardPickerPage = 1;
+let sessionPickerPage = 1;
+let selectedSessionPreviewId = "";
+let selectedSessionPreview = null;
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
 let coverCropConfirmHandler = null;
@@ -208,6 +229,7 @@ const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
 const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
+const SESSION_PICKER_PAGE_SIZE = 6;
 const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
 const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
@@ -294,29 +316,30 @@ const CHAT_COMMAND_MENU_ITEMS = [
   {
     id: "reload",
     command: "/reload",
-    title: "重跑最新回覆",
-    description: "可在後面補充不滿意或需要改進的地方。",
+    title: "改寫較早輸入",
+    description: "依倒數次序直接改寫使用者輸入並重新生成後續。",
     hint: "參數",
     form: "reload",
     fields: [
       {
-        name: "feedback",
-        label: "feedback",
+        name: "num",
+        label: "num",
+        type: "number",
+        placeholder: "1",
+        defaultValue: "1",
+        required: true,
+        help: "1 是最近一次、2 是倒數第二次使用者輸入。"
+      },
+      {
+        name: "comment",
+        label: "comment",
         type: "text",
-        placeholder: "不滿意或要改進的地方",
+        placeholder: "取代原輸入的新內容",
         defaultValue: "",
-        required: false,
-        help: "描述目前回覆不好或需要改進的地方；可留空直接重跑。"
+        required: true,
+        help: "這段內容會直接取代指定的使用者輸入。"
       }
     ]
-  },
-  {
-    id: "help",
-    command: "/ai_help",
-    title: "查看可用指令",
-    description: "顯示網頁可用的常用指令和功能。",
-    hint: "執行",
-    action: "help"
   }
 ];
 const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
@@ -557,11 +580,11 @@ const ENV_FIELD_GROUPS = [
         help: "選填。無法從 Token 解出 Client ID 時，用它產生邀請連結。"
       },
       {
-        key: "COMMAND_PREFIX",
-        label: "文字指令前綴",
+        key: "DISCORD_PUBLIC_KEY",
+        label: "Discord Public Key",
         type: "text",
-        placeholder: "!ai",
-        help: "例如：!ai 你好"
+        autocomplete: "off",
+        help: "選填備援。Bot 上線後會自動取得；也可填入 Developer Portal General Information 的 Public Key。"
       },
       {
         key: "DISCORD_TEXT_ATTACHMENT_MAX_BYTES",
@@ -1550,7 +1573,7 @@ function getActivePromptMode(state) {
   return normalizeRoleCardMode(activeCard?.mode);
 }
 
-function isCharacterCardCreationAssistantActive(state) {
+function isAssistantActive(state) {
   return Boolean(state?.activeAssistantMode);
 }
 
@@ -3654,7 +3677,13 @@ async function submitActiveChatCommandForm() {
     return true;
   }
   if (activeChatCommandForm.form === "reload") {
-    await reloadLatestAssistantReply(values.feedback || "");
+    const num = Number(values.num);
+    if (!Number.isInteger(num) || num < 1) {
+      focusActiveChatCommandField("num");
+      showToast("num 必須是 1 以上的整數。", "error");
+      return true;
+    }
+    await rewriteRecentUserInputFromCommand(num, values.comment || "");
     clearActiveChatCommandForm();
     return true;
   }
@@ -3809,7 +3838,7 @@ async function startCurrentChatTarget() {
     await startRoleCard(activeCardId);
     return;
   }
-  if (isCharacterCardCreationAssistantActive(appState)) {
+  if (isAssistantActive(appState)) {
     await startAssistantCard(appState.activeAssistantMode);
     return;
   }
@@ -3826,25 +3855,25 @@ async function stopActiveChatGeneration() {
   showToast(payload?.message || "已送出停止要求");
 }
 
-async function reloadLatestAssistantReply(feedback = "") {
+async function rewriteRecentUserInputFromCommand(num, comment = "") {
   if (!appState?.aiSessionStarted) {
-    showToast("尚未開始對話，不能重跑回覆。", "error");
+    showToast("尚未開始對話，不能改寫輸入。", "error");
     return;
   }
   try {
     isChatStreaming = true;
     renderStatus(appState);
-    showToast("正在重跑最新回覆...");
+    showToast(`正在改寫倒數第 ${num} 次使用者輸入...`);
     const payload = await request("/api/chat/reload", {
       method: "POST",
-      body: JSON.stringify({ feedback })
+      body: JSON.stringify({ num, comment })
     });
     appState = payload?.state || appState;
     renderMessages(appState);
     renderAiLogs(appState);
     renderStatus(appState);
     realignMobileChat({ scroll: true });
-    showToast("已重跑最新回覆");
+    showToast(`已改寫倒數第 ${num} 次使用者輸入`);
   } finally {
     isChatStreaming = false;
     if (appState) {
@@ -3853,15 +3882,9 @@ async function reloadLatestAssistantReply(feedback = "") {
   }
 }
 
-function showChatCommandHelp() {
-  selectedChatCommandIndex = 0;
-  openChatCommandMenu({ showAll: true });
-  showToast("已打開功能列表；輸入 / 可以搜尋指令。");
-}
-
 function showCurrentChatStatus() {
   const activeCard = getActiveRoleCardFromState(appState);
-  const target = activeCard?.name || (isCharacterCardCreationAssistantActive(appState) ? getActiveAssistantName(appState) : "未選擇");
+  const target = activeCard?.name || (isAssistantActive(appState) ? getActiveAssistantName(appState) : "未選擇");
   showToast(`${appState?.aiSessionStarted ? "已開始" : "尚未開始"}｜${target}`);
 }
 
@@ -3876,14 +3899,6 @@ async function runChatCommandAction(action = "", args = []) {
   }
   if (action === "stop") {
     await stopActiveChatGeneration();
-    return;
-  }
-  if (action === "reload") {
-    await reloadLatestAssistantReply(args.join(" "));
-    return;
-  }
-  if (action === "help") {
-    showChatCommandHelp();
     return;
   }
 }
@@ -3930,12 +3945,18 @@ async function handleChatSlashCommand(content = "") {
     return true;
   }
   if (command === "reload") {
-    await runChatCommandAction("reload", args);
-    clearChatInputValue();
-    return true;
-  }
-  if (command === "ai_help" || command === "help") {
-    await runChatCommandAction("help", args);
+    const numValue = args[0] || "";
+    const comment = args.slice(1).join(" ").trim();
+    const num = Number(numValue);
+    if (!Number.isInteger(num) || num < 1 || !comment) {
+      startChatCommandForm(getChatCommandMenuItemByForm("reload"), {
+        num: Number.isInteger(num) && num >= 1 ? String(num) : "1",
+        comment,
+        focusField: Number.isInteger(num) && num >= 1 ? "comment" : "num"
+      });
+      return true;
+    }
+    await rewriteRecentUserInputFromCommand(num, comment);
     clearChatInputValue();
     return true;
   }
@@ -4282,6 +4303,270 @@ function createRoleCardPickerTile(card, state) {
   actions.append(startBtn, editBtn, exportBtn, deleteBtn);
   tile.append(createPickerCover(card.coverImage, card.name || "封面", card.coverPosition), title, intro, actions);
   return tile;
+}
+
+function getSessionRoleCardLabel(session) {
+  return session?.roleCardName || session?.assistantMode || "未指定角色卡";
+}
+
+function renderSessionPreviewPlaceholder(message = "尚未選擇存檔。") {
+  selectedSessionPreviewId = "";
+  selectedSessionPreview = null;
+  if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.textContent = "存檔預覽";
+  }
+  if (el.sessionPreviewMeta) {
+    el.sessionPreviewMeta.textContent = "選擇一本存檔查看對話。";
+  }
+  if (el.sessionPreviewActions) {
+    el.sessionPreviewActions.hidden = true;
+  }
+  if (el.sessionPreviewMessages) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = message;
+    el.sessionPreviewMessages.replaceChildren(empty);
+  }
+}
+
+function renderSessionPicker(state = appState) {
+  if (!el.sessionPickerGrid || !state) {
+    return;
+  }
+  const sessions = Array.isArray(state.savedSessionsMeta)
+    ? [...state.savedSessionsMeta].reverse()
+    : [];
+  if (selectedSessionPreviewId && !sessions.some((session) => session.id === selectedSessionPreviewId)) {
+    renderSessionPreviewPlaceholder();
+  }
+  const totalPages = Math.max(1, Math.ceil(sessions.length / SESSION_PICKER_PAGE_SIZE));
+  sessionPickerPage = Math.min(Math.max(1, sessionPickerPage), totalPages);
+  const startIndex = (sessionPickerPage - 1) * SESSION_PICKER_PAGE_SIZE;
+  const pageItems = sessions.slice(startIndex, startIndex + SESSION_PICKER_PAGE_SIZE);
+  el.sessionPickerGrid.replaceChildren();
+
+  if (!pageItems.length) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = "尚無對話存檔。";
+    el.sessionPickerGrid.appendChild(empty);
+  } else {
+    for (let index = 0; index < pageItems.length; index += 3) {
+      const shelf = document.createElement("section");
+      shelf.className = "session-shelf";
+      shelf.setAttribute("aria-label", `第 ${Math.floor(index / 3) + 1} 層`);
+      const books = document.createElement("div");
+      books.className = "session-shelf-books";
+      pageItems.slice(index, index + 3).forEach((session, bookIndex) => {
+        books.appendChild(createSessionBook(session, index + bookIndex));
+      });
+      shelf.appendChild(books);
+      el.sessionPickerGrid.appendChild(shelf);
+    }
+  }
+
+  if (el.sessionPickerCount) {
+    el.sessionPickerCount.textContent = `共 ${sessions.length} 個存檔`;
+  }
+  if (el.sessionPickerPageInfo) {
+    el.sessionPickerPageInfo.textContent = `第 ${sessionPickerPage} / ${totalPages} 頁`;
+  }
+  if (el.sessionPickerPrevBtn) {
+    el.sessionPickerPrevBtn.disabled = sessionPickerPage <= 1;
+  }
+  if (el.sessionPickerNextBtn) {
+    el.sessionPickerNextBtn.disabled = sessionPickerPage >= totalPages;
+  }
+}
+
+function createSessionBook(session, index) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = `session-book session-book-tone-${index % 6}`;
+  if (selectedSessionPreviewId === session.id) {
+    item.classList.add("previewing");
+  }
+  item.title = `預覽「${session.name || "未命名存檔"}」`;
+  item.setAttribute("aria-label", item.title);
+  item.addEventListener("click", () => previewSession(session.id));
+
+  const binding = document.createElement("span");
+  binding.className = "session-book-binding";
+
+  const title = document.createElement("strong");
+  title.className = "session-book-title";
+  title.textContent = session.name || "未命名存檔";
+
+  const meta = document.createElement("span");
+  meta.className = "session-book-meta";
+  meta.textContent = `${session.messageCount || 0} 則`;
+
+  item.append(binding, title, meta);
+  return item;
+}
+
+function renderSessionPreview(session = {}) {
+  const conversation = Array.isArray(session.conversation) ? session.conversation : [];
+  selectedSessionPreviewId = session.id || "";
+  selectedSessionPreview = session;
+  if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.textContent = session.name || "存檔預覽";
+  }
+  if (el.sessionPreviewMeta) {
+    const updatedText = session.updatedAt
+      ? new Date(session.updatedAt).toLocaleString("zh-Hant")
+      : "未知時間";
+    el.sessionPreviewMeta.textContent =
+      `${getSessionRoleCardLabel(session)}｜${conversation.length} 則訊息｜${updatedText}`;
+  }
+  if (el.sessionPreviewActions) {
+    el.sessionPreviewActions.hidden = false;
+  }
+  if (!el.sessionPreviewMessages) {
+    return;
+  }
+  if (!conversation.length) {
+    const empty = document.createElement("p");
+    empty.className = "form-hint";
+    empty.textContent = "這個存檔沒有對話內容。";
+    el.sessionPreviewMessages.replaceChildren(empty);
+    renderSessionPicker(appState);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  conversation.forEach((message, index) => {
+    const item = document.createElement("article");
+    item.className = `session-preview-message ${message.role || "unknown"}`;
+
+    const header = document.createElement("div");
+    header.className = "session-preview-message-header";
+    const author = document.createElement("strong");
+    author.textContent = `#${index + 1} ${message.role === "assistant" ? getSessionRoleCardLabel(session) : "使用者"}`;
+    const timestamp = document.createElement("span");
+    timestamp.textContent = message.createdAt ? formatMessageTimestamp(message.createdAt) : "";
+    header.append(author, timestamp);
+
+    const body = document.createElement("div");
+    body.className = "session-preview-message-body markdown-body";
+    body.innerHTML = renderMarkdownToHtml(message.content || "", {
+      allowHtml: message.role === "assistant"
+    });
+
+    const imageAttachments = getMessageImageAttachments(message);
+    if (imageAttachments.length > 0) {
+      const imageGrid = document.createElement("div");
+      imageGrid.className = "message-image-grid";
+      imageAttachments.forEach((image) => {
+        const link = document.createElement("a");
+        link.className = "message-image-link";
+        link.href = image.imageUrl;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        const img = document.createElement("img");
+        img.src = image.imageUrl;
+        img.alt = image.fileName || "generated image";
+        img.loading = "lazy";
+        link.appendChild(img);
+        imageGrid.appendChild(link);
+      });
+      body.appendChild(imageGrid);
+    }
+
+    item.append(header, body);
+    fragment.appendChild(item);
+  });
+  el.sessionPreviewMessages.replaceChildren(fragment);
+  renderSessionPicker(appState);
+  if (isMobileLayout()) {
+    window.requestAnimationFrame(() => {
+      el.sessionPreviewPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+}
+
+async function previewSession(sessionId = "") {
+  if (!sessionId) {
+    return;
+  }
+  selectedSessionPreviewId = sessionId;
+  if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.textContent = "讀取預覽中...";
+  }
+  if (el.sessionPreviewMeta) {
+    el.sessionPreviewMeta.textContent = "";
+  }
+  renderSessionPicker(appState);
+  try {
+    const payload = await request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "GET" });
+    renderSessionPreview(payload.session || {});
+  } catch (error) {
+    renderSessionPreviewPlaceholder(error.message || "存檔預覽讀取失敗。");
+    showToast(error.message || "存檔預覽讀取失敗", "error");
+  }
+}
+
+function openSessionPicker() {
+  sessionPickerPage = 1;
+  renderSessionPicker(appState);
+  el.sessionPickerDialog?.showModal();
+}
+
+async function saveSession() {
+  const suggested = `對話存檔 ${new Date().toLocaleString("zh-Hant")}`;
+  const input = window.prompt("請輸入存檔名稱", suggested);
+  if (input === null) {
+    return;
+  }
+  try {
+    const payload = await request("/api/sessions/save", {
+      method: "POST",
+      body: JSON.stringify({ name: input.trim() })
+    });
+    appState = payload?.state || appState;
+    await refresh();
+    showToast("已保存目前對話");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function loadSession(session) {
+  const ok = window.confirm(
+    `載入「${session?.name || "這個存檔"}」會取代目前對話，確定要繼續嗎？`
+  );
+  if (!ok) {
+    return;
+  }
+  try {
+    const payload = await request(`/api/sessions/${encodeURIComponent(session.id)}/load`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    appState = payload?.state || appState;
+    el.sessionPickerDialog?.close();
+    await refresh();
+    showToast("已載入對話存檔");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function deleteSession(session) {
+  const ok = window.confirm(`確定要刪除對話存檔「${session.name}」嗎？此操作無法復原。`);
+  if (!ok) {
+    return;
+  }
+  try {
+    const payload = await request(`/api/sessions/${encodeURIComponent(session.id)}`, {
+      method: "DELETE"
+    });
+    appState = payload?.state || appState;
+    await refresh();
+    showToast("對話存檔已刪除");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function getActiveRoleCardFromState(state = appState) {
@@ -4633,7 +4918,7 @@ async function setAssistantMessageFeedback(messageId = "", feedback = "") {
 
 function getChatInputPlaceholder(state = appState, display = getWebDisplayConfig(state)) {
   const hasConversationTarget = Boolean(
-    state?.aiSessionStarted && (state.activeRoleCardId || isCharacterCardCreationAssistantActive(state))
+    state?.aiSessionStarted && (state.activeRoleCardId || isAssistantActive(state))
   );
   if (!hasConversationTarget) {
     return isMobileLayout() ? "請先選擇角色卡" : "請先選擇角色卡或啟用助手";
@@ -4650,7 +4935,7 @@ function renderChatHeader(state = appState) {
   if (el.chatHeaderSubtitle) {
     el.chatHeaderSubtitle.textContent = state?.aiSessionStarted
       ? [
-          activeCard?.name ? `角色卡：${activeCard.name}` : isCharacterCardCreationAssistantActive(state) ? getActiveAssistantName(state) : "對話已開始",
+          activeCard?.name ? `角色卡：${activeCard.name}` : isAssistantActive(state) ? getActiveAssistantName(state) : "對話已開始",
           state?.discord?.connected ? "Discord 已連線" : "本地對話"
         ].filter(Boolean).join("｜")
       : "選擇角色卡後開始對話";
@@ -5009,14 +5294,14 @@ function renderAiLogs(state) {
 
 function renderStatus(state) {
   const discordAuthorizeUrl = state.discord?.authorizeUrl || "";
-  const hasConversationTarget = Boolean(state.aiSessionStarted && (state.activeRoleCardId || isCharacterCardCreationAssistantActive(state)));
+  const hasConversationTarget = Boolean(state.aiSessionStarted && (state.activeRoleCardId || isAssistantActive(state)));
   const display = getWebDisplayConfig(state);
 
   if (pendingRoleCardStartId) {
     el.startStatus.textContent = "切換中";
     el.startStatus.classList.add("started");
-  } else if (state.aiSessionStarted && (state.activeRoleCardId || isCharacterCardCreationAssistantActive(state))) {
-    el.startStatus.textContent = isCharacterCardCreationAssistantActive(state)
+  } else if (state.aiSessionStarted && (state.activeRoleCardId || isAssistantActive(state))) {
+    el.startStatus.textContent = isAssistantActive(state)
       ? `已開始（${getActiveAssistantName(state)}）`
       : "已開始";
     el.startStatus.classList.add("started");
@@ -7194,6 +7479,7 @@ async function refresh() {
   renderConversationModelSettings(state);
   renderAllPromptModeSelects(getActivePromptMode(state));
   renderRoleCards(state);
+  renderSessionPicker(state);
   renderMessages(state);
   renderAiLogs(state);
   renderStatus(state);
@@ -7888,6 +8174,45 @@ function bindEvents() {
     });
   }
 
+  if (el.saveSessionBtn) {
+    el.saveSessionBtn.addEventListener("click", saveSession);
+  }
+  if (el.selectSessionBtn) {
+    el.selectSessionBtn.addEventListener("click", openSessionPicker);
+  }
+  if (el.saveSessionFromDialogBtn) {
+    el.saveSessionFromDialogBtn.addEventListener("click", saveSession);
+  }
+  if (el.loadSessionPreviewBtn) {
+    el.loadSessionPreviewBtn.addEventListener("click", () => {
+      if (selectedSessionPreview) {
+        void loadSession(selectedSessionPreview);
+      }
+    });
+  }
+  if (el.deleteSessionPreviewBtn) {
+    el.deleteSessionPreviewBtn.addEventListener("click", () => {
+      if (selectedSessionPreview) {
+        void deleteSession(selectedSessionPreview);
+      }
+    });
+  }
+  if (el.closeSessionPickerBtn) {
+    el.closeSessionPickerBtn.addEventListener("click", () => el.sessionPickerDialog?.close());
+  }
+  if (el.sessionPickerPrevBtn) {
+    el.sessionPickerPrevBtn.addEventListener("click", () => {
+      sessionPickerPage -= 1;
+      renderSessionPicker(appState);
+    });
+  }
+  if (el.sessionPickerNextBtn) {
+    el.sessionPickerNextBtn.addEventListener("click", () => {
+      sessionPickerPage += 1;
+      renderSessionPicker(appState);
+    });
+  }
+
   el.createRoleCardBtn.addEventListener("click", () => openRoleCardDialog(null));
   if (el.createAssistantCardBtn) {
     el.createAssistantCardBtn.addEventListener("click", createAssistantCard);
@@ -8153,7 +8478,7 @@ function bindEvents() {
         return;
       }
       window.open(discordAuthorizeUrl, "_blank", "noopener,noreferrer");
-      showToast("新增 Bot 後，可以在 Discord 使用 Slash 指令 /ai");
+      showToast("新增 Bot 後，可以在 Discord 使用 Slash 指令");
     });
   }
 
@@ -8556,6 +8881,7 @@ function bindEvents() {
     }
   });
   bindDialogBackdropClose(el.roleCardPickerDialog);
+  bindDialogBackdropClose(el.sessionPickerDialog);
 
 }
 

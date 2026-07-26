@@ -37,8 +37,8 @@
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
+| `DISCORD_PUBLIC_KEY` | 自動取得 | 驗證 Discord Application Authorized Webhook；Bot 未連線時可填 Developer Portal Public Key 作備援。 |
 | `DISCORD_GUILD_ID` | 空 | 額外指定 guild；啟動時亦會同步所有已加入的 guild。 |
-| `COMMAND_PREFIX` | `!ai` | Discord 文字指令前綴。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
 | `DISCORD_LOGIN_RETRY_INITIAL_MS` | `15000` | Discord 登入第一次重試等待時間。 |
 | `DISCORD_LOGIN_RETRY_MAX_MS` | `300000` | Discord 登入退避上限。 |
@@ -146,33 +146,31 @@ Slash 指令：
 
 | 指令 | 參數 | 說明 |
 | --- | --- | --- |
-| `/ai` | `content`、`file` | 輸入文字或上傳 `.txt`。 |
 | `/ai_start` | 無 | 在目前頻道開始對話，重置玩家座位。 |
 | `/ai_status` | 無 | 查看 Bot、模型、對話與玩家狀態。 |
 | `/stop` | 無 | 停止目前生成。 |
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
-| `/reload` | `feedback` | 移除最新 AI 回覆並重跑。 |
-| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；保持時間請選擇 `{{保持時間}}`。 |
-| `/ai_help` | 無 | 顯示可用指令。 |
-
-文字指令：
-
-```text
-!ai help
-!ai status
-!ai start
-!ai player_set 2
-!ai reload 這次回覆太短
-```
+| `/reload` | `num`、`comment` | 直接改寫倒數第 `num` 次使用者輸入並重新生成；`1` 代表最近一次。 |
+| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；所有模板都可在括號內補充並另起一行追加內容。 |
 
 Discord 行為：
 
 - Bot 每次上線都會立即同步 Slash 指令到所有已加入的 Discord 伺服器，並同步全域指令。
+- Bot 新加入伺服器時，會優先在系統頻道、否則在第一個有權發言的文字頻道送出私人聊天與 `/ai_start` 使用說明。
+- 應用程式安裝到使用者帳號時，`APPLICATION_AUTHORIZED` Webhook 會觸發 Bot 私訊使用說明。
 - `/ai_start` 會把該伺服器的對話固定在目前頻道。
+- 已啟用的頻道與 Bot 私訊可以直接輸入對話，不需要文字指令前綴。
 - 第一個發言者自動成為 `user1`，第二個成為 `user2`。
 - `/player_set 2` 可手動把自己設成 `user2`。
 - 使用者編輯 Discord 原訊息時，Bot 會從該訊息建立備份並重新生成後續分支。
 - AI 正文會自行加上 `👍` / `👎` 反應；點擊後會把回饋附到下一則 user 訊息。
+
+Discord Developer Portal 設定：
+
+1. 在 Installation 啟用 `Guild Install` 與 `User Install`，並使用 Discord Provided Link。
+2. Guild Install 加入 `bot`、`applications.commands` 與 Bot 所需權限；User Install 加入 `applications.commands`。
+3. 將 Webhooks Endpoint 設為可公開連線的 `https://你的網址/api/discord/events`，啟用 Events 並訂閱 `APPLICATION_AUTHORIZED`。
+4. Bot 上線後會自動取得驗證用 Public Key；只有 Webhook 可能早於 Bot 連線時，才需要填 `DISCORD_PUBLIC_KEY`。
 
 ## 預設與發佈
 
@@ -245,7 +243,10 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `POST` | `/api/messages/:id/feedback` | 喜歡 / 不喜歡 / 取消回饋。 |
 | `POST` | `/api/chat/send-stream` | 網頁串流送出一輪對話。 |
 | `POST` | `/api/chat/stop` | 停止目前生成。 |
-| `POST` | `/api/chat/reload` | 重跑最新 AI 回覆。 |
+| `POST` | `/api/chat/reload` | 依 `num`、`comment` 改寫較早的使用者輸入並重算。 |
+| `GET` / `POST` | `/api/sessions`、`/api/sessions/save` | 列出或建立網頁對話存檔。 |
+| `GET` / `DELETE` | `/api/sessions/:id` | 預覽或刪除網頁對話存檔。 |
+| `POST` | `/api/sessions/:id/load` | 載入存檔並取代目前對話。 |
 | `POST` | `/api/modular-prompts/:mode/preview` | 預覽 Prompt 模式。 |
 | `PUT` / `DELETE` | `/api/modular-prompts/:mode` | 保存或刪除 Prompt 模式。 |
 
@@ -257,7 +258,7 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/cardstate.json` | 使用者設定與角色卡分離備份。 |
-| `data/saved-sessions/` | 舊版對話存檔資料；功能移除後只保留既有本機檔案。 |
+| `data/saved-sessions/` | 網頁對話存檔的訊息與 AI 呼叫紀錄。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
 | `defaults/app-defaults.json` | 可提交的主功能與 Prompt 發布預設。 |
 | `defaults/novelai-defaults.json` | 可提交的 NovelAI 發布預設。 |

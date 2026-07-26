@@ -2,6 +2,14 @@ function safeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function hasActiveAssistantTarget(state = {}) {
+  return Boolean(safeText(state?.activeAssistantMode));
+}
+
+export function hasActiveConversationTarget(state = {}) {
+  return Boolean(safeText(state?.activeRoleCardId) || hasActiveAssistantTarget(state));
+}
+
 function requireDependency(deps, name) {
   const dependency = deps?.[name];
   if (typeof dependency !== "function") {

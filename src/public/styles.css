@@ -891,7 +891,14 @@ button {
   max-height: min(92vh, 980px);
 }
 
-.role-picker-shell {
+dialog.session-picker-dialog {
+  width: min(1180px, 94vw);
+  max-width: none;
+  max-height: min(92vh, 980px);
+}
+
+.role-picker-shell,
+.session-picker-shell {
   gap: 14px;
 }
 
@@ -913,6 +920,257 @@ button {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
+}
+
+.session-picker-shell {
+  height: min(760px, 86vh);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.session-picker-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.session-picker-content {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(420px, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+}
+
+.session-picker-grid {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.session-shelf {
+  position: relative;
+  min-height: 218px;
+  display: grid;
+  align-items: end;
+  padding: 10px 12px 22px;
+  background: rgba(7, 10, 19, 0.34);
+}
+
+.session-shelf::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 18px;
+  border: 1px solid #71472d;
+  border-radius: 3px;
+  background: #4f301f;
+  box-shadow: 0 5px 0 #28180f, 0 8px 12px rgba(0, 0, 0, 0.34);
+}
+
+.session-shelf-books {
+  height: 184px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.session-book {
+  position: relative;
+  min-width: 0;
+  height: 174px;
+  display: grid;
+  grid-template-rows: 10px minmax(0, 1fr) auto;
+  gap: 5px;
+  align-items: center;
+  justify-items: center;
+  padding: 0 9px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 4px 7px 5px 4px;
+  background: #31587a;
+  color: #fff;
+  box-shadow: inset 5px 0 0 rgba(0, 0, 0, 0.18), inset -3px 0 0 rgba(255, 255, 255, 0.1), 3px 4px 8px rgba(0, 0, 0, 0.3);
+  transform-origin: bottom center;
+}
+
+.session-book:hover,
+.session-book:focus-visible {
+  transform: translateY(-5px);
+  filter: brightness(1.08);
+}
+
+.session-book.previewing {
+  outline: 3px solid #ffd54f;
+  outline-offset: 2px;
+  transform: translateY(-5px);
+}
+
+.session-book-tone-0 {
+  background: #31587a;
+}
+
+.session-book-tone-1 {
+  height: 166px;
+  background: #8f3f54;
+}
+
+.session-book-tone-2 {
+  height: 180px;
+  background: #3f6b50;
+}
+
+.session-book-tone-3 {
+  height: 170px;
+  background: #69518b;
+}
+
+.session-book-tone-4 {
+  height: 182px;
+  background: #9a6133;
+}
+
+.session-book-tone-5 {
+  height: 164px;
+  background: #2f6c73;
+}
+
+.session-book-binding {
+  width: calc(100% + 18px);
+  height: 8px;
+  border-top: 2px solid rgba(255, 255, 255, 0.28);
+  border-bottom: 2px solid rgba(0, 0, 0, 0.2);
+}
+
+.session-book-title {
+  max-height: 126px;
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 1.35;
+  text-align: center;
+  word-break: break-word;
+}
+
+.session-book-meta {
+  width: 100%;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.26);
+  font-size: 12px;
+  text-align: center;
+}
+
+.session-preview-panel {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 7, 19, 0.32);
+}
+
+.session-preview-panel > header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.session-preview-heading {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.session-preview-heading strong {
+  overflow: hidden;
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-preview-heading span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.session-preview-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.session-preview-actions[hidden] {
+  display: none;
+}
+
+.session-preview-actions button {
+  min-width: 72px;
+  padding-inline: 10px;
+}
+
+.session-preview-messages {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px;
+}
+
+.session-preview-message {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.session-preview-message.user {
+  border-color: rgba(77, 141, 255, 0.24);
+}
+
+.session-preview-message.assistant {
+  border-color: rgba(255, 79, 200, 0.24);
+}
+
+.session-preview-message-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.session-preview-message-header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-preview-message-header span {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-preview-message-body {
+  max-height: 240px;
+  overflow: auto;
+  color: #dbe8ff;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .role-picker-card {
@@ -3502,8 +3760,17 @@ body.novelai-studio-body .novelai-small-preview {
   }
 
   .role-picker-grid,
+  .session-picker-content,
   .role-picker-pagination {
     grid-template-columns: 1fr;
+  }
+
+  .session-picker-shell {
+    height: min(820px, 90vh);
+  }
+
+  .session-preview-panel {
+    min-height: 280px;
   }
 
   .role-picker-card {
@@ -3902,22 +4169,88 @@ body.novelai-studio-body .novelai-small-preview {
     -webkit-overflow-scrolling: touch;
   }
 
-  .role-picker-shell {
+  .role-picker-shell,
+  .session-picker-shell {
     height: 100%;
     max-height: 100%;
     min-height: 0;
-    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 10px;
     padding: 14px 12px calc(env(safe-area-inset-bottom, 0px) + 12px);
     overflow: hidden;
   }
 
-  .role-picker-grid {
+  .role-picker-shell {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .session-picker-shell {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .role-picker-grid,
+  .session-picker-content {
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .session-picker-content {
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: 1fr;
+    align-content: start;
+  }
+
+  .session-picker-grid {
+    flex: none;
+    overflow: visible;
+  }
+
+  dialog.session-picker-dialog {
+    width: 100vw;
+    max-width: none;
+  }
+
+  .session-shelf {
+    min-height: 170px;
+    padding: 8px 8px 20px;
+  }
+
+  .session-shelf-books {
+    height: 140px;
+    gap: 6px;
+  }
+
+  .session-book,
+  .session-book-tone-1,
+  .session-book-tone-2,
+  .session-book-tone-3,
+  .session-book-tone-4,
+  .session-book-tone-5 {
+    height: 136px;
+    padding-inline: 6px;
+  }
+
+  .session-book-title {
+    max-height: 92px;
+    font-size: 13px;
+  }
+
+  .session-preview-panel > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .session-preview-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .session-preview-panel {
+    flex: none;
+    min-height: 360px;
   }
 
   .role-picker-grid {

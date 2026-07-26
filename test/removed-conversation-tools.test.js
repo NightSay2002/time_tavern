@@ -14,11 +14,17 @@ test("removed conversation tools are absent from Discord and web command entry p
     assert.doesNotMatch(webSource, new RegExp(`command:\\s*"/${command}"`));
   }
 
-  assert.doesNotMatch(serverSource, /\/api\/sessions/);
   assert.doesNotMatch(serverSource, /\/api\/chat\/(?:replay|run-time)/);
-  assert.doesNotMatch(webSource, /\/api\/sessions/);
   assert.doesNotMatch(webSource, /\/api\/chat\/(?:replay|run-time)/);
-  assert.doesNotMatch(webHtml, /sessionPickerDialog|saveSessionBtn|selectSessionBtn/);
+});
+
+test("saved sessions remain available through the web without session commands", () => {
+  assert.match(serverSource, /\/api\/sessions\/save/);
+  assert.match(serverSource, /sessionLoadMatch/);
+  assert.match(webSource, /\/api\/sessions\/\$\{encodeURIComponent\(session\.id\)\}\/load/);
+  assert.match(webHtml, /sessionPickerDialog/);
+  assert.match(webHtml, /saveSessionBtn/);
+  assert.match(webHtml, /selectSessionBtn/);
 });
 
 test("message editing replay remains available", () => {
