@@ -5174,6 +5174,35 @@ body.novelai-bright-body textarea {
   align-items: flex-start;
 }
 
+.nai-library-tabs {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(211, 148, 232, 0.38);
+  border-radius: 8px;
+  background: #f6eafa;
+}
+
+.nai-library-tabs button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #765485;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.nai-library-tabs button.active {
+  background: #fff;
+  color: #7d2fa3;
+  box-shadow: 0 2px 8px rgba(121, 75, 173, 0.14);
+}
+
 .nai-history-header-actions {
   min-width: 0;
   display: flex;
@@ -5218,7 +5247,7 @@ body.novelai-bright-body textarea {
 .nai-history-item {
   min-width: 0;
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 28px;
+  grid-template-columns: 72px minmax(0, 1fr) 40px;
   gap: 8px;
   align-items: center;
   padding: 8px;
@@ -5227,6 +5256,13 @@ body.novelai-bright-body textarea {
   background: rgba(255, 255, 255, 0.78);
   content-visibility: auto;
   contain-intrinsic-size: auto 90px;
+}
+
+.nai-history-item-action {
+  min-width: 0;
+  min-height: 36px;
+  padding: 3px;
+  font-size: 12px;
 }
 
 .nai-history-item.active {

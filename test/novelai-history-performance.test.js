@@ -41,3 +41,12 @@ test("NovelAI can clear only the local history store after confirmation", () => 
   assert.match(novelAiSource, /transaction\.objectStore\(NOVELAI_HISTORY_STORE\)\.clear\(\);/u);
   assert.match(novelAiSource, /window\.confirm\("確定要清空所有 NovelAI 本地歷史圖片嗎？此操作無法復原。"\)/u);
 });
+
+test("NovelAI switches between history and favorites and restores unfavorited images", () => {
+  assert.match(novelAiHtml, /id="novelAiHistoryTabBtn"/u);
+  assert.match(novelAiHtml, /id="novelAiFavoritesTabBtn"/u);
+  assert.match(novelAiSource, /await listAlbumPage\(/u);
+  assert.match(novelAiSource, /await saveHistoryItems\(\[historyItem\]\);/u);
+  assert.match(novelAiSource, /method: "DELETE"/u);
+  assert.match(novelAiSource, /novelAiLibraryView = "history";/u);
+});

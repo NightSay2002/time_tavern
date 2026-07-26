@@ -6,7 +6,7 @@
     <title>NovelAI 跑圖｜時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260726-novelai-history-clear" />
+    <link rel="stylesheet" href="/styles.css?v=20260726-novelai-library-tabs" />
   </head>
   <body class="novelai-bright-body">
     <main class="nai-bright-shell">
@@ -180,25 +180,25 @@
         <header>
           <div>
             <h2>生成圖片</h2>
-            <p>拖入圖片可選擇用途；右側歷史可切換預覽。</p>
+          <p>拖入圖片可選擇用途；右側圖片庫可切換預覽。</p>
           </div>
         </header>
         <div id="novelAiOutputGrid" class="nai-main-output"></div>
       </section>
 
-      <aside class="nai-history-panel" aria-label="生成歷史">
+      <aside class="nai-history-panel" aria-label="圖片庫">
         <header>
-          <div>
-            <strong>歷史</strong>
-            <span>點擊縮圖切換中間圖片</span>
+          <div class="nai-library-tabs" role="tablist" aria-label="圖片來源">
+            <button id="novelAiHistoryTabBtn" type="button" role="tab" aria-controls="novelAiHistoryGrid" aria-selected="true">歷史</button>
+            <button id="novelAiFavoritesTabBtn" type="button" role="tab" aria-controls="novelAiHistoryGrid" aria-selected="false">收藏</button>
           </div>
           <div class="nai-history-header-actions">
             <button id="novelAiClearHistoryBtn" type="button" class="nai-history-clear-button" disabled>清空</button>
-            <button id="novelAiRefreshAlbumBtn" type="button" class="nai-icon-button" title="刷新歷史" aria-label="刷新歷史">↻</button>
+            <button id="novelAiRefreshAlbumBtn" type="button" class="nai-icon-button" title="刷新列表" aria-label="刷新列表">↻</button>
           </div>
         </header>
-        <div id="novelAiHistoryGrid" class="nai-history-list"></div>
-        <footer class="nai-history-pagination" aria-label="歷史分頁">
+        <div id="novelAiHistoryGrid" class="nai-history-list" role="tabpanel" aria-labelledby="novelAiHistoryTabBtn"></div>
+        <footer class="nai-history-pagination" aria-label="圖片分頁">
           <button id="novelAiHistoryPrevBtn" type="button" class="nai-icon-button" aria-label="上一頁" title="上一頁">‹</button>
           <span id="novelAiHistoryPageInfo">0 張</span>
           <button id="novelAiHistoryNextBtn" type="button" class="nai-icon-button" aria-label="下一頁" title="下一頁">›</button>
@@ -260,6 +260,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260726-novelai-history-clear"></script>
+    <script type="module" src="/novelai.js?v=20260726-novelai-library-tabs"></script>
   </body>
 </html>

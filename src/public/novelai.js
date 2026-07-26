@@ -53,6 +53,8 @@ const el = {
   novelAiGenerateLabel: document.getElementById("novelAiGenerateLabel"),
   novelAiOutputGrid: document.getElementById("novelAiOutputGrid"),
   novelAiHistoryGrid: document.getElementById("novelAiHistoryGrid"),
+  novelAiHistoryTabBtn: document.getElementById("novelAiHistoryTabBtn"),
+  novelAiFavoritesTabBtn: document.getElementById("novelAiFavoritesTabBtn"),
   novelAiClearHistoryBtn: document.getElementById("novelAiClearHistoryBtn"),
   novelAiRefreshAlbumBtn: document.getElementById("novelAiRefreshAlbumBtn"),
   novelAiHistoryPrevBtn: document.getElementById("novelAiHistoryPrevBtn"),
@@ -86,6 +88,9 @@ let novelAiHistoryRenderToken = 0;
 let novelAiHistoryObjectUrls = [];
 let novelAiMainImageObjectUrl = "";
 let novelAiImageViewerObjectUrl = "";
+let novelAiLibraryView = "history";
+let novelAiAlbumItems = [];
+let novelAiAlbumLoaded = false;
 let novelAiPendingDropFiles = [];
 let novelAiPendingDownloadItem = null;
 let novelAiDragDepth = 0;
@@ -2163,6 +2168,23 @@ async function getItemDataUrl(item = {}) {
   return blobToDataUrl(await response.blob());
 }
 
+async function getItemBlob(item = {}) {
+  if (item.imageBlob instanceof Blob) {
+    return item.imageBlob;
+  }
+  if (item.dataUrl) {
+    return dataUrlToBlob(item.dataUrl);
+  }
+  if (!item.imageUrl) {
+    throw new Error("找不到圖片資料。");
+  }
+  const response = await fetch(item.imageUrl);
+  if (!response.ok) {
+    throw new Error(`圖片讀取失敗(${response.status})。`);
+  }
+  return response.blob();
+}
+
 function idbRequest(requestObject) {
   return new Promise((resolve, reject) => {
     requestObject.onsuccess = () => resolve(requestObject.result);
@@ -2289,6 +2311,33 @@ async function listHistoryPage(page = 1, pageSize = NOVELAI_HISTORY_PAGE_SIZE) {
   } finally {
     db.close();
   }
+}
+
+function normalizeAlbumItem(item = {}) {
+  return {
+    ...item,
+    metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : {},
+    imageUrl: String(item.imageUrl || "").trim(),
+    isFavorite: true
+  };
+}
+
+async function listAlbumPage(page = 1, pageSize = NOVELAI_HISTORY_PAGE_SIZE, options = {}) {
+  if (options.reload === true || !novelAiAlbumLoaded) {
+    const payload = await request("/api/novelai/album");
+    novelAiAlbumItems = (Array.isArray(payload?.items) ? payload.items : []).map(normalizeAlbumItem);
+    novelAiAlbumLoaded = true;
+  }
+  const total = novelAiAlbumItems.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(totalPages, Math.max(1, Math.floor(Number(page) || 1)));
+  const offset = (currentPage - 1) * pageSize;
+  return {
+    items: novelAiAlbumItems.slice(offset, offset + pageSize),
+    total,
+    totalPages,
+    page: currentPage
+  };
 }
 
 function canvasToBlob(canvas, type = "image/webp", quality = 0.82) {
@@ -2541,9 +2590,23 @@ function renderMainImage(item = null) {
   `;
   const actions = document.createElement("div");
   actions.className = "novelai-image-actions";
+  const favoriteAction = makeActionButton(
+    item.isFavorite ? "取消收藏" : "收藏",
+    "secondary nai-favorite-action",
+    async () => {
+      favoriteAction.disabled = true;
+      const changed = item.isFavorite
+        ? await unfavoriteImage(item)
+        : await favoriteImage(item);
+      if (!changed && favoriteAction.isConnected) {
+        favoriteAction.disabled = false;
+      }
+    }
+  );
   actions.append(
     makeActionButton("放大", "secondary nai-view-action", () => openImageViewerDialog(item)),
     makeActionButton("內容", "secondary nai-content-action", () => openImageContentDialog(item)),
+    favoriteAction,
     makeActionButton("還原設定", "nai-restore-action", () => {
       applyMetadataToForm(item.metadata || item.settings || {});
       showToast("已把圖片設定還原到表單");
@@ -2619,7 +2682,7 @@ function renderHistoryList(items = []) {
   if (!novelAiHistoryItems.length) {
     const empty = document.createElement("p");
     empty.className = "nai-empty-inline";
-    empty.textContent = "還沒有生成歷史。";
+    empty.textContent = novelAiLibraryView === "favorites" ? "還沒有收藏圖片。" : "還沒有生成歷史。";
     el.novelAiHistoryGrid.appendChild(empty);
     return;
   }
@@ -2633,7 +2696,7 @@ function renderHistoryList(items = []) {
         <strong></strong>
         <span></span>
       </div>
-      <button type="button" class="muted" data-history-action="delete">×</button>
+      <button type="button" class="muted nai-history-item-action" data-history-action="remove"></button>
     `;
     const image = card.querySelector("img");
     const imageSource = createItemImageSource(item, { thumbnail: true });
@@ -2647,7 +2710,20 @@ function renderHistoryList(items = []) {
     card.querySelector("strong").textContent = truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 36);
     card.querySelector("span").textContent = item.createdAt ? new Date(item.createdAt).toLocaleString("zh-Hant") : "";
     card.querySelector('[data-history-action="select"]').addEventListener("click", () => selectHistoryItem(item, { scroll: true }));
-    card.querySelector('[data-history-action="delete"]').addEventListener("click", async () => {
+    const removeButton = card.querySelector('[data-history-action="remove"]');
+    const isFavorite = novelAiLibraryView === "favorites";
+    removeButton.textContent = isFavorite ? "取消" : "×";
+    removeButton.setAttribute("aria-label", isFavorite ? "取消收藏" : "刪除歷史圖片");
+    removeButton.title = isFavorite ? "取消收藏並移回歷史" : "刪除歷史圖片";
+    removeButton.addEventListener("click", async () => {
+      removeButton.disabled = true;
+      if (isFavorite) {
+        const changed = await unfavoriteImage(item);
+        if (!changed && removeButton.isConnected) {
+          removeButton.disabled = false;
+        }
+        return;
+      }
       await deleteHistoryItem(item.id);
       if (novelAiSelectedHistoryId === item.id) {
         renderMainImage(null);
@@ -2662,6 +2738,15 @@ function renderHistoryList(items = []) {
 
 function renderHistoryPagination() {
   const totalPages = Math.max(1, Math.ceil(novelAiHistoryTotal / NOVELAI_HISTORY_PAGE_SIZE));
+  const showingFavorites = novelAiLibraryView === "favorites";
+  el.novelAiHistoryTabBtn?.classList.toggle("active", !showingFavorites);
+  el.novelAiHistoryTabBtn?.setAttribute("aria-selected", showingFavorites ? "false" : "true");
+  el.novelAiFavoritesTabBtn?.classList.toggle("active", showingFavorites);
+  el.novelAiFavoritesTabBtn?.setAttribute("aria-selected", showingFavorites ? "true" : "false");
+  el.novelAiHistoryGrid?.setAttribute(
+    "aria-labelledby",
+    showingFavorites ? "novelAiFavoritesTabBtn" : "novelAiHistoryTabBtn"
+  );
   if (el.novelAiHistoryPageInfo) {
     el.novelAiHistoryPageInfo.textContent = novelAiHistoryTotal
       ? `${novelAiHistoryPage} / ${totalPages} · ${novelAiHistoryTotal} 張`
@@ -2674,14 +2759,20 @@ function renderHistoryPagination() {
     el.novelAiHistoryNextBtn.disabled = novelAiHistoryPage >= totalPages;
   }
   if (el.novelAiClearHistoryBtn) {
-    el.novelAiClearHistoryBtn.disabled = novelAiHistoryTotal === 0;
+    el.novelAiClearHistoryBtn.hidden = showingFavorites;
+    el.novelAiClearHistoryBtn.disabled = showingFavorites || novelAiHistoryTotal === 0;
   }
 }
 
-async function renderHistory() {
+async function renderHistory(options = {}) {
   const renderToken = ++novelAiHistoryRenderToken;
+  renderHistoryPagination();
   try {
-    const result = await listHistoryPage(novelAiHistoryPage);
+    const result = novelAiLibraryView === "favorites"
+      ? await listAlbumPage(novelAiHistoryPage, NOVELAI_HISTORY_PAGE_SIZE, {
+        reload: options.reloadAlbum === true
+      })
+      : await listHistoryPage(novelAiHistoryPage);
     if (renderToken !== novelAiHistoryRenderToken) {
       return;
     }
@@ -2694,13 +2785,27 @@ async function renderHistory() {
       return;
     }
     novelAiHistoryTotal = 0;
-    renderEmpty(el.novelAiHistoryGrid, error.message || "本地歷史讀取失敗。");
+    renderEmpty(
+      el.novelAiHistoryGrid,
+      error.message || (novelAiLibraryView === "favorites" ? "收藏讀取失敗。" : "本地歷史讀取失敗。")
+    );
     renderHistoryPagination();
   }
 }
 
+async function setNovelAiLibraryView(view = "history") {
+  if (!["history", "favorites"].includes(view)) {
+    return;
+  }
+  novelAiLibraryView = view;
+  novelAiHistoryPage = 1;
+  renderHistoryPagination();
+  await renderHistory();
+  el.novelAiHistoryGrid?.scrollTo?.({ top: 0 });
+}
+
 async function clearHistoryFromUi() {
-  if (!novelAiHistoryTotal) {
+  if (novelAiLibraryView !== "history" || !novelAiHistoryTotal) {
     return;
   }
   const confirmed = window.confirm("確定要清空所有 NovelAI 本地歷史圖片嗎？此操作無法復原。");
@@ -3102,6 +3207,7 @@ async function downloadImage(item = {}, options = {}) {
 }
 
 async function favoriteImage(item = {}) {
+  let albumItem = null;
   try {
     const payload = await request("/api/novelai/album", {
       method: "POST",
@@ -3114,9 +3220,59 @@ async function favoriteImage(item = {}) {
         }
       })
     });
-    showToast(`已收藏：${payload?.item?.fileName || "NovelAI 圖片"}`);
+    albumItem = normalizeAlbumItem(payload?.item || {});
+    try {
+      if (item.id) {
+        await deleteHistoryItem(item.id);
+      }
+    } catch (error) {
+      await request(`/api/novelai/album/${encodeURIComponent(albumItem.id)}`, { method: "DELETE" }).catch(() => {});
+      throw error;
+    }
+    if (novelAiAlbumLoaded) {
+      novelAiAlbumItems = [albumItem, ...novelAiAlbumItems.filter((entry) => entry.id !== albumItem.id)];
+    }
+    novelAiHistoryPage = 1;
+    await renderHistory();
+    renderMainImage(albumItem);
+    showToast(`已收藏：${albumItem.fileName || "NovelAI 圖片"}`);
+    return true;
   } catch (error) {
     showToast(error.message || "收藏失敗", "error");
+    return false;
+  }
+}
+
+async function unfavoriteImage(item = {}) {
+  let historyItem = null;
+  try {
+    historyItem = {
+      ...item,
+      id: makeClientId("nai_img"),
+      imageBlob: await getItemBlob(item),
+      imageUrl: "",
+      dataUrl: "",
+      thumbnailBlob: null,
+      isFavorite: false,
+      createdAt: new Date().toISOString()
+    };
+    await saveHistoryItems([historyItem]);
+    try {
+      await request(`/api/novelai/album/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    } catch (error) {
+      await deleteHistoryItem(historyItem.id).catch(() => {});
+      throw error;
+    }
+    novelAiAlbumItems = novelAiAlbumItems.filter((entry) => entry.id !== item.id);
+    novelAiLibraryView = "history";
+    novelAiHistoryPage = 1;
+    await renderHistory();
+    renderMainImage(historyItem);
+    showToast("已取消收藏並移回歷史");
+    return true;
+  } catch (error) {
+    showToast(error.message || "取消收藏失敗", "error");
+    return false;
   }
 }
 
@@ -3529,6 +3685,7 @@ async function runNovelAiGenerationOnce(options = {}) {
     novelAiCurrentImages = generatedImages;
     renderMainImage(generatedImages[0] || null);
     await saveHistoryItems(generatedImages);
+    novelAiLibraryView = "history";
     novelAiHistoryPage = 1;
     await renderHistory();
     await refreshStatus();
@@ -3631,8 +3788,10 @@ function bindEvents() {
   el.novelAiRefreshStatusBtn.addEventListener("click", refreshStatus);
   el.novelAiRefreshAlbumBtn.addEventListener("click", async () => {
     novelAiHistoryPage = 1;
-    await renderHistory();
+    await renderHistory({ reloadAlbum: novelAiLibraryView === "favorites" });
   });
+  el.novelAiHistoryTabBtn?.addEventListener("click", () => setNovelAiLibraryView("history"));
+  el.novelAiFavoritesTabBtn?.addEventListener("click", () => setNovelAiLibraryView("favorites"));
   el.novelAiClearHistoryBtn?.addEventListener("click", clearHistoryFromUi);
   el.novelAiHistoryPrevBtn?.addEventListener("click", async () => {
     if (novelAiHistoryPage <= 1) {
