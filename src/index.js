@@ -29,6 +29,7 @@ import {
   findRecentUserMessageIndex,
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
+import { getContextMessageRoundLabels } from "./context-rounds.js";
 import {
   isLegacyDiscordTextCommand,
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
@@ -6699,10 +6700,11 @@ function hasPendingModelImageGeneration(result = {}) {
 }
 
 function formatCompressionContextBlock(messages = []) {
-  const content = (Array.isArray(messages) ? messages : [])
+  const messageList = Array.isArray(messages) ? messages : [];
+  const labels = getContextMessageRoundLabels(messageList);
+  const content = messageList
     .map((message, index) => {
-      const role = message?.role === "assistant" ? "assistant" : "user";
-      return [`#${index + 1} ${role}`, getMessageModelContent(message) || safeText(message?.content) || "（空白）"].join("\n");
+      return [labels[index], getMessageModelContent(message) || safeText(message?.content) || "（空白）"].join("\n");
     })
     .join("\n\n----------------\n\n");
   return ["【上下文】", content || "無"].join("\n");
