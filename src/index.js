@@ -110,7 +110,6 @@ const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
 const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
-const KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER = "image_then_reasoner";
 const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const KEYWORD_PROXIMITY_CHARS = 10;
@@ -4161,21 +4160,17 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     normalized === "image_parallel" ||
     normalized === "parallel_image" ||
     normalized === "generate_image_parallel" ||
-    raw === "建立圖片並行運作" ||
-    raw === "建立圖片並行" ||
-    raw === "並行建立圖片"
-  ) {
-    return KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
-  }
-  if (
-    normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
+    normalized === "image_then_reasoner" ||
     normalized === "image_then_continue" ||
     normalized === "generate_image_continue" ||
     normalized === "image_continue" ||
+    raw === "建立圖片並行運作" ||
+    raw === "建立圖片並行" ||
+    raw === "並行建立圖片" ||
     raw === "建立圖片繼續觸發正文" ||
     raw === "建立圖片，繼續觸發正文"
   ) {
-    return KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER;
+    return KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
   }
   if (
     normalized === KEYWORD_FOLLOWUP_CONTINUE_REASONER ||
@@ -4191,12 +4186,6 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
 }
 
 function isImageKeywordFollowupAction(value = "") {
-  const normalized = normalizeKeywordFollowupAction(value);
-  return normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
-    normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
-}
-
-function isParallelImageKeywordFollowupAction(value = "") {
   return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
 }
 
@@ -7475,8 +7464,8 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         keywordFollowupAction,
         imageGeneration: shouldRunImageFollowup
           ? {
-              pending: keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER,
-              parallel: keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER
+              pending: true,
+              parallel: true
             }
           : null,
         skipReasoner: skipReasonerAfterKeyword,
@@ -7531,11 +7520,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
           profileState: imageProfileState,
           turnExtra: options.turnExtra || {}
         };
-        if (isParallelImageKeywordFollowupAction(keywordFollowupAction)) {
-          queueParallelModelImageGeneration(imageContext);
-        } else {
-          await runModelImageGenerationTask(imageContext);
-        }
+        queueParallelModelImageGeneration(imageContext);
         processedActions.push(processedAction);
         didCompress = true;
         continue;

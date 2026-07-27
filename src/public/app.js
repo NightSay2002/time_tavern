@@ -240,7 +240,6 @@ const COMPRESSION_CONTEXT_SCOPE_TEXT_ONLY = "text_only";
 const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
-const KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER = "image_then_reasoner";
 const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
@@ -1280,21 +1279,17 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     normalized === "image_parallel" ||
     normalized === "parallel_image" ||
     normalized === "generate_image_parallel" ||
-    raw === "建立圖片並行運作" ||
-    raw === "建立圖片並行" ||
-    raw === "並行建立圖片"
-  ) {
-    return KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
-  }
-  if (
-    normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
+    normalized === "image_then_reasoner" ||
     normalized === "image_then_continue" ||
     normalized === "generate_image_continue" ||
     normalized === "image_continue" ||
+    raw === "建立圖片並行運作" ||
+    raw === "建立圖片並行" ||
+    raw === "並行建立圖片" ||
     raw === "建立圖片繼續觸發正文" ||
     raw === "建立圖片，繼續觸發正文"
   ) {
-    return KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER;
+    return KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
   }
   if (
     normalized === KEYWORD_FOLLOWUP_CONTINUE_REASONER ||
@@ -1310,18 +1305,13 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
 }
 
 function isImageKeywordFollowupAction(value = "") {
-  const normalized = normalizeKeywordFollowupAction(value);
-  return normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER ||
-    normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+  return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
 }
 
 function getKeywordFollowupActionLabel(value = "", legacySkipReasoner = false) {
   const normalized = normalizeKeywordFollowupAction(value, legacySkipReasoner);
   if (normalized === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL) {
     return "關鍵字後停下";
-  }
-  if (normalized === KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER) {
-    return "關鍵字後建立圖片";
   }
   if (normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER) {
     return "關鍵字後並行建立圖片";
@@ -5986,7 +5976,6 @@ function renderCompressionTriggerActionEditor(actions = []) {
     [
       [KEYWORD_FOLLOWUP_CONTINUE_REASONER, "按照對話繼續觸發正文"],
       [KEYWORD_FOLLOWUP_STOP_AFTER_MODEL, "停下，只輸出完成訊息"],
-      [KEYWORD_FOLLOWUP_IMAGE_THEN_REASONER, "建立圖片，然後繼續觸發正文"],
       [KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER, "建立圖片（並行運作），同時繼續正文"]
     ].forEach(([value, label]) => {
       const option = document.createElement("option");
