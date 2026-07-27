@@ -34,3 +34,15 @@ test("an opening assistant message is round zero", () => {
     ["#0 assistant", "#1 user", "#1 assistant"]
   );
 });
+
+test("stored turn numbers remain stable in a sliced context", () => {
+  assert.deepEqual(
+    getContextMessageRoundLabels([
+      { role: "user", turnNumber: 19 },
+      { role: "assistant" },
+      { role: "user", turnNumber: 20 },
+      { role: "assistant" }
+    ]),
+    ["#19 user", "#19 assistant", "#20 user", "#20 assistant"]
+  );
+});

@@ -6204,8 +6204,10 @@ function formatModularRoleContext(state, activeRoleCard, resolvedUserName = "", 
 }
 
 function buildCacheableDialogueMessages(messages = []) {
-  return (Array.isArray(messages) ? messages : [])
-    .map((item) => {
+  const messageList = Array.isArray(messages) ? messages : [];
+  const labels = getContextMessageRoundLabels(messageList);
+  return messageList
+    .map((item, index) => {
       const role = item?.role === "assistant" ? "assistant" : item?.role === "user" ? "user" : "";
       if (!role) {
         return null;
@@ -6214,7 +6216,9 @@ function buildCacheableDialogueMessages(messages = []) {
         ? safeText(item.content)
         : getMessageModelContent(item);
       const normalizedContent = safeText(content);
-      return normalizedContent ? { role, content: normalizedContent } : null;
+      return normalizedContent
+        ? { role, content: [labels[index], normalizedContent].join("\n") }
+        : null;
     })
     .filter(Boolean);
 }
@@ -7611,7 +7615,7 @@ function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUs
     "【輸出規則】",
     finalizePromptTemplate(activeConfig.reasonerHistory.contextRules, templateVariables),
     "【處理要求】",
-    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、統計時間、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
+    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供，同一回合共用相同的 #回合編號。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、統計時間、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
   ].filter(Boolean).join("\n");
 }
 

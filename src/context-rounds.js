@@ -3,7 +3,10 @@ export function getContextMessageRoundLabels(messages = []) {
   return (Array.isArray(messages) ? messages : []).map((message) => {
     const role = message?.role === "assistant" ? "assistant" : "user";
     if (role === "user") {
-      roundNumber += 1;
+      const storedTurnNumber = Math.floor(Number(message?.turnNumber ?? message?.extra?.turnNumber));
+      roundNumber = Number.isFinite(storedTurnNumber) && storedTurnNumber > 0
+        ? storedTurnNumber
+        : roundNumber + 1;
     }
     return `#${roundNumber} ${role}`;
   });
