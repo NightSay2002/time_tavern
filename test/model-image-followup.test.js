@@ -32,6 +32,12 @@ test("image-only mode suppresses正文 and fixes keyword matching to user input"
   assert.match(serverSource, /backgroundImageGeneration: hasPendingModelImageGeneration/u);
 });
 
+test("Prompt saving rejects a server response that downgrades image-only mode", () => {
+  assert.match(webSource, /const requestedImageOnlyActions = new Set/u);
+  assert.match(webSource, /const savedImageOnlyActions = new Set/u);
+  assert.match(webSource, /伺服器仍在執行舊版本，無法保存「跑圖不跑正文」/u);
+});
+
 test("legacy sequential image settings migrate to parallel mode", () => {
   for (const source of [serverSource, webSource]) {
     assert.match(source, /normalized === "image_then_reasoner"/u);

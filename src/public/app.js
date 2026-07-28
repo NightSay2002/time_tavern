@@ -7867,6 +7867,23 @@ async function saveModularPromptConfig() {
         config
       })
     });
+    const requestedImageOnlyActions = new Set(
+      (config.compressionProfiles || []).flatMap((profile) =>
+        (profile.triggerActions || [])
+          .filter((action) => action.keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_ONLY)
+          .map((action) => `${profile.id}:${action.id}`)
+      )
+    );
+    const savedImageOnlyActions = new Set(
+      (payload?.config?.compressionProfiles || []).flatMap((profile) =>
+        (profile.triggerActions || [])
+          .filter((action) => action.keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_ONLY)
+          .map((action) => `${profile.id}:${action.id}`)
+      )
+    );
+    if ([...requestedImageOnlyActions].some((id) => !savedImageOnlyActions.has(id))) {
+      throw new Error("伺服器仍在執行舊版本，無法保存「跑圖不跑正文」。請先重啟伺服器後再保存。");
+    }
     appState = payload?.state || appState;
     renderAllPromptModeSelects(config.mode);
     renderModularPromptEditor(config.mode);
