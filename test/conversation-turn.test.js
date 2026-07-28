@@ -113,3 +113,61 @@ test("keeps the current time when the current user turn contains the keep direct
   assert.equal(state.timeTracking.autoPeriod.turnsSinceChange, 0);
   assert.equal(events.find((event) => event.type === "generate")?.period, "morning");
 });
+
+test("saves an image-only turn without creating or post-processing an assistant message", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.generateAssistant = () => {
+    events.push({ type: "generate-image-only" });
+    return {
+      content: "",
+      suppressAssistantMessage: true,
+      modelProcessingResult: {
+        skipReasoner: true,
+        suppressAssistantMessage: true
+      }
+    };
+  };
+  deps.shouldEnsureMinimumAssistantLength = () => {
+    events.push({ type: "minimum-length" });
+    return true;
+  };
+  deps.ensureMinimumAssistantLength = () => {
+    events.push({ type: "expand" });
+    return { content: "expanded reply" };
+  };
+  deps.finalizeAssistantOutputContent = () => {
+    events.push({ type: "finalize" });
+    return { content: "final reply" };
+  };
+  deps.updateTimeTrackingAfterAssistantTurn = () => {
+    events.push({ type: "update-assistant-time" });
+    return {};
+  };
+  deps.updateCompressionAfterAssistantMessage = () => {
+    events.push({ type: "after-assistant" });
+    return {};
+  };
+
+  const result = await runConversationTurnWorkflow(deps, {
+    state,
+    content: "只建立圖片",
+    source: "web"
+  });
+
+  assert.equal(result.assistantMessage, null);
+  assert.equal(result.modelProcessingResult.suppressAssistantMessage, true);
+  assert.deepEqual(
+    events.filter((event) => event.type === "append").map((event) => event.message.role),
+    ["user"]
+  );
+  assert.equal(events.filter((event) => event.type === "save").length, 1);
+  assert.equal(events.some((event) => [
+    "minimum-length",
+    "expand",
+    "finalize",
+    "update-assistant-time",
+    "after-assistant"
+  ].includes(event.type)), false);
+});

@@ -129,6 +129,15 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   let assistantText = safeText(generation?.content);
   let fullReasoning = safeText(generation?.reasoningContent);
 
+  if (generation?.suppressAssistantMessage) {
+    requireDependency(deps, "saveState")(currentState);
+    return {
+      userMessage,
+      assistantMessage: null,
+      modelProcessingResult
+    };
+  }
+
   const shouldEnsureMinimum = typeof deps.shouldEnsureMinimumAssistantLength === "function"
     ? deps.shouldEnsureMinimumAssistantLength({
         state: currentState,

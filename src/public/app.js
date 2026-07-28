@@ -241,6 +241,7 @@ const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
 const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
+const KEYWORD_FOLLOWUP_IMAGE_ONLY = "image_only";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
 const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
@@ -1275,6 +1276,15 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     return KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
   }
   if (
+    normalized === KEYWORD_FOLLOWUP_IMAGE_ONLY ||
+    normalized === "image_no_reasoner" ||
+    normalized === "image_without_reasoner" ||
+    raw === "跑圖不跑正文" ||
+    raw === "跑圖不跑正文完全停止正文"
+  ) {
+    return KEYWORD_FOLLOWUP_IMAGE_ONLY;
+  }
+  if (
     normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER ||
     normalized === "image_parallel" ||
     normalized === "parallel_image" ||
@@ -1305,7 +1315,13 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
 }
 
 function isImageKeywordFollowupAction(value = "") {
-  return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+  const normalized = normalizeKeywordFollowupAction(value);
+  return normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER ||
+    normalized === KEYWORD_FOLLOWUP_IMAGE_ONLY;
+}
+
+function isImageOnlyKeywordFollowupAction(value = "") {
+  return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_ONLY;
 }
 
 function getKeywordFollowupActionLabel(value = "", legacySkipReasoner = false) {
@@ -1315,6 +1331,9 @@ function getKeywordFollowupActionLabel(value = "", legacySkipReasoner = false) {
   }
   if (normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER) {
     return "關鍵字後並行建立圖片";
+  }
+  if (normalized === KEYWORD_FOLLOWUP_IMAGE_ONLY) {
+    return "跑圖不跑正文";
   }
   return "";
 }
@@ -1402,6 +1421,13 @@ function normalizeCompressionTriggerActionConfig(action = {}, index = 0, options
       source["觸發關鍵字後續動作"],
     legacySkipReasoner
   );
+  const triggers = normalizeCompressionTriggerConfig(
+    source.triggers || source.trigger || source.conditions || source.condition || source,
+    { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
+  );
+  if (isImageOnlyKeywordFollowupAction(keywordFollowupAction)) {
+    triggers.keywordSource = "user";
+  }
   return {
     id: String(source.id || source.key || `trigger_action_${index + 1}`).trim(),
     name: String(source.name || source.title || source.label || `觸發組合 ${index + 1}`).trim(),
@@ -1409,12 +1435,12 @@ function normalizeCompressionTriggerActionConfig(action = {}, index = 0, options
     action: processingAction,
     keywordFollowupAction,
     skipReasoner: processingAction === MODEL_TRIGGER_ACTION_CALL_API &&
-      keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL,
+      (
+        keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL ||
+        keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_ONLY
+      ),
     imageGeneration: normalizeModelImageGenerationSettings(source),
-    triggers: normalizeCompressionTriggerConfig(
-      source.triggers || source.trigger || source.conditions || source.condition || source,
-      { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
-    ),
+    triggers,
     expanded: Boolean(source.expanded)
   };
 }
@@ -3850,6 +3876,7 @@ async function rewriteRecentUserInputFromCommand(num, comment = "") {
     showToast("尚未開始對話，不能改寫輸入。", "error");
     return;
   }
+  const previousImageCount = (appState?.conversation || []).filter((message) => isImageOnlyMessage(message)).length;
   try {
     isChatStreaming = true;
     renderStatus(appState);
@@ -3863,6 +3890,9 @@ async function rewriteRecentUserInputFromCommand(num, comment = "") {
     renderAiLogs(appState);
     renderStatus(appState);
     realignMobileChat({ scroll: true });
+    if (payload?.backgroundImageGeneration) {
+      scheduleBackgroundImageRefresh(previousImageCount);
+    }
     showToast(`已改寫倒數第 ${num} 次使用者輸入`);
   } finally {
     isChatStreaming = false;
@@ -4819,6 +4849,7 @@ async function submitEditUserMessage() {
     return;
   }
   const previousState = appState;
+  const previousImageCount = (appState?.conversation || []).filter((message) => isImageOnlyMessage(message)).length;
   const conversation = Array.isArray(appState?.conversation) ? appState.conversation : [];
   const targetIndex = conversation.findIndex((item) => item?.id === messageId);
   const targetMessageNumber = targetIndex + 1;
@@ -4838,6 +4869,9 @@ async function submitEditUserMessage() {
     renderAiLogs(appState);
     renderStatus(appState);
     refreshAssistantSelector();
+    if (payload?.backgroundImageGeneration) {
+      scheduleBackgroundImageRefresh(previousImageCount);
+    }
     showToast("已刪除後續分支並重新生成");
   } catch (error) {
     appState = previousState;
@@ -5976,7 +6010,8 @@ function renderCompressionTriggerActionEditor(actions = []) {
     [
       [KEYWORD_FOLLOWUP_CONTINUE_REASONER, "按照對話繼續觸發正文"],
       [KEYWORD_FOLLOWUP_STOP_AFTER_MODEL, "停下，只輸出完成訊息"],
-      [KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER, "建立圖片（並行運作），同時繼續正文"]
+      [KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER, "建立圖片（並行運作），同時繼續正文"],
+      [KEYWORD_FOLLOWUP_IMAGE_ONLY, "跑圖不跑正文（完全停止正文）"]
     ].forEach(([value, label]) => {
       const option = document.createElement("option");
       option.value = value;
@@ -6171,7 +6206,16 @@ function renderCompressionTriggerActionEditor(actions = []) {
       negativeField.label
     );
     imageSettingsBox.append(imageSettingsTitle, imageSettingsHint, imageSettingsGrid);
-    imageSettingsBox.hidden = !isImageKeywordFollowupAction(keywordFollowupSelect.value);
+    const syncKeywordFollowupFields = () => {
+      const imageOnly = isImageOnlyKeywordFollowupAction(keywordFollowupSelect.value);
+      imageSettingsBox.hidden = !isImageKeywordFollowupAction(keywordFollowupSelect.value);
+      sourceSelect.disabled = imageOnly;
+      sourceSelect.title = imageOnly ? "跑圖不跑正文只能檢查 user 輸入" : "";
+      if (imageOnly) {
+        sourceSelect.value = "user";
+      }
+    };
+    syncKeywordFollowupFields();
 
     const editor = document.createElement("div");
     editor.className = "compression-trigger-action-grid";
@@ -6199,7 +6243,9 @@ function renderCompressionTriggerActionEditor(actions = []) {
       });
     });
     keywordFollowupSelect.addEventListener("change", () => {
-      imageSettingsBox.hidden = !isImageKeywordFollowupAction(keywordFollowupSelect.value);
+      syncKeywordFollowupFields();
+      syncSelectedCompressionProfileFromEditor();
+      clearModularPromptPreview();
     });
 
     item.append(header, editor);

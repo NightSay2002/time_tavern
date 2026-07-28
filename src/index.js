@@ -112,6 +112,7 @@ const COMPRESSION_CONTEXT_SCOPE_ROLE_AND_TEXT = "role_and_text";
 const KEYWORD_FOLLOWUP_CONTINUE_REASONER = "continue_reasoner";
 const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
 const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
+const KEYWORD_FOLLOWUP_IMAGE_ONLY = "image_only";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
 const KEYWORD_PROXIMITY_CHARS = 10;
 const TIME_TRACKING_CONNECTOR_PROXIMITY_CHARS = 5;
@@ -4157,6 +4158,15 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
     return KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
   }
   if (
+    normalized === KEYWORD_FOLLOWUP_IMAGE_ONLY ||
+    normalized === "image_no_reasoner" ||
+    normalized === "image_without_reasoner" ||
+    raw === "跑圖不跑正文" ||
+    raw === "跑圖不跑正文完全停止正文"
+  ) {
+    return KEYWORD_FOLLOWUP_IMAGE_ONLY;
+  }
+  if (
     normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER ||
     normalized === "image_parallel" ||
     normalized === "parallel_image" ||
@@ -4187,7 +4197,13 @@ function normalizeKeywordFollowupAction(value = "", legacySkipReasoner = false) 
 }
 
 function isImageKeywordFollowupAction(value = "") {
-  return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER;
+  const normalized = normalizeKeywordFollowupAction(value);
+  return normalized === KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER ||
+    normalized === KEYWORD_FOLLOWUP_IMAGE_ONLY;
+}
+
+function isImageOnlyKeywordFollowupAction(value = "") {
+  return normalizeKeywordFollowupAction(value) === KEYWORD_FOLLOWUP_IMAGE_ONLY;
 }
 
 function normalizeModelImageGenerationSettings(input = {}) {
@@ -4242,7 +4258,7 @@ function normalizeModelAppendTermsConfig(input = {}) {
 
 function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options = {}) {
   const source = input && typeof input === "object" ? input : {};
-  const triggers = normalizeCompressionTriggerConfig(
+  let triggers = normalizeCompressionTriggerConfig(
     source.triggers || source.trigger || source.conditions || source.condition || source,
     { defaultRoundLimit: Boolean(options.defaultRoundLimit) }
   );
@@ -4256,6 +4272,12 @@ function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options 
       source["觸發關鍵字後續動作"],
     legacySkipReasoner
   );
+  if (isImageOnlyKeywordFollowupAction(keywordFollowupAction)) {
+    triggers = {
+      ...triggers,
+      keywordSource: "user"
+    };
+  }
   return {
     id: safeText(source.id || source.key) || `trigger_action_${index + 1}`,
     name: safeText(source.name || source.title || source.label) || `觸發組合 ${index + 1}`,
@@ -4263,7 +4285,10 @@ function normalizeCompressionTriggerActionConfig(input = {}, index = 0, options 
     action,
     keywordFollowupAction,
     skipReasoner: action === MODEL_TRIGGER_ACTION_CALL_API &&
-      keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL,
+      (
+        keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL ||
+        keywordFollowupAction === KEYWORD_FOLLOWUP_IMAGE_ONLY
+      ),
     imageGeneration: normalizeModelImageGenerationSettings(source),
     triggers
   };
@@ -6683,6 +6708,7 @@ function setLastModelProcessingResult(currentState, result = {}) {
     value: {
       didProcess: Boolean(result.didProcess),
       skipReasoner: Boolean(result.skipReasoner),
+      suppressAssistantMessage: Boolean(result.suppressAssistantMessage),
       processedActions: Array.isArray(result.processedActions) ? result.processedActions : []
     },
     enumerable: false,
@@ -6694,6 +6720,7 @@ function getLastModelProcessingResult(currentState = state) {
   return currentState?.__lastModelProcessingResult || {
     didProcess: false,
     skipReasoner: false,
+    suppressAssistantMessage: false,
     processedActions: []
   };
 }
@@ -7370,6 +7397,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
       contextCompression: normalizeContextCompressionState(contextCompression),
       didProcess: false,
       skipReasoner: false,
+      suppressAssistantMessage: false,
       processedActions: []
     };
     setLastModelProcessingResult(currentState, result);
@@ -7430,10 +7458,15 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         triggerAction.keywordFollowupAction,
         triggerAction.skipReasoner
       );
-      const skipReasonerAfterKeyword = phase === "before_reasoner" &&
+      const suppressAssistantMessage = phase === "before_reasoner" &&
+        triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
+        isImageOnlyKeywordFollowupAction(keywordFollowupAction);
+      const skipReasonerAfterTrigger = suppressAssistantMessage || (
+        phase === "before_reasoner" &&
         triggeredByKeyword &&
         triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
-        keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL;
+        keywordFollowupAction === KEYWORD_FOLLOWUP_STOP_AFTER_MODEL
+      );
       const shouldRunImageFollowup = triggerAction.action === MODEL_TRIGGER_ACTION_CALL_API &&
         isImageKeywordFollowupAction(keywordFollowupAction);
       const includeLatestUser = includeLatestAssistant ||
@@ -7471,10 +7504,12 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         imageGeneration: shouldRunImageFollowup
           ? {
               pending: true,
-              parallel: true
+              parallel: true,
+              suppressAssistantMessage
             }
           : null,
-        skipReasoner: skipReasonerAfterKeyword,
+        skipReasoner: skipReasonerAfterTrigger,
+        suppressAssistantMessage,
         triggeredBy
       };
 
@@ -7560,6 +7595,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
     contextCompression: currentState.contextCompression,
     didProcess: processedActions.length > 0,
     skipReasoner: processedActions.some((item) => item.skipReasoner),
+    suppressAssistantMessage: processedActions.some((item) => item.suppressAssistantMessage),
     processedActions
   };
   setLastModelProcessingResult(currentState, result);
@@ -9437,6 +9473,7 @@ async function generateOneShotConversationAssistant({ state: currentState, runti
     content,
     reasoningContent: "",
     compressionNotice,
+    suppressAssistantMessage: Boolean(modelProcessingResult.suppressAssistantMessage),
     modelProcessingResult
   };
 }
@@ -9474,6 +9511,15 @@ async function generateStreamingConversationAssistant({ state: currentState, run
   const compressionNotice = !imageOnlyProcessing &&
     didContextCompressionAdvance(compressionBefore, processingResult.contextCompression);
   if (processingResult.skipReasoner) {
+    if (processingResult.suppressAssistantMessage) {
+      return {
+        content: "",
+        reasoningContent: "",
+        compressionNotice: false,
+        suppressAssistantMessage: true,
+        modelProcessingResult: processingResult
+      };
+    }
     const completionText = formatModelProcessingCompletionMessage(processingResult.processedActions);
     onContentDelta?.(completionText);
     return {
@@ -10075,6 +10121,7 @@ async function replayConversationFromUserIndexLocked({
   return {
     assistantMessage: result.assistantMessage,
     userMessage: result.userMessage,
+    modelProcessingResult: result.modelProcessingResult,
     replacedUserMessage,
     removedDiscordReplyMessageIds
   };
@@ -10196,6 +10243,7 @@ async function replayConversationFromDiscordMessageId({
 
     return {
       assistantMessage: result.assistantMessage,
+      modelProcessingResult: result.modelProcessingResult,
       removedDiscordReplyMessageIds
     };
   });
@@ -10216,7 +10264,8 @@ async function runConversationTurn({ content, source, extra = {} }) {
       }
     );
     return {
-      assistantMessage: result.assistantMessage
+      assistantMessage: result.assistantMessage,
+      modelProcessingResult: result.modelProcessingResult
     };
   });
 }
@@ -11174,6 +11223,7 @@ const server = http.createServer(async (req, res) => {
       });
       sendJson(res, 200, {
         ...result,
+        backgroundImageGeneration: hasPendingModelImageGeneration(result.modelProcessingResult),
         state: statePayload(state)
       });
       return;
@@ -11199,6 +11249,7 @@ const server = http.createServer(async (req, res) => {
       });
       sendJson(res, 200, {
         ...result,
+        backgroundImageGeneration: hasPendingModelImageGeneration(result.modelProcessingResult),
         state: statePayload(state)
       });
       return;
@@ -11225,6 +11276,7 @@ const server = http.createServer(async (req, res) => {
       });
       sendJson(res, 200, {
         ...result,
+        backgroundImageGeneration: hasPendingModelImageGeneration(result.modelProcessingResult),
         state: statePayload(state)
       });
       return;
@@ -11663,6 +11715,20 @@ async function safeSendInteractionText(interaction, content, options = {}) {
   }
 }
 
+async function discardDeferredInteractionReply(interaction) {
+  if ((!interaction?.deferred && !interaction?.replied) || typeof interaction.deleteReply !== "function") {
+    return;
+  }
+  try {
+    await interaction.deleteReply();
+  } catch (error) {
+    const code = String(error?.code || error?.rawError?.code || "");
+    if (!isUnknownInteractionError(error) && code !== "10008" && code !== "10062") {
+      throw error;
+    }
+  }
+}
+
 function startTypingIndicator(channel) {
   if (!channel || typeof channel.sendTyping !== "function") {
     return () => {};
@@ -11973,8 +12039,10 @@ async function handleDiscordChat(message, userContent) {
   if (pendingOpening) {
     await sendDiscordLongMessage(message, pendingOpening);
   }
-  const sentMessages = await sendDiscordLongMessage(message, turn.replyText);
-  await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
+  if (turn.replyText) {
+    const sentMessages = await sendDiscordLongMessage(message, turn.replyText);
+    await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
+  }
 }
 
 async function registerSlashCommands(discordClient) {
@@ -12178,8 +12246,13 @@ async function handleSlashCommand(interaction) {
       }
     });
     await deleteDiscordMessagesByIds(interaction.channel, result.removedDiscordReplyMessageIds || []);
-    const sentMessages = await sendInteractionLongReply(interaction, formatAssistantMessageForUserDisplay(result.assistantMessage));
-    await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
+    const replyText = formatAssistantMessageForUserDisplay(result.assistantMessage);
+    if (replyText) {
+      const sentMessages = await sendInteractionLongReply(interaction, replyText);
+      await rememberDiscordReplyAndFeedback(result.assistantMessage, sentMessages);
+    } else {
+      await discardDeferredInteractionReply(interaction);
+    }
     return;
   }
 
@@ -12212,11 +12285,13 @@ async function handleSlashCommand(interaction) {
       userName: interaction.user.username,
       userContent: built.content
     });
-    const combinedReply = turn.pendingOpening
-      ? `${turn.pendingOpening}\n\n${turn.replyText}`
-      : turn.replyText;
-    const sentMessages = await sendInteractionLongReply(interaction, combinedReply);
-    await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
+    const combinedReply = [turn.pendingOpening, turn.replyText].filter(Boolean).join("\n\n");
+    if (combinedReply) {
+      const sentMessages = await sendInteractionLongReply(interaction, combinedReply);
+      await rememberDiscordReplyAndFeedback(turn.assistantMessage, sentMessages);
+    } else {
+      await discardDeferredInteractionReply(interaction);
+    }
     return;
   }
 
@@ -12441,6 +12516,9 @@ function setupDiscordBot() {
         });
 
         await deleteDiscordMessagesByIds(message.channel, result.removedDiscordReplyMessageIds || []);
+        if (!result.assistantMessage) {
+          return;
+        }
         const sentMessages = await sendDiscordLongMessage(
           message,
           [
