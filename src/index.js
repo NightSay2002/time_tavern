@@ -29,7 +29,10 @@ import {
   findRecentUserMessageIndex,
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
-import { getContextMessageRoundLabels } from "./context-rounds.js";
+import {
+  getContextMessageRoundLabels,
+  stripLeadingContextRoundLabels
+} from "./context-rounds.js";
 import {
   isLegacyDiscordTextCommand,
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
@@ -1715,7 +1718,7 @@ function loadState() {
       pendingOpeningBroadcast: Boolean(parsed.pendingOpeningBroadcast),
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
       discordPlayers: normalizeDiscordPlayerState(parsed.discordPlayers),
-      conversation: Array.isArray(parsed.conversation) ? cloneData(parsed.conversation, []) : [],
+      conversation: normalizeConversationForClient(cloneData(parsed.conversation, [])),
       aiLogs: Array.isArray(parsed.aiLogs) ? parsed.aiLogs.map((entry) => normalizeAiLog(entry)) : [],
       activeSavedSessionId: null
     };
@@ -1987,9 +1990,7 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.pendingOpeningBroadcast = Boolean(source.pendingOpeningBroadcast);
   currentState.lastDiscordChannelId = safeText(source.lastDiscordChannelId);
   currentState.discordPlayers = normalizeDiscordPlayerState(source.discordPlayers);
-  currentState.conversation = Array.isArray(source.conversation)
-    ? cloneData(source.conversation, [])
-    : [];
+  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
   currentState.aiLogs = Array.isArray(source.aiLogs)
     ? source.aiLogs.map((entry) => normalizeAiLog(entry))
     : [];
@@ -2125,7 +2126,7 @@ function normalizeConversationForClient(conversation = []) {
     const finalized = finalizeAssistantOutputContent(message.content);
     return {
       ...message,
-      content: finalized.content || safeText(message.content)
+      content: finalized.content
     };
   });
 }
@@ -6240,7 +6241,7 @@ function buildCacheableDialogueMessages(messages = []) {
       const content = item?.requestContentPrepared === true
         ? safeText(item.content)
         : getMessageModelContent(item);
-      const normalizedContent = safeText(content);
+      const normalizedContent = stripLeadingContextRoundLabels(content);
       return normalizedContent
         ? { role, content: [labels[index], normalizedContent].join("\n") }
         : null;
@@ -6735,7 +6736,10 @@ function formatCompressionContextBlock(messages = []) {
   const labels = getContextMessageRoundLabels(messageList);
   const content = messageList
     .map((message, index) => {
-      return [labels[index], getMessageModelContent(message) || safeText(message?.content) || "（空白）"].join("\n");
+      const messageContent = stripLeadingContextRoundLabels(
+        getMessageModelContent(message) || safeText(message?.content)
+      );
+      return [labels[index], messageContent || "（空白）"].join("\n");
     })
     .join("\n\n----------------\n\n");
   return ["【上下文】", content || "無"].join("\n");
@@ -7771,7 +7775,7 @@ function getLatestAssistantContent(currentState) {
   for (let i = currentState.conversation.length - 1; i >= 0; i -= 1) {
     const item = currentState.conversation[i];
     if (item.role === "assistant" && !isModelInvisibleMessage(item)) {
-      return safeText(item.content);
+      return getMessageModelContent(item);
     }
   }
   return "";
@@ -8398,11 +8402,12 @@ function removeRepeatedOpeningUserEcho(content = "", userInput = "") {
 
 function finalizeAssistantOutputContent(content = "", options = {}) {
   const userInput = safeText(options.userInput);
+  const unlabeledContent = stripLeadingContextRoundLabels(content);
   const cleanedContent = userInput
-    ? removeRepeatedOpeningUserEcho(content, userInput)
-    : safeText(content);
+    ? removeRepeatedOpeningUserEcho(unlabeledContent, userInput)
+    : unlabeledContent;
   return {
-    content: cleanedContent
+    content: stripLeadingContextRoundLabels(cleanedContent)
   };
 }
 

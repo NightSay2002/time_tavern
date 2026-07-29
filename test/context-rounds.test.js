@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getContextMessageRoundLabels } from "../src/context-rounds.js";
+import {
+  getContextMessageRoundLabels,
+  stripLeadingContextRoundLabels
+} from "../src/context-rounds.js";
 
 test("user and assistant messages share one context round number", () => {
   assert.deepEqual(
@@ -44,5 +47,24 @@ test("stored turn numbers remain stable in a sliced context", () => {
       { role: "assistant" }
     ]),
     ["#19 user", "#19 assistant", "#20 user", "#20 assistant"]
+  );
+});
+
+test("existing context round labels are removed before rebuilding context", () => {
+  assert.equal(
+    stripLeadingContextRoundLabels([
+      "#5 assistant",
+      "#2 assistant",
+      "#1 assistant",
+      "正文內容"
+    ].join("\n")),
+    "正文內容"
+  );
+});
+
+test("ordinary headings in message content are preserved", () => {
+  assert.equal(
+    stripLeadingContextRoundLabels("# 第一章\n正文內容"),
+    "# 第一章\n正文內容"
   );
 });
