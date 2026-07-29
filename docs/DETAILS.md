@@ -202,9 +202,9 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 
 - 「儲存預設」：把目前設定保存成使用者本機預設。
 - 「使用預設」：以本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定。
-- 「更新預設」：把目前程式版本隨附的發布預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或目前對話。
+- 「使用作者預設」：把目前程式版本隨附的作者預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或目前對話。
 
-Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`，所以只更新預設不會立即套用。
+Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`，所以只取得作者預設不會立即套用。
 
 可提交的發布內容：
 

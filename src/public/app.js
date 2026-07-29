@@ -7944,24 +7944,24 @@ async function applyDefaults() {
 }
 
 async function updateDefaults() {
-  if (!window.confirm("要把本機預設更新為目前程式版本隨附的發布預設嗎？這只會替換可供「使用預設」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或目前對話。")) {
+  if (!window.confirm("要取得目前程式版本隨附的作者預設嗎？這只會替換可供「使用預設」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或目前對話。")) {
     return;
   }
   try {
     if (el.updateDefaultsBtn) {
       el.updateDefaultsBtn.disabled = true;
-      el.updateDefaultsBtn.textContent = "更新中...";
+      el.updateDefaultsBtn.textContent = "取得中...";
     }
     const payload = await request("/api/defaults/update", { method: "POST" });
     appState = payload?.state || appState;
     const defaults = payload?.defaults || {};
-    showToast(`本機預設已更新：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個；目前使用中的資料沒有改動`);
+    showToast(`作者預設已取得：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個；目前使用中的資料沒有改動`);
   } catch (error) {
-    showToast(error.message || "預設更新失敗", "error");
+    showToast(error.message || "作者預設取得失敗", "error");
   } finally {
     if (el.updateDefaultsBtn) {
       el.updateDefaultsBtn.disabled = false;
-      el.updateDefaultsBtn.textContent = "更新預設";
+      el.updateDefaultsBtn.textContent = "使用作者預設";
     }
   }
 }

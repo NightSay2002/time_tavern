@@ -73,13 +73,15 @@ Discord 不填 `DISCORD_BOT_TOKEN` 也能正常使用本地網頁。
 
 第一次啟動時，後端會把發布用的 `defaults/app-defaults.json` 複製成 `data/app-defaults.json`。如果沒有 `data/app-state.json`，再以這份本機預設建立目前狀態。
 
+目前發布預設包含 18 張角色卡、2 個助手與 5 種 Prompt 模式，其中包含「跑圖卡」的跑圖不跑正文設定。
+
 NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defaults.json`；瀏覽器沒有本頁 draft 時會讀取本機 NovelAI 預設。
 
 `start-mac.command` 與 `start-win.bat` 會自動檢查 Node/npm、安裝缺少的 `node_modules`、執行 `npm start`，並在更新及伺服器啟動完成後依目前 `PORT` 開啟瀏覽器。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
 
 服務已在運行時若更新到後端程式，請使用環境設定中的「重啟伺服器」或重新執行啟動器；只刷新網頁只會重新載入前端檔案。
 
-主頁功能按鈕中的「儲存預設」只寫入本機預設；「使用預設」才會套用；「更新預設」會以目前程式版本隨附的發布預設替換本機預設，但不會立即修改正在使用的角色卡、Prompt 或目前對話。
+主頁功能按鈕中的「儲存預設」只寫入本機預設；「使用預設」才會套用；「使用作者預設」會以目前程式版本隨附的作者預設替換本機預設，但不會立即修改正在使用的角色卡、Prompt 或目前對話。
 
 ## 功能
 
