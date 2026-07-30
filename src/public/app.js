@@ -5186,17 +5186,33 @@ function formatAiLogPurpose(purpose) {
   return "正文輸出";
 }
 
+const AI_LOG_CONTEXT_ROUND_LABEL_PATTERN = /^#\d+\s+(?:user|assistant)\s*(?:\r?\n|$)/i;
+
+function formatAiLogMessage(message = {}) {
+  const role = message?.role || "unknown";
+  const rawContent = typeof message?.content === "string"
+    ? message.content
+    : serializeDisplayValue(message?.content);
+  const content = String(rawContent || "").trim();
+  const contextLabelMatch = content.match(AI_LOG_CONTEXT_ROUND_LABEL_PATTERN);
+  if (!contextLabelMatch) {
+    return [`[${role}]`, content || "(空白)"].join("\n");
+  }
+
+  let messageContent = content.slice(contextLabelMatch[0].length).trimStart();
+  while (AI_LOG_CONTEXT_ROUND_LABEL_PATTERN.test(messageContent)) {
+    messageContent = messageContent.replace(AI_LOG_CONTEXT_ROUND_LABEL_PATTERN, "").trimStart();
+  }
+  return [contextLabelMatch[0].trim(), messageContent || "(空白)"].join("\n");
+}
+
 function formatAiLogMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return "無";
   }
 
   return messages
-    .map((message, index) => {
-      const role = message?.role || "unknown";
-      const content = typeof message?.content === "string" ? message.content : serializeDisplayValue(message?.content);
-      return [`#${index + 1} ${role}`, content || "(空白)"].join("\n");
-    })
+    .map((message) => formatAiLogMessage(message))
     .join("\n\n----------------\n\n");
 }
 
