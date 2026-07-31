@@ -6,17 +6,19 @@ import {
   stripLeadingContextRoundLabels
 } from "../src/context-rounds.js";
 
-test("user and assistant messages share one context round number", () => {
+test("context messages use sequential numbers", () => {
   assert.deepEqual(
     getContextMessageRoundLabels([
       { role: "user" },
+      { role: "assistant" },
+      { role: "user" },
       { role: "assistant" }
     ]),
-    ["#1 user", "#1 assistant"]
+    ["#1 user", "#2 assistant", "#3 user", "#4 assistant"]
   );
 });
 
-test("twenty context rounds end at round twenty", () => {
+test("twenty context rounds contain forty sequential message numbers", () => {
   const messages = Array.from({ length: 20 }, () => [
     { role: "user" },
     { role: "assistant" }
@@ -24,21 +26,21 @@ test("twenty context rounds end at round twenty", () => {
   const labels = getContextMessageRoundLabels(messages);
 
   assert.equal(labels.length, 40);
-  assert.deepEqual(labels.slice(-2), ["#20 user", "#20 assistant"]);
+  assert.deepEqual(labels.slice(-2), ["#39 user", "#40 assistant"]);
 });
 
-test("an opening assistant message is round zero", () => {
+test("an opening assistant message starts at one", () => {
   assert.deepEqual(
     getContextMessageRoundLabels([
       { role: "assistant" },
       { role: "user" },
       { role: "assistant" }
     ]),
-    ["#0 assistant", "#1 user", "#1 assistant"]
+    ["#1 assistant", "#2 user", "#3 assistant"]
   );
 });
 
-test("stored turn numbers remain stable in a sliced context", () => {
+test("a sliced context restarts sequential numbering at one", () => {
   assert.deepEqual(
     getContextMessageRoundLabels([
       { role: "user", turnNumber: 19 },
@@ -46,7 +48,7 @@ test("stored turn numbers remain stable in a sliced context", () => {
       { role: "user", turnNumber: 20 },
       { role: "assistant" }
     ]),
-    ["#19 user", "#19 assistant", "#20 user", "#20 assistant"]
+    ["#1 user", "#2 assistant", "#3 user", "#4 assistant"]
   );
 });
 
