@@ -1,55 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
-import {
-  getContextMessageRoundLabels,
-  stripLeadingContextRoundLabels
-} from "../src/context-rounds.js";
+import { stripLeadingContextRoundLabels } from "../src/context-rounds.js";
 
-test("context messages use sequential numbers", () => {
-  assert.deepEqual(
-    getContextMessageRoundLabels([
-      { role: "user" },
-      { role: "assistant" },
-      { role: "user" },
-      { role: "assistant" }
-    ]),
-    ["#1 user", "#2 assistant", "#3 user", "#4 assistant"]
-  );
+const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+
+test("recent dialogue keeps API roles separate from message content", () => {
+  const functionStart = serverSource.indexOf("function buildCacheableDialogueMessages(messages = [])");
+  const functionEnd = serverSource.indexOf("\nfunction getCompletedDialogueRoundsBeforeLatestUser", functionStart);
+  const functionSource = serverSource.slice(functionStart, functionEnd);
+
+  assert.match(functionSource, /\? \{ role, content: normalizedContent \}/u);
+  assert.doesNotMatch(functionSource, /#\$\{|labels\[|getContextMessageRoundLabels/u);
 });
 
-test("twenty context rounds contain forty sequential message numbers", () => {
-  const messages = Array.from({ length: 20 }, () => [
-    { role: "user" },
-    { role: "assistant" }
-  ]).flat();
-  const labels = getContextMessageRoundLabels(messages);
+test("combined compression context uses roles without numeric labels", () => {
+  const functionStart = serverSource.indexOf("function formatCompressionContextBlock(messages = [])");
+  const functionEnd = serverSource.indexOf("\nfunction buildCompressionRoleCardContextMessage", functionStart);
+  const functionSource = serverSource.slice(functionStart, functionEnd);
 
-  assert.equal(labels.length, 40);
-  assert.deepEqual(labels.slice(-2), ["#39 user", "#40 assistant"]);
-});
-
-test("an opening assistant message starts at one", () => {
-  assert.deepEqual(
-    getContextMessageRoundLabels([
-      { role: "assistant" },
-      { role: "user" },
-      { role: "assistant" }
-    ]),
-    ["#1 assistant", "#2 user", "#3 assistant"]
-  );
-});
-
-test("a sliced context restarts sequential numbering at one", () => {
-  assert.deepEqual(
-    getContextMessageRoundLabels([
-      { role: "user", turnNumber: 19 },
-      { role: "assistant" },
-      { role: "user", turnNumber: 20 },
-      { role: "assistant" }
-    ]),
-    ["#1 user", "#2 assistant", "#3 user", "#4 assistant"]
-  );
+  assert.match(functionSource, /message\?\.role === "assistant" \? "\[assistant\]" : "\[user\]"/u);
+  assert.doesNotMatch(functionSource, /getContextMessageRoundLabels|#\$\{/u);
 });
 
 test("existing context round labels are removed before rebuilding context", () => {

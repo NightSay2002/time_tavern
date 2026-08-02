@@ -29,10 +29,7 @@ import {
   findRecentUserMessageIndex,
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
-import {
-  getContextMessageRoundLabels,
-  stripLeadingContextRoundLabels
-} from "./context-rounds.js";
+import { stripLeadingContextRoundLabels } from "./context-rounds.js";
 import {
   isLegacyDiscordTextCommand,
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
@@ -6231,9 +6228,8 @@ function formatModularRoleContext(state, activeRoleCard, resolvedUserName = "", 
 
 function buildCacheableDialogueMessages(messages = []) {
   const messageList = Array.isArray(messages) ? messages : [];
-  const labels = getContextMessageRoundLabels(messageList);
   return messageList
-    .map((item, index) => {
+    .map((item) => {
       const role = item?.role === "assistant" ? "assistant" : item?.role === "user" ? "user" : "";
       if (!role) {
         return null;
@@ -6243,7 +6239,7 @@ function buildCacheableDialogueMessages(messages = []) {
         : getMessageModelContent(item);
       const normalizedContent = stripLeadingContextRoundLabels(content);
       return normalizedContent
-        ? { role, content: [labels[index], normalizedContent].join("\n") }
+        ? { role, content: normalizedContent }
         : null;
     })
     .filter(Boolean);
@@ -6733,13 +6729,13 @@ function hasPendingModelImageGeneration(result = {}) {
 
 function formatCompressionContextBlock(messages = []) {
   const messageList = Array.isArray(messages) ? messages : [];
-  const labels = getContextMessageRoundLabels(messageList);
   const content = messageList
-    .map((message, index) => {
+    .map((message) => {
+      const roleLabel = message?.role === "assistant" ? "[assistant]" : "[user]";
       const messageContent = stripLeadingContextRoundLabels(
         getMessageModelContent(message) || safeText(message?.content)
       );
-      return [labels[index], messageContent || "（空白）"].join("\n");
+      return [roleLabel, messageContent || "（空白）"].join("\n");
     })
     .join("\n\n----------------\n\n");
   return ["【上下文】", content || "無"].join("\n");
@@ -7655,7 +7651,7 @@ function buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUs
     "【輸出規則】",
     finalizePromptTemplate(activeConfig.reasonerHistory.contextRules, templateVariables),
     "【處理要求】",
-    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供，並按訊息順序使用 #1、#2、#3、#4 連續編號。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、統計時間、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
+    "後續獨立 user message 會提供目前模型內容；最近對話會以獨立 user/assistant messages 提供，角色由 API message role 表示，訊息內容不會加入回合編號。本輪 user message 可能會按順序包含：目前輸入者、這一輪 user 的內容、已啟用大模型的追加詞、統計時間、觸發世界書 Lorebooks、自訂補充。請根據主要規則、角色卡、目前模型內容、最近對話與輸出規則輸出正文。"
   ].filter(Boolean).join("\n");
 }
 

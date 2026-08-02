@@ -7,10 +7,3 @@ export function stripLeadingContextRoundLabels(content = "") {
   }
   return normalized.trim();
 }
-
-export function getContextMessageRoundLabels(messages = []) {
-  return (Array.isArray(messages) ? messages : []).map((message, index) => {
-    const role = message?.role === "assistant" ? "assistant" : "user";
-    return `#${index + 1} ${role}`;
-  });
-}
