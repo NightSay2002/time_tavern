@@ -157,3 +157,5 @@ node --check src/index.js
 node --check src/public/app.js
 node --check src/public/novelai.js
 ```
+
+`npm test` 使用本地模擬對話驗證 20 輪正文上下文，不會呼叫外部模型 API。

@@ -30,6 +30,7 @@ import {
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
 import { stripLeadingContextRoundLabels } from "./context-rounds.js";
+import { selectReasonerDialogueContextMessages } from "./dialogue-context.js";
 import {
   isLegacyDiscordTextCommand,
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
@@ -7675,42 +7676,21 @@ function buildSimpleCompressedReasonerSupportMessage(currentState, runtimeUserNa
 
 function getSimpleCompressedContextMessages(currentState, runtimeUserName = "") {
   const latestUser = getLatestUserMessage(currentState);
+  const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
   if (!latestUser) {
-    const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
     return openingDialogueMessage ? [openingDialogueMessage] : [];
   }
   const compressionState = normalizeContextCompressionState(currentState.contextCompression);
   const contextLimit = Math.max(1, getDialogueContextRounds(currentState));
-  const openingDialogueMessage = getOpeningDialogueContextMessage(currentState, runtimeUserName);
-  const allRounds = getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUser.id);
-  const rounds = allRounds
-    .filter((round) => getRoundTurnNumber(round) > compressionState.compressedThroughTurnNumber)
-    .slice(-contextLimit);
-  const messages = rounds.flat();
-  const hasRecentAssistant = messages.some((message) => message?.role === "assistant");
-  if (!hasRecentAssistant) {
-    const bridgeRound = getLastCompletedDialogueRound(allRounds);
-    if (bridgeRound) {
-      messages.unshift(...bridgeRound);
-    }
-  }
-  if (
-    compressionState.compressedThroughTurnNumber <= 0 &&
-    openingDialogueMessage &&
-    !messageListHasSameContent(messages, openingDialogueMessage.content)
-  ) {
-    messages.unshift(openingDialogueMessage);
-  }
   const latestUserContent = getCurrentUserModelContent(latestUser, currentState, runtimeUserName);
-  if (latestUserContent) {
-    messages.push({
-      ...latestUser,
-      role: "user",
-      content: latestUserContent,
-      requestContentPrepared: true
-    });
-  }
-  return messages;
+  return selectReasonerDialogueContextMessages({
+    conversation: currentState.conversation,
+    latestUserMessage: latestUser,
+    latestUserContent,
+    openingDialogueMessage,
+    contextLimit,
+    compressedThroughTurnNumber: compressionState.compressedThroughTurnNumber
+  });
 }
 
 function buildSimpleCompressedReasonerMessages(currentState, runtimeUserName = "") {
