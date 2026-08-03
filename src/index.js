@@ -39,6 +39,7 @@ import {
   isLegacyDiscordTextCommand,
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
 } from "./discord-message.js";
+import { isAllowedDiscordUser } from "./discord-access.js";
 import {
   buildDiscordGuildWelcomeMessage,
   buildDiscordInstallUrl,
@@ -78,6 +79,7 @@ const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?
 const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "DISCORD_BOT_TOKEN",
   "DISCORD_CLIENT_ID",
+  "DISCORD_ALLOWED_USER_ID",
   "CHAT_API_KEY",
   "CONVERSATION_API_KEY",
   "DEEPSEEK_API_KEY",
@@ -92,6 +94,7 @@ const PORT = Number(process.env.PORT || 3234);
 const DISCORD_BOT_TOKEN = safeText(process.env.DISCORD_BOT_TOKEN);
 const DISCORD_GUILD_ID = safeText(process.env.DISCORD_GUILD_ID);
 const DISCORD_PUBLIC_KEY = safeText(process.env.DISCORD_PUBLIC_KEY);
+const DISCORD_ALLOWED_USER_ID = safeText(process.env.DISCORD_ALLOWED_USER_ID);
 const DEFAULT_CHAT_API_PROVIDER = "deepseek";
 const DEFAULT_CHAT_API_MODEL = "deepseek-v4-pro";
 const DEFAULT_MIN_REPLY_CHARS = 600;
@@ -10300,7 +10303,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204, { "Content-Type": "application/json; charset=utf-8" });
       res.end();
       const authorization = getDiscordUserInstallAuthorization(payload);
-      if (authorization) {
+      if (authorization && isAllowedDiscordUser(authorization.userId, DISCORD_ALLOWED_USER_ID)) {
         void sendDiscordUserInstallWelcome(authorization).catch((error) => {
           console.warn(`Discord 使用者安裝歡迎私訊失敗（${authorization.userId}）：${error.message || error}`);
         });
@@ -12443,7 +12446,7 @@ function setupDiscordBot() {
   });
 
   discordClient.on("messageCreate", async (message) => {
-    if (message.author.bot) {
+    if (message.author.bot || !isAllowedDiscordUser(message.author.id, DISCORD_ALLOWED_USER_ID)) {
       return;
     }
 
@@ -12470,7 +12473,11 @@ function setupDiscordBot() {
 
   discordClient.on("messageUpdate", async (_, updatedMessage) => {
     const message = updatedMessage.partial ? await updatedMessage.fetch() : updatedMessage;
-    if (!message || message.author?.bot) {
+    if (
+      !message ||
+      message.author?.bot ||
+      !isAllowedDiscordUser(message.author?.id, DISCORD_ALLOWED_USER_ID)
+    ) {
       return;
     }
 
@@ -12532,7 +12539,7 @@ function setupDiscordBot() {
     try {
       const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
       const fullUser = user?.partial ? await user.fetch() : user;
-      if (fullUser?.bot) {
+      if (fullUser?.bot || !isAllowedDiscordUser(fullUser?.id, DISCORD_ALLOWED_USER_ID)) {
         return;
       }
       await applyDiscordReactionFeedback(fullReaction, fullUser);
@@ -12545,7 +12552,7 @@ function setupDiscordBot() {
     try {
       const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
       const fullUser = user?.partial ? await user.fetch() : user;
-      if (fullUser?.bot) {
+      if (fullUser?.bot || !isAllowedDiscordUser(fullUser?.id, DISCORD_ALLOWED_USER_ID)) {
         return;
       }
       await clearDiscordReactionFeedback(fullReaction, fullUser);
@@ -12556,6 +12563,10 @@ function setupDiscordBot() {
 
   discordClient.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) {
+      return;
+    }
+    if (!isAllowedDiscordUser(interaction.user?.id, DISCORD_ALLOWED_USER_ID)) {
+      await safeSendInteractionText(interaction, "你沒有權限使用此 Bot。", { ephemeral: true });
       return;
     }
 

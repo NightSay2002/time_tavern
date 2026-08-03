@@ -580,6 +580,13 @@ const ENV_FIELD_GROUPS = [
         help: "選填。無法從 Token 解出 Client ID 時，用它產生邀請連結。"
       },
       {
+        key: "DISCORD_ALLOWED_USER_ID",
+        label: "指定user only",
+        type: "text",
+        placeholder: "Discord User ID",
+        help: "選填。設定後只接受這個使用者的 Discord 指令、訊息、編輯與反應。"
+      },
+      {
         key: "DISCORD_PUBLIC_KEY",
         label: "Discord Public Key",
         type: "text",

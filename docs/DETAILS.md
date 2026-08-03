@@ -37,6 +37,7 @@
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
+| `DISCORD_ALLOWED_USER_ID` | 空 | 設定後只接受該 Discord User ID 的指令、訊息、編輯與反應。 |
 | `DISCORD_PUBLIC_KEY` | 自動取得 | 驗證 Discord Application Authorized Webhook；Bot 未連線時可填 Developer Portal Public Key 作備援。 |
 | `DISCORD_GUILD_ID` | 空 | 額外指定 guild；啟動時亦會同步所有已加入的 guild。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
