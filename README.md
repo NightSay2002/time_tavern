@@ -68,6 +68,7 @@ NOVELAI_API_TOKEN=你的_NovelAI_Persistent_API_Token
 ```
 
 Discord 不填 `DISCORD_BOT_TOKEN` 也能正常使用本地網頁。
+`DISCORD_BOT_TOKEN` 與 `DISCORD_CLIENT_ID` 只保留在本機 `.env`，不會寫入作者預設。
 
 ## 第一次啟動預設
 

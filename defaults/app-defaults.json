@@ -4074,7 +4074,6 @@
   "environment": {
     "values": {
       "PORT": "3234",
-      "DISCORD_CLIENT_ID": "",
       "CHAT_API_PROVIDER": "deepseek",
       "CHAT_API_BASE_URL": "https://api.deepseek.com",
       "CHAT_API_MODEL": "deepseek-v4-pro",

@@ -77,6 +77,7 @@ const NOVELAI_STORYBOARDS_DIR = path.join(DATA_DIR, "novelai-storyboards");
 const DEFAULT_ENV_SECRET_KEY_PATTERN = /(?:^|_)(?:SECRET|PASSWORD|PRIVATE_KEY)(?:$|_|\d)|(?:^|_)TOKEN(?:$|\d)|(?:^|_)API_KEY(?:$|\d)/iu;
 const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "DISCORD_BOT_TOKEN",
+  "DISCORD_CLIENT_ID",
   "CHAT_API_KEY",
   "CONVERSATION_API_KEY",
   "DEEPSEEK_API_KEY",
@@ -422,7 +423,7 @@ function buildEnvContentFromDefaultEnvironment(values = {}) {
   }
   return [
     "# 由本機預設載入的環境設定。",
-    "# Discord Bot Token 與對話 API Key 不會寫入預設。",
+    "# Discord Bot Token、Client ID 與對話 API Key 不會寫入預設。",
     ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
 }
