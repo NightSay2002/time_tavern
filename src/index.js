@@ -30,7 +30,11 @@ import {
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
 import { stripLeadingContextRoundLabels } from "./context-rounds.js";
-import { selectReasonerDialogueContextMessages } from "./dialogue-context.js";
+import {
+  composeReasonerRequestMessages,
+  hasReachedContextRoundLimit,
+  selectReasonerDialogueContextMessages
+} from "./dialogue-context.js";
 import {
   isLegacyDiscordTextCommand,
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
@@ -7313,7 +7317,7 @@ function shouldTriggerCompressionProfile({
   const compressedThroughTurnNumber = Number(profileState.compressedThroughTurnNumber || 0);
   const triggeredBy = [];
 
-  if (triggers.roundLimit && uncompressedRounds.length >= contextLimit) {
+  if (triggers.roundLimit && hasReachedContextRoundLimit(uncompressedRounds, contextLimit)) {
     triggeredBy.push("達到正文上限輪數");
   }
 
@@ -7696,15 +7700,14 @@ function getSimpleCompressedContextMessages(currentState, runtimeUserName = "") 
 function buildSimpleCompressedReasonerMessages(currentState, runtimeUserName = "") {
   const supportMessage = buildSimpleCompressedReasonerSupportMessage(currentState, runtimeUserName);
   const compressionMessage = buildSimpleCompressedReasonerCompressionMessage(currentState);
-  return [
-    {
-      role: "system",
-      content: buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUserName)
-    },
-    ...(compressionMessage ? [{ role: "user", content: compressionMessage }] : []),
-    ...(supportMessage ? [{ role: "user", content: supportMessage }] : []),
-    ...buildCacheableDialogueMessages(getSimpleCompressedContextMessages(currentState, runtimeUserName))
-  ];
+  return composeReasonerRequestMessages({
+    systemPrompt: buildSimpleCompressedReasonerStaticSystemPrompt(currentState, runtimeUserName),
+    compressionMessage,
+    supportMessage,
+    dialogueMessages: buildCacheableDialogueMessages(
+      getSimpleCompressedContextMessages(currentState, runtimeUserName)
+    )
+  });
 }
 
 function buildModularPromptPreview(currentState, mode = "single", configInput = {}) {

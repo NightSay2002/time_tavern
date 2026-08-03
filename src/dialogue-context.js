@@ -57,6 +57,11 @@ export function collectCompletedDialogueRoundsBeforeLatestUser(conversation = []
   return rounds;
 }
 
+export function hasReachedContextRoundLimit(uncompressedRounds = [], contextLimit = 20) {
+  const limit = Math.max(1, Math.floor(Number(contextLimit)) || 1);
+  return Array.isArray(uncompressedRounds) && uncompressedRounds.length >= limit;
+}
+
 export function selectReasonerDialogueContextMessages({
   conversation = [],
   latestUserMessage = null,
@@ -106,4 +111,18 @@ export function selectReasonerDialogueContextMessages({
     });
   }
   return messages;
+}
+
+export function composeReasonerRequestMessages({
+  systemPrompt = "",
+  compressionMessage = "",
+  supportMessage = "",
+  dialogueMessages = []
+} = {}) {
+  return [
+    ...(normalizeText(systemPrompt) ? [{ role: "system", content: normalizeText(systemPrompt) }] : []),
+    ...(normalizeText(compressionMessage) ? [{ role: "user", content: normalizeText(compressionMessage) }] : []),
+    ...(normalizeText(supportMessage) ? [{ role: "user", content: normalizeText(supportMessage) }] : []),
+    ...(Array.isArray(dialogueMessages) ? dialogueMessages : [])
+  ];
 }

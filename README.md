@@ -158,4 +158,4 @@ node --check src/public/app.js
 node --check src/public/novelai.js
 ```
 
-`npm test` 使用本地模擬對話驗證 20 輪正文上下文，不會呼叫外部模型 API。
+`npm test` 使用本地模擬對話驗證 20 輪正文上下文：第 21 回合先觸發標準壓縮，再送出角色卡、壓縮內容、第 20 回合橋接與本次 user；測試不會呼叫外部模型 API。
