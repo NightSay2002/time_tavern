@@ -50,6 +50,11 @@ import {
 import { hasKeepTimeDirective, stripKeepTimeDirective } from "./keep-time.js";
 import { buildQuickSendContent, QUICK_SEND_TEMPLATES } from "./quick-send.js";
 import {
+  buildChatApiRequestBody,
+  normalizeChatApiMaxTokensParamName,
+  normalizeDeepSeekReasoningEffort
+} from "./chat-api-request.js";
+import {
   buildStoryboardExecutionPlan,
   composeStoryboardSceneSettings,
   createStoryboard,
@@ -8024,6 +8029,12 @@ function getChatApiTemperature(purpose = "chat", temperature = null) {
   return Number.isFinite(envTemperature) ? envTemperature : CHAT_API_TEMPERATURE;
 }
 
+function getDeepSeekReasoningEffort(envSource = process.env) {
+  return normalizeDeepSeekReasoningEffort(
+    envObjectFirstText(envSource, ["DEEPSEEK_REASONING_EFFORT"])
+  );
+}
+
 function getChatApiRequestTimeoutMs() {
   return envFirstNumber(
     ["CHAT_API_REQUEST_TIMEOUT_MS", "CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
@@ -8489,37 +8500,6 @@ function getChatApiMaxTokensParamName() {
   );
 }
 
-function normalizeChatApiMaxTokensParamName(value = "") {
-  return value === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens";
-}
-
-function buildChatApiRequestBody({
-  model,
-  temperature,
-  maxTokens,
-  messages,
-  stream = false,
-  responseFormat = null,
-  maxTokensParamName = getChatApiMaxTokensParamName()
-}) {
-  const requestBody = {
-    model,
-    temperature,
-    messages
-  };
-  requestBody[normalizeChatApiMaxTokensParamName(maxTokensParamName)] = maxTokens;
-  if (stream) {
-    requestBody.stream = true;
-    requestBody.stream_options = {
-      include_usage: true
-    };
-  }
-  if (responseFormat && typeof responseFormat === "object") {
-    requestBody.response_format = responseFormat;
-  }
-  return requestBody;
-}
-
 function getChatApiProviderKeyAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
   const normalizedProvider = normalizeChatApiProvider(provider);
   if (normalizedProvider === "openai") {
@@ -8568,6 +8548,7 @@ function resolveChatApiTestConfig(envSource = {}) {
   const maxTokensParamName = normalizeChatApiMaxTokensParamName(
     envObjectFirstText(envSource, ["CHAT_API_MAX_TOKENS_PARAM", "CONVERSATION_API_MAX_TOKENS_PARAM"], "max_tokens")
   );
+  const reasoningEffort = getDeepSeekReasoningEffort(envSource);
   return {
     provider,
     apiKey,
@@ -8575,7 +8556,8 @@ function resolveChatApiTestConfig(envSource = {}) {
     completionsUrl: getChatApiCompletionsUrlFromBaseUrl(baseUrl),
     model,
     requestTimeoutMs,
-    maxTokensParamName
+    maxTokensParamName,
+    reasoningEffort
   };
 }
 
@@ -8606,9 +8588,11 @@ async function testChatApiConnection(envSource = {}) {
   }
 
   const requestBody = buildChatApiRequestBody({
+    provider: config.provider,
+    reasoningEffort: config.reasoningEffort,
     model: config.model,
     temperature: 0,
-    maxTokens: 8,
+    maxTokens: config.provider === "deepseek" && config.reasoningEffort && config.reasoningEffort !== "none" ? 1024 : 8,
     maxTokensParamName: config.maxTokensParamName,
     messages: [
       {
@@ -8750,6 +8734,8 @@ async function callChatApiCompletionRaw({
   }
 
   const requestBody = buildChatApiRequestBody({
+    provider: getChatApiProvider(),
+    reasoningEffort: getDeepSeekReasoningEffort(),
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,
@@ -9105,6 +9091,8 @@ async function callChatApiCompletionStreamRaw({
   }
 
   const requestBody = buildChatApiRequestBody({
+    provider: getChatApiProvider(),
+    reasoningEffort: getDeepSeekReasoningEffort(),
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,

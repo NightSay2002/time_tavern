@@ -59,7 +59,7 @@ CHAT_API_KEY=你的_API_Key
 CHAT_API_MODEL=deepseek-v4-pro
 ```
 
-DeepSeek 預設使用 `deepseek-v4-pro`。`CHAT_API_TEMPERATURE` 可設定 `0–2`，並支援 `0.1` 等小數。
+DeepSeek 預設使用 `deepseek-v4-pro`。`DEEPSEEK_REASONING_EFFORT` 可留空使用 API 預設，或設為 `none`、`low`、`high`、`max`；只有 `none` 關閉思考模式時，`CHAT_API_TEMPERATURE` 才會生效。
 
 NovelAI 圖片功能另外填：
 

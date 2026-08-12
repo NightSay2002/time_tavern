@@ -640,6 +640,19 @@ const ENV_FIELD_GROUPS = [
         help: "主聊天、大模型處理、補寫與角色卡助手都會使用此模型。"
       },
       {
+        key: "DEEPSEEK_REASONING_EFFORT",
+        label: "DeepSeek 思考模式強度",
+        type: "select",
+        options: [
+          ["", "使用 API 預設（目前為高）"],
+          ["none", "關閉（使用溫度）"],
+          ["low", "低"],
+          ["high", "高"],
+          ["max", "最大"]
+        ],
+        help: "只套用於 DeepSeek provider。選擇關閉後 CHAT_API_TEMPERATURE 才會生效；低／高／最大會開啟思考且忽略溫度。"
+      },
+      {
         key: "CHAT_API_REQUEST_TIMEOUT_MS",
         label: "API 請求逾時",
         type: "number",
@@ -671,7 +684,7 @@ const ENV_FIELD_GROUPS = [
         max: "2",
         step: "0.1",
         inputMode: "decimal",
-        help: "選填，可設定 0 至 2（支援 0.1 等小數）。留空時一般對話使用 0.5，寫卡助手使用 0.9。"
+        help: "選填，可設定 0 至 2（支援 0.1 等小數）。DeepSeek 只有關閉思考模式時才會套用；留空時一般對話使用 0.5，寫卡助手使用 0.9。"
       }
     ]
   },
@@ -2535,6 +2548,10 @@ function setChatApiTestStatus(type = "", message = "") {
   }
   status.className = `env-test-status${type ? ` ${type}` : ""}`;
   status.textContent = message || "尚未測試";
+}
+
+function isChatApiEnvField(key = "") {
+  return key.startsWith("CHAT_API_") || key === "DEEPSEEK_REASONING_EFFORT";
 }
 
 async function testChatApiConnection() {
@@ -8714,12 +8731,12 @@ function bindEvents() {
       await testChatApiConnection();
     });
     el.envSettingsForm.addEventListener("input", (event) => {
-      if (event.target?.dataset?.envKey?.startsWith("CHAT_API_")) {
+      if (isChatApiEnvField(event.target?.dataset?.envKey || "")) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
       }
     });
     el.envSettingsForm.addEventListener("change", (event) => {
-      if (event.target?.dataset?.envKey?.startsWith("CHAT_API_")) {
+      if (isChatApiEnvField(event.target?.dataset?.envKey || "")) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
       }
     });
