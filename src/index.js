@@ -49,7 +49,10 @@ import {
 } from "./discord-onboarding.js";
 import { hasKeepTimeDirective, stripKeepTimeDirective } from "./keep-time.js";
 import { buildQuickSendContent, QUICK_SEND_TEMPLATES } from "./quick-send.js";
-import { syncPromptImageActionAvailability } from "./prompt-image-actions.js";
+import {
+  shouldSyncPromptImageActionAvailability,
+  syncPromptImageActionAvailability
+} from "./prompt-image-actions.js";
 import {
   buildChatApiRequestBody,
   normalizeChatApiMaxTokensParamName,
@@ -4655,16 +4658,17 @@ function persistModularPromptConfigs(configs = getModularPromptConfigStore()) {
   return normalizedConfigs;
 }
 
-function syncPromptImageActionsWithNovelAiToken() {
+function syncPromptImageActionsWithNovelAiToken(enabled) {
   const result = syncPromptImageActionAvailability(
     getModularPromptConfigsPayload(),
-    Boolean(getNovelAiToken())
+    enabled
   );
   if (result.changedCount > 0) {
     modularPromptConfigStore = result.configs;
     persistModularPromptConfigs(modularPromptConfigStore);
   }
   return {
+    synced: true,
     enabled: result.enabled,
     matchedCount: result.matchedCount,
     changedCount: result.changedCount
@@ -10331,8 +10335,20 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/env" && method === "PUT") {
       const body = await readBody(req);
+      const previousNovelAiConfigured = Boolean(getNovelAiToken());
       const content = saveEnvFileContent(body?.content);
-      const promptImageActions = syncPromptImageActionsWithNovelAiToken();
+      const novelAiConfigured = Boolean(getNovelAiToken());
+      const promptImageActions = shouldSyncPromptImageActionAvailability(
+        previousNovelAiConfigured,
+        novelAiConfigured
+      )
+        ? syncPromptImageActionsWithNovelAiToken(novelAiConfigured)
+        : {
+            synced: false,
+            enabled: novelAiConfigured,
+            matchedCount: 0,
+            changedCount: 0
+          };
       sendJson(res, 200, {
         content,
         promptImageActions,

@@ -67,7 +67,7 @@ NovelAI 圖片功能另外填：
 NOVELAI_API_TOKEN=你的_NovelAI_Persistent_API_Token
 ```
 
-保存環境設定時，系統會依 `NOVELAI_API_TOKEN` 是否有值，自動啟用或停用所有 Prompt 跑圖觸發組合。
+保存環境設定時，只有 `NOVELAI_API_TOKEN` 在空白與有值之間切換，系統才會自動停用或啟用所有 Prompt 跑圖觸發組合。Token 狀態沒有改變時，保留使用者在 Prompt 內手動調整的啟用狀態。
 
 Discord 不填 `DISCORD_BOT_TOKEN` 也能正常使用本地網頁。
 設定 `DISCORD_ALLOWED_USER_ID` 後，Bot 只接受該 Discord 使用者的指令、訊息、編輯與反應。

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { syncPromptImageActionAvailability } from "../src/prompt-image-actions.js";
+import {
+  shouldSyncPromptImageActionAvailability,
+  syncPromptImageActionAvailability
+} from "../src/prompt-image-actions.js";
 
 function createConfigs() {
   return {
@@ -53,4 +56,11 @@ test("present NovelAI token enables every Prompt image action", () => {
   assert.equal(result.changedCount, 1);
   assert.equal(parallel.enabled, true);
   assert.equal(imageOnly.enabled, true);
+});
+
+test("Prompt image actions only auto-sync when Token availability changes", () => {
+  assert.equal(shouldSyncPromptImageActionAvailability(false, true), true);
+  assert.equal(shouldSyncPromptImageActionAvailability(true, false), true);
+  assert.equal(shouldSyncPromptImageActionAvailability(false, false), false);
+  assert.equal(shouldSyncPromptImageActionAvailability(true, true), false);
 });

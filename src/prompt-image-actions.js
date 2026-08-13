@@ -3,6 +3,10 @@ const PROMPT_IMAGE_FOLLOWUP_ACTIONS = new Set([
   "image_only"
 ]);
 
+export function shouldSyncPromptImageActionAvailability(previousConfigured, nextConfigured) {
+  return Boolean(previousConfigured) !== Boolean(nextConfigured);
+}
+
 export function syncPromptImageActionAvailability(configsInput = {}, enabled = false) {
   const source = configsInput && typeof configsInput === "object" && !Array.isArray(configsInput)
     ? configsInput
