@@ -5,6 +5,7 @@
 `start-mac.command` 與 `start-win.bat` 的共同流程：
 
 - 切到專案根目錄。
+- 根目錄缺少 `.env` 時，先從 `data/environment.env` 還原。
 - 從 `.env` 讀取 `PORT`，沒有就用 `3234`。
 - 檢查 `node` 與 `npm` 是否存在。
 - 檢查 `node_modules/discord.js`，不存在時執行 `npm install`。
@@ -19,7 +20,7 @@
 
 ## 環境變數
 
-常用設定可在主頁「環境設定」編輯，保存後寫回 `.env`。
+常用設定可在主頁「環境設定」編輯，保存後寫回 `.env`，並同步備份到 `data/environment.env`。若新版本缺少根目錄 `.env`，啟動時會自動從備份還原。
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
@@ -218,6 +219,8 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 
 自動更新只處理 Git 追蹤的程式與發布預設。`data/`、`.env`、角色卡與目前對話不會被 Git 更新；舊版追蹤檔中的使用者預設或 Prompt 改動會先遷移到 `data/`。
 
+自動更新因本機程式檔改動而跳過時，可停止服務、備份整個 `data/`、取得乾淨的新版本，再只把 `data/` 放回新版本。啟動器會用 `data/environment.env` 還原缺少的 `.env`。備份包含 Token 與 API Key，不可公開。
+
 ## HTTP API
 
 | Method | Path | 說明 |
@@ -262,6 +265,7 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容與 AI logs 摘要。 |
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
+| `data/environment.env` | 根目錄 `.env` 的完整本機備份，包含 Token 與 API Key。 |
 | `data/cardstate.json` | 使用者設定與角色卡分離備份。 |
 | `data/saved-sessions/` | 網頁對話存檔的訊息與 AI 呼叫紀錄。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |

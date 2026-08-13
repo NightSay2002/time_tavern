@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+import { syncEnvironmentBackup } from "../src/environment-backup.js";
 
 const SCRIPT_FILE = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SCRIPT_FILE), "..");
@@ -14,8 +15,7 @@ const LOCAL_NOVELAI_DEFAULTS_FILE = path.join(DATA_DIR, "novelai-defaults.json")
 const LEGACY_PROMPTS_DIR = path.join(REPO_ROOT, "prompts");
 const UPDATE_TIMEOUT_MS = 30_000;
 const INSTALL_TIMEOUT_MS = 180_000;
-
-dotenv.config({ path: path.join(REPO_ROOT, ".env") });
+const ENV_FILE = path.join(REPO_ROOT, ".env");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -265,6 +265,11 @@ export function updateFromTrackedGitBranch() {
 }
 
 async function start() {
+  const environmentBackup = syncEnvironmentBackup({ envFile: ENV_FILE, dataDir: DATA_DIR });
+  if (environmentBackup.action === "restored") {
+    console.log("[設定] 已從 data/environment.env 還原 .env。");
+  }
+  dotenv.config({ path: ENV_FILE });
   updateFromTrackedGitBranch();
   await import("../src/index.js");
 }

@@ -66,6 +66,7 @@ import {
   storyboardSummary,
   validateStoryboard
 } from "./novelai-storyboard.js";
+import { syncEnvironmentBackup } from "./environment-backup.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -97,6 +98,11 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
 ]);
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 let appDefaultEnvironmentValuesCache = null;
+const environmentBackup = syncEnvironmentBackup({ envFile: ENV_FILE, dataDir: DATA_DIR });
+if (environmentBackup.action === "restored") {
+  console.log("[設定] 已從 data/environment.env 還原 .env。");
+}
+dotenv.config({ path: ENV_FILE });
 ensureLocalDefaultsFiles();
 applyDefaultEnvToProcess();
 const PORT = Number(process.env.PORT || 3234);
@@ -453,6 +459,7 @@ function saveEnvFileContent(content = "") {
   const nextContent = safeText(content);
   const nextEnv = parseEnvContent(nextContent);
   fs.writeFileSync(ENV_FILE, nextContent.endsWith("\n") ? nextContent : `${nextContent}\n`, "utf8");
+  syncEnvironmentBackup({ envFile: ENV_FILE, dataDir: DATA_DIR });
 
   Object.keys(previousEnv).forEach((key) => {
     if (!Object.prototype.hasOwnProperty.call(nextEnv, key)) {

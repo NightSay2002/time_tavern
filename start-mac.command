@@ -2,6 +2,16 @@
 
 cd "$(dirname "$0")" || exit 1
 
+if [ ! -f ".env" ] && [ -f "data/environment.env" ]; then
+  if ! cp "data/environment.env" ".env"; then
+    echo "Failed to restore .env from data/environment.env."
+    read "REPLY?Press Enter to close..."
+    exit 1
+  fi
+  chmod 600 ".env" 2>/dev/null || true
+  echo "[Settings] Restored .env from data/environment.env."
+fi
+
 PORT_VALUE="3234"
 if [ -f ".env" ]; then
   ENV_PORT=$(grep -E "^PORT=" ".env" | tail -n 1 | cut -d "=" -f 2- | tr -d "\"'")

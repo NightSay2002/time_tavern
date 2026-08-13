@@ -3,6 +3,16 @@ setlocal
 
 cd /d "%~dp0"
 
+if not exist ".env" if exist "data\environment.env" (
+  copy /Y "data\environment.env" ".env" >nul
+  if errorlevel 1 (
+    echo Failed to restore .env from data/environment.env.
+    pause
+    exit /b 1
+  )
+  echo [Settings] Restored .env from data/environment.env.
+)
+
 set "PORT_VALUE=3234"
 if exist ".env" (
   for /f "usebackq tokens=1,* delims==" %%A in (".env") do (

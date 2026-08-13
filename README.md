@@ -41,7 +41,9 @@ npm start
 
 `npm start` 會先檢查目前追蹤的 GitHub 分支。工作區沒有程式碼改動且可 fast-forward 時會自動更新；離線、有本機程式碼改動或分支已分岔時會保留現況並繼續啟動。
 
-使用者的角色卡、使用者設定、Prompt、目前對話與本機預設都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。舊版若曾把「儲存預設」或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
+使用者的角色卡、使用者設定、Prompt、目前對話與本機預設都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。根目錄 `.env` 會自動備份到 `data/environment.env`；新版本缺少 `.env` 時，啟動器會由該備份還原。舊版若曾把「儲存預設」或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
+
+若本機程式檔改動使自動更新跳過，手動更新時先停止服務並備份整個 `data/`，取得乾淨的新版本後，只把備份的 `data/` 放回新版本再啟動。不要用舊程式檔覆蓋新版本。`data/environment.env` 含 Token 與 API Key，請勿分享或提交。
 
 這個檢查只在每次 `npm start` 啟動時執行一次，不會中斷正在運行的 server 做熱更新。每台 server 都需要以 `npm start` 重啟才會拉取；直接執行 `node src/index.js` 會略過更新流程。需要暫時關閉時可在 `.env` 設定：
 
@@ -144,6 +146,7 @@ defaults/app-defaults.json     發布用主功能與 Prompt 預設
 defaults/novelai-defaults.json 發布用 NovelAI 預設
 data/app-defaults.json         使用者本機主功能與 Prompt 預設
 data/novelai-defaults.json     使用者本機 NovelAI 預設
+data/environment.env           根目錄 .env 的本機備份
 data/                          角色卡、設定、對話與其他本機資料，不要提交
 ```
 
