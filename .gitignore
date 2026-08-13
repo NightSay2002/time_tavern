@@ -1,4 +1,5 @@
 node_modules/
+.runtime/
 .env
 npm-debug.log*
 .DS_Store

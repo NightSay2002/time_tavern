@@ -6,13 +6,14 @@
 
 ## 快速啟動
 
-需求：
+啟動器需求：
 
-- Node.js `>=18`
-- npm
+- 第一次啟動可連線至 `nodejs.org` 與 npm registry
 - 對話 API key：OpenAI-compatible Chat Completions API
 - 選配：Discord Bot Token
 - 選配：NovelAI Persistent API Token
+
+`start-mac.command` 與 `start-win.bat` 會檢查 Node.js。系統已有 Node.js `>=18` 與 npm 時直接使用；否則從 Node.js 官方下載最新 Node.js 24.x LTS 到 `.runtime/node/`，驗證 SHA-256 後供此專案使用，不需要管理員權限，也不會修改系統 Node.js。
 
 macOS：
 
@@ -33,6 +34,8 @@ npm install
 cp .env.example .env
 npm start
 ```
+
+手動執行 `npm start` 才需要預先自行安裝 Node.js `>=18` 與 npm。
 
 啟動後打開：
 
@@ -83,7 +86,7 @@ Discord 不填 `DISCORD_BOT_TOKEN` 也能正常使用本地網頁。
 
 NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defaults.json`；瀏覽器沒有本頁 draft 時會讀取本機 NovelAI 預設。
 
-`start-mac.command` 與 `start-win.bat` 會自動檢查 Node/npm、安裝缺少的 `node_modules`、執行 `npm start`，並在更新及伺服器啟動完成後依目前 `PORT` 開啟瀏覽器。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
+`start-mac.command` 與 `start-win.bat` 會自動準備缺少的專案 Node.js、安裝缺少的 `node_modules`、執行 `npm start`，並在更新及伺服器啟動完成後依目前 `PORT` 開啟瀏覽器。預設套用由 server 與 NovelAI 前端完成，啟動器不需要額外呼叫套用 API。
 
 服務已在運行時若更新到後端程式，請使用環境設定中的「重啟伺服器」或重新執行啟動器；只刷新網頁只會重新載入前端檔案。
 
@@ -144,6 +147,8 @@ src/public/novelai.js        NovelAI 互動
 src/public/styles.css        共用樣式
 defaults/app-defaults.json     發布用主功能與 Prompt 預設
 defaults/novelai-defaults.json 發布用 NovelAI 預設
+scripts/bootstrap-node-mac.sh   macOS 專案 Node.js 安裝器
+scripts/bootstrap-node-win.ps1  Windows 專案 Node.js 安裝器
 data/app-defaults.json         使用者本機主功能與 Prompt 預設
 data/novelai-defaults.json     使用者本機 NovelAI 預設
 data/environment.env           根目錄 .env 的本機備份

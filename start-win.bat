@@ -22,17 +22,21 @@ if exist ".env" (
 set PORT_VALUE=%PORT_VALUE:"=%
 set PORT_VALUE=%PORT_VALUE:'=%
 
-where node >nul 2>nul
+call :has_usable_node
 if errorlevel 1 (
-  echo Node.js was not found. Please install Node.js first:
-  echo https://nodejs.org/
-  pause
-  exit /b 1
+  echo Node.js 18 or newer was not found. Installing a project Node.js runtime...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\bootstrap-node-win.ps1" -ProjectRoot "%CD%"
+  if errorlevel 1 (
+    echo Project Node.js installation failed.
+    pause
+    exit /b 1
+  )
+  set "PATH=%CD%\.runtime\node;%PATH%"
 )
 
-where npm >nul 2>nul
+call :has_usable_node
 if errorlevel 1 (
-  echo npm was not found. Please install Node.js with npm first.
+  echo Node.js 18 or newer and npm are required.
   pause
   exit /b 1
 )
@@ -49,7 +53,19 @@ if not exist "node_modules\discord.js" (
 
 start "" powershell -NoProfile -WindowStyle Hidden -Command "$url='http://localhost:%PORT_VALUE%'; for($i=0; $i -lt 90; $i++){ try { Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 1 | Out-Null; Start-Process $url; exit } catch {}; Start-Sleep -Seconds 1 }; Start-Process $url"
 call npm start
+set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 echo Server stopped.
 pause
+exit /b %EXIT_CODE%
+
+:has_usable_node
+set "NODE_MAJOR=0"
+where node >nul 2>nul
+if errorlevel 1 exit /b 1
+for /f "delims=" %%V in ('node -p "Number(process.versions.node.split('.')[0])" 2^>nul') do set "NODE_MAJOR=%%V"
+if %NODE_MAJOR% LSS 18 exit /b 1
+where npm >nul 2>nul
+if errorlevel 1 exit /b 1
+exit /b 0

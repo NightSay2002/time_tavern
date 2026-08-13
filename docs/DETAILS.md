@@ -7,7 +7,8 @@
 - 切到專案根目錄。
 - 根目錄缺少 `.env` 時，先從 `data/environment.env` 還原。
 - 從 `.env` 讀取 `PORT`，沒有就用 `3234`。
-- 檢查 `node` 與 `npm` 是否存在。
+- 檢查系統 `node` 是否至少為 18 且有 npm；不符合時從 Node.js 官方下載最新 24.x LTS 到 `.runtime/node/`。
+- 下載的專案 Node.js 會比對官方 `SHASUMS256.txt`，不符合時停止啟動；不需要管理員權限，也不修改系統 Node.js。
 - 檢查 `node_modules/discord.js`，不存在時執行 `npm install`。
 - 打開 `http://localhost:<PORT>`。
 - 執行 `npm start`。
@@ -17,6 +18,7 @@
 - 主功能：會。後端先把 `defaults/app-defaults.json` 複製到 `data/app-defaults.json`；沒有 `data/app-state.json` 時，`createDefaultState()` 會讀取本機預設。
 - NovelAI：會。後端先建立 `data/novelai-defaults.json`；`src/public/novelai.js` 在沒有 localStorage draft 時，會呼叫 `/api/novelai/defaults` 讀取本機預設。
 - 啟動器本身不需要呼叫「使用預設」API；預設由 server 與 NovelAI 頁面自動讀取。
+- 缺少可用 Node.js 時，第一次啟動需要連線至 `nodejs.org`；缺少 npm 套件時也需要連線至 npm registry。之後可重用 `.runtime/node/` 與 `node_modules/`。
 
 ## 環境變數
 
