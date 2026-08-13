@@ -8750,8 +8750,15 @@ function bindEvents() {
         if (el.envSettingsHint) {
           el.envSettingsHint.textContent = payload?.restartHint || "已保存 .env。";
         }
+        if (payload?.state) {
+          appState = payload.state;
+        }
         renderEnvSettingsForm(payload?.content || buildEnvContentFromForm());
-        showToast("環境設定已保存");
+        const imageSync = payload?.promptImageActions;
+        const imageSyncText = imageSync?.matchedCount > 0
+          ? `，Prompt 跑圖已${imageSync.enabled ? "啟用" : "停用"} ${imageSync.matchedCount} 組`
+          : "";
+        showToast(`環境設定已保存${imageSyncText}`);
       } catch (error) {
         showToast(error.message, "error");
       }

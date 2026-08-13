@@ -49,6 +49,7 @@ import {
 } from "./discord-onboarding.js";
 import { hasKeepTimeDirective, stripKeepTimeDirective } from "./keep-time.js";
 import { buildQuickSendContent, QUICK_SEND_TEMPLATES } from "./quick-send.js";
+import { syncPromptImageActionAvailability } from "./prompt-image-actions.js";
 import {
   buildChatApiRequestBody,
   normalizeChatApiMaxTokensParamName,
@@ -4652,6 +4653,22 @@ function persistModularPromptConfigs(configs = getModularPromptConfigStore()) {
   }));
   saveState(state);
   return normalizedConfigs;
+}
+
+function syncPromptImageActionsWithNovelAiToken() {
+  const result = syncPromptImageActionAvailability(
+    getModularPromptConfigsPayload(),
+    Boolean(getNovelAiToken())
+  );
+  if (result.changedCount > 0) {
+    modularPromptConfigStore = result.configs;
+    persistModularPromptConfigs(modularPromptConfigStore);
+  }
+  return {
+    enabled: result.enabled,
+    matchedCount: result.matchedCount,
+    changedCount: result.changedCount
+  };
 }
 
 function saveModularPromptConfig(mode = "single", config = {}) {
@@ -10315,8 +10332,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/env" && method === "PUT") {
       const body = await readBody(req);
       const content = saveEnvFileContent(body?.content);
+      const promptImageActions = syncPromptImageActionsWithNovelAiToken();
       sendJson(res, 200, {
         content,
+        promptImageActions,
+        state: statePayload(state),
         restartHint: "已保存 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
       });
       return;
