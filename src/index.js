@@ -2484,6 +2484,14 @@ function isNovelAiV4Model(model = "") {
   return /nai-diffusion-4/u.test(normalizePlainText(model));
 }
 
+function isNovelAiV5Model(model = "") {
+  return /nai-diffusion-5/u.test(normalizePlainText(model));
+}
+
+function usesNovelAiStructuredPrompt(model = "") {
+  return isNovelAiV4Model(model) || isNovelAiV5Model(model);
+}
+
 function novelAiVarietySigmaForModel(model = "") {
   return /nai-diffusion-4-5/u.test(normalizePlainText(model)) ? 58 : 19;
 }
@@ -2638,6 +2646,7 @@ function buildNovelAiV4Condition(baseCaption = "", characters = [], options = {}
 function normalizeNovelAiGenerationRequest(input = {}) {
   const source = input?.settings && typeof input.settings === "object" ? input.settings : input || {};
   const model = normalizePlainText(source.model) || "nai-diffusion-4-5-full";
+  const isV5 = isNovelAiV5Model(model);
   const prompt = normalizePlainText(source.prompt || source.input);
   const promptTemplate = normalizePlainText(source.promptTemplate || source.prompt_template);
   const fixedPrompt = source.fixedPrompt || source.fixed_prompt || null;
@@ -2649,11 +2658,13 @@ function normalizeNovelAiGenerationRequest(input = {}) {
   const steps = clampInteger(source.steps, 28, 1, 50);
   const samples = clampInteger(source.samples ?? source.n_samples, 1, 1, 6);
   const scale = clampNumber(source.scale, 5, 0, 20);
-  const varietyPlus = normalizeNovelAiVarietyPlus(source);
+  const varietyPlus = !isV5 && normalizeNovelAiVarietyPlus(source);
   const cfgRescale = clampNumber(source.cfgRescale ?? source.cfg_rescale, 0, 0, 1);
   const ucPreset = clampInteger(source.ucPreset, 0, 0, 99);
   const sampler = normalizePlainText(source.sampler) || "k_euler_ancestral";
-  const noiseSchedule = normalizePlainText(source.noiseSchedule || source.noise_schedule) || "karras";
+  const noiseSchedule = isV5
+    ? "karras"
+    : normalizePlainText(source.noiseSchedule || source.noise_schedule) || "karras";
   const imageFormat = normalizePlainText(source.imageFormat || source.image_format) === "webp" ? "webp" : "png";
   const rawSeed = Number(source.seed);
   const seed = Number.isFinite(rawSeed) && rawSeed >= 0
@@ -2697,8 +2708,8 @@ function normalizeNovelAiGenerationRequest(input = {}) {
       fidelityMax: 1
     })
   };
-  const activeVibeImages = vibeTransfer.enabled ? vibeTransfer.images.filter((item) => item.enabled) : [];
-  const activePreciseImages = preciseReference.enabled ? preciseReference.images.filter((item) => item.enabled) : [];
+  const activeVibeImages = !isV5 && vibeTransfer.enabled ? vibeTransfer.images.filter((item) => item.enabled) : [];
+  const activePreciseImages = !isV5 && preciseReference.enabled ? preciseReference.images.filter((item) => item.enabled) : [];
   if (activeVibeImages.length > 0 && activePreciseImages.length > 0) {
     throw new Error("Vibe Transfer 與 Precise Reference 目前不能同時使用。");
   }
@@ -2717,13 +2728,22 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     sm: Boolean(source.sm),
     sm_dyn: Boolean(source.smDyn || source.sm_dyn),
     cfg_rescale: cfgRescale,
-    skip_cfg_above_sigma: varietyPlus ? novelAiVarietySigmaForModel(model) : null,
     noise_schedule: noiseSchedule,
-    params_version: clampInteger(source.paramsVersion || source.params_version, isNovelAiV4Model(model) ? 3 : 1, 1, 10),
+    params_version: isV5
+      ? 4
+      : clampInteger(source.paramsVersion || source.params_version, isNovelAiV4Model(model) ? 3 : 1, 1, 10),
     image_format: imageFormat,
     prompt,
     negative_prompt: negativePrompt
   };
+
+  if (isV5) {
+    const ucPresetHints = [2, 3, 2, 4, 0];
+    parameters.tag_hint_qt = parameters.qualityToggle ? 1 : 0;
+    parameters.tag_hint_uc_preset = ucPresetHints[ucPreset] ?? 2;
+  } else {
+    parameters.skip_cfg_above_sigma = varietyPlus ? novelAiVarietySigmaForModel(model) : null;
+  }
 
   if (baseImage) {
     parameters.image = baseImage;
@@ -2750,7 +2770,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     parameters.character_reference_fidelity_multiple = activePreciseImages.map((item) => item.fidelity);
   }
 
-  if (isNovelAiV4Model(model)) {
+  if (usesNovelAiStructuredPrompt(model)) {
     parameters.v4_prompt = buildNovelAiV4Condition(prompt, characters, { useCoords: characterPositionMode === "manual" });
     parameters.v4_negative_prompt = buildNovelAiV4Condition(negativePrompt, characters, { negative: true });
   }
@@ -2792,7 +2812,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
     characterPositionMode,
     characters,
     vibeTransfer: {
-      enabled: vibeTransfer.enabled,
+      enabled: !isV5 && vibeTransfer.enabled,
       strength: vibeTransfer.strength,
       informationExtracted: vibeTransfer.informationExtracted,
       imageCount: activeVibeImages.length,
@@ -2804,7 +2824,7 @@ function normalizeNovelAiGenerationRequest(input = {}) {
       }))
     },
     preciseReference: {
-      enabled: preciseReference.enabled,
+      enabled: !isV5 && preciseReference.enabled,
       strength: preciseReference.strength,
       fidelity: preciseReference.fidelity,
       imageCount: activePreciseImages.length,

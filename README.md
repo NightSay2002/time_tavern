@@ -105,7 +105,8 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 
 NovelAI：
 
-- 模型、尺寸、Steps、Guidance、Sampler、Seed、Variety+。
+- 支援 NAI Diffusion V5 Full／Curated，以及既有 V4.5、V4、V3 模型。
+- 模型、尺寸、Steps、Guidance、Sampler、Seed、Variety+；V5 會固定使用 Karras、停用 Variety+，並隱藏目前尚未支援的 Vibe Transfer 與 Precise Reference。
 - Fixed Prompt / Random Prompt 片段庫。
 - Character Prompts、Vibe Transfer、Image2Image、Precise Reference。
 - 拖入圖片時，只有偵測到可讀取的 NovelAI PNG metadata 才會顯示「匯入設定」。
@@ -114,6 +115,7 @@ NovelAI：
 - 本地歷史每頁載入 20 張，支援逐張刪除或一鍵清空；新圖片以 Blob 與縮圖保存，避免大量原圖同時載入造成卡頓。
 - 圖片檢視器：點擊主圖放大，拖曳移動，滾輪縮放。
 - NovelAI 預設保存/啟用。
+- 純靜態版本：<https://nightsay2002.github.io/novelai-image-static/>；Token 與圖片只保存在使用者瀏覽器。
 
 Discord：
 

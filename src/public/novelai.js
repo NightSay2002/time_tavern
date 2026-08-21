@@ -4,6 +4,10 @@ const el = {
   novelAiRefreshStatusBtn: document.getElementById("novelAiRefreshStatusBtn"),
   novelAiModel: document.getElementById("novelAiModel"),
   novelAiModelDescription: document.getElementById("novelAiModelDescription"),
+  novelAiVibeCard: document.getElementById("novelAiVibeCard"),
+  novelAiVibeHint: document.getElementById("novelAiVibeHint"),
+  novelAiPreciseCard: document.getElementById("novelAiPreciseCard"),
+  novelAiPreciseHint: document.getElementById("novelAiPreciseHint"),
   novelAiPrompt: document.getElementById("novelAiPrompt"),
   novelAiFixedPromptList: document.getElementById("novelAiFixedPromptList"),
   novelAiAddFixedPromptBtn: document.getElementById("novelAiAddFixedPromptBtn"),
@@ -18,6 +22,7 @@ const el = {
   novelAiScale: document.getElementById("novelAiScale"),
   novelAiGuidanceSummary: document.getElementById("novelAiGuidanceSummary"),
   novelAiVarietyPlus: document.getElementById("novelAiVarietyPlus"),
+  novelAiVarietyField: document.getElementById("novelAiVarietyField"),
   novelAiVarietySummary: document.getElementById("novelAiVarietySummary"),
   novelAiCfgRescale: document.getElementById("novelAiCfgRescale"),
   novelAiSeed: document.getElementById("novelAiSeed"),
@@ -25,6 +30,7 @@ const el = {
   novelAiSampler: document.getElementById("novelAiSampler"),
   novelAiSamplerSummary: document.getElementById("novelAiSamplerSummary"),
   novelAiNoiseSchedule: document.getElementById("novelAiNoiseSchedule"),
+  novelAiNoiseScheduleField: document.getElementById("novelAiNoiseScheduleField"),
   novelAiBaseImageFile: document.getElementById("novelAiBaseImageFile"),
   novelAiBaseImage: document.getElementById("novelAiBaseImage"),
   novelAiBaseImagePreview: document.getElementById("novelAiBaseImagePreview"),
@@ -131,6 +137,8 @@ const NOVELAI_STANDARD_PNG_TEXT_KEYS = new Set([
   "Comment"
 ]);
 const NOVELAI_MODEL_OPTIONS = [
+  ["nai-diffusion-5-full", "NAI Diffusion V5 Full"],
+  ["nai-diffusion-5-curated", "NAI Diffusion V5 Curated"],
   ["nai-diffusion-4-5-full", "NAI Diffusion V4.5 Full"],
   ["nai-diffusion-4-5-curated", "NAI Diffusion V4.5 Curated"],
   ["nai-diffusion-4-full", "NAI Diffusion V4 Full"],
@@ -139,6 +147,8 @@ const NOVELAI_MODEL_OPTIONS = [
   ["nai-diffusion-furry-3", "NAI Diffusion Furry V3"]
 ];
 const NOVELAI_MODEL_DESCRIPTIONS = {
+  "nai-diffusion-5-full": "最新、最完整的 V5 模型；Vibe、Precise 與 Variety+ 尚未支援。",
+  "nai-diffusion-5-curated": "較乾淨聚焦的 V5 模型；Vibe、Precise 與 Variety+ 尚未支援。",
   "nai-diffusion-4-5-full": "最新、最完整的 V4.5 模型。",
   "nai-diffusion-4-5-curated": "較乾淨聚焦的 V4.5 模型。",
   "nai-diffusion-4-full": "完整 V4 動漫模型。",
@@ -581,6 +591,72 @@ function boolSetting(value, fallback = false) {
 
 function varietySigmaForModel(model = "") {
   return /nai-diffusion-4-5/u.test(String(model || "")) ? 58 : 19;
+}
+
+function isNovelAiV5Model(model = "") {
+  return /nai-diffusion-5/u.test(String(model || ""));
+}
+
+function syncNovelAiModelCapabilities(options = {}) {
+  const isV5 = isNovelAiV5Model(el.novelAiModel?.value);
+  const restorePrevious = options.restorePrevious !== false;
+  if (el.novelAiVarietyPlus) {
+    if (isV5) {
+      if (!el.novelAiVarietyPlus.disabled) {
+        el.novelAiVarietyPlus.dataset.previousChecked = String(el.novelAiVarietyPlus.checked);
+      }
+      el.novelAiVarietyPlus.checked = false;
+    } else if (!isV5 && el.novelAiVarietyPlus.disabled) {
+      if (restorePrevious) {
+        el.novelAiVarietyPlus.checked = el.novelAiVarietyPlus.dataset.previousChecked !== "false";
+      }
+      delete el.novelAiVarietyPlus.dataset.previousChecked;
+    }
+    el.novelAiVarietyPlus.disabled = isV5;
+  }
+  if (el.novelAiNoiseSchedule) {
+    if (isV5) {
+      if (!el.novelAiNoiseSchedule.disabled) {
+        el.novelAiNoiseSchedule.dataset.previousValue = el.novelAiNoiseSchedule.value;
+      }
+      el.novelAiNoiseSchedule.value = "karras";
+    } else if (!isV5 && el.novelAiNoiseSchedule.disabled) {
+      if (restorePrevious) {
+        setSelectValue(el.novelAiNoiseSchedule, el.novelAiNoiseSchedule.dataset.previousValue || "karras");
+      }
+      delete el.novelAiNoiseSchedule.dataset.previousValue;
+    }
+    el.novelAiNoiseSchedule.disabled = isV5;
+  }
+  [el.novelAiVibeCard, el.novelAiPreciseCard, el.novelAiVarietyField, el.novelAiNoiseScheduleField]
+    .filter(Boolean)
+    .forEach((node) => {
+      node.classList.toggle("is-model-unsupported", isV5);
+      node.setAttribute("aria-disabled", isV5 ? "true" : "false");
+    });
+  [el.novelAiVibeCard, el.novelAiPreciseCard]
+    .filter(Boolean)
+    .forEach((node) => {
+      node.hidden = isV5;
+      node.classList.toggle("hidden", isV5);
+    });
+  if (el.novelAiVibeHint) {
+    el.novelAiVibeHint.textContent = isV5
+      ? "NovelAI V5 目前尚未支援 Vibe Transfer；切回 V4 後會保留現有圖片。"
+      : "拖入圖片後選擇 Vibe Transfer。每張圖片都有獨立設定。";
+  }
+  if (el.novelAiPreciseHint) {
+    el.novelAiPreciseHint.textContent = isV5
+      ? "NovelAI V5 目前尚未支援 Precise Reference；切回 V4 後會保留現有圖片。"
+      : "拖入圖片後選擇 Precise Reference。每張圖片都有獨立設定。";
+  }
+  el.novelAiDropChoiceDialog?.querySelectorAll('[data-drop-action="vibe"], [data-drop-action="precise"]')
+    .forEach((button) => {
+      button.hidden = isV5;
+      button.classList.toggle("hidden", isV5);
+      button.disabled = isV5;
+      button.title = isV5 ? "NovelAI V5 目前尚未支援此功能" : "";
+    });
 }
 
 function normalizeVarietyPlus(source = {}, comment = {}) {
@@ -1799,6 +1875,7 @@ function setFormSettings(settings = {}, options = {}) {
   el.novelAiSeed.value = normalized.seed >= 0 ? Math.floor(normalized.seed) : "";
   setSelectValue(el.novelAiSampler, normalized.sampler);
   setSelectValue(el.novelAiNoiseSchedule, normalized.noiseSchedule);
+  syncNovelAiModelCapabilities({ restorePrevious: false });
   if (el.novelAiLoopCount) {
     el.novelAiLoopCount.value = String(normalized.loopCount ?? 1);
   }
@@ -2038,7 +2115,7 @@ function updateStudioSummary(settings = getFormSettings()) {
   el.novelAiModelDescription.textContent = NOVELAI_MODEL_DESCRIPTIONS[settings.model] || "自訂 NovelAI 圖像模型。";
   el.novelAiStepsSummary.textContent = String(settings.steps);
   el.novelAiGuidanceSummary.textContent = String(settings.scale);
-  el.novelAiVarietySummary.textContent = settings.varietyPlus ? "On" : "Off";
+  el.novelAiVarietySummary.textContent = isNovelAiV5Model(settings.model) ? "N/A" : settings.varietyPlus ? "On" : "Off";
   el.novelAiSeedSummary.textContent = settings.seed >= 0 ? String(settings.seed) : "N/A";
   el.novelAiSamplerSummary.textContent = getSelectedOptionLabel(el.novelAiSampler).replace(/^k_/u, "");
   el.novelAiStageSize.textContent = `${settings.width} × ${settings.height}`;
@@ -3516,6 +3593,11 @@ async function handleDropChoice(action = "cancel") {
     closeDropChoiceDialog();
     return;
   }
+  if (isNovelAiV5Model(el.novelAiModel?.value) && ["vibe", "precise"].includes(action)) {
+    showToast("NovelAI V5 目前尚未支援這種參考圖。", "error");
+    closeDropChoiceDialog();
+    return;
+  }
   try {
     if (action === "vibe") {
       await addFilesToCollection(files, "vibe");
@@ -3643,6 +3725,7 @@ function getValidatedGenerationSettings() {
     return null;
   }
   if (
+    !isNovelAiV5Model(settings.model) &&
     settings.vibeTransfer.enabled && activeImageCount(settings.vibeTransfer.images) &&
     settings.preciseReference.enabled && activeImageCount(settings.preciseReference.images)
   ) {
@@ -3758,7 +3841,9 @@ async function loopGenerateImages() {
 
 function bindEvents() {
   const onFormChange = (event) => {
-    if (event?.target === el.novelAiSizePreset) {
+    if (event?.target === el.novelAiModel) {
+      syncNovelAiModelCapabilities();
+    } else if (event?.target === el.novelAiSizePreset) {
       applySizePreset(event.target.value);
     } else if (event?.target === el.novelAiWidth || event?.target === el.novelAiHeight) {
       updateSizePresetFromDimensions();

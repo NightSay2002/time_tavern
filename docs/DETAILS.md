@@ -110,6 +110,8 @@ Prompt 與大模型：
 
 ## NovelAI 細節
 
+支援 `nai-diffusion-5-full`、`nai-diffusion-5-curated` 與既有 V4.5／V4／V3 模型。V5 請求使用 `params_version: 4` 與 Karras noise schedule；NovelAI 尚未開放 V5 的 Variety+、Vibe Transfer 與 Precise Reference，因此選用 V5 時會停用 Variety+，並隱藏 Vibe Transfer、Precise Reference 及其拖圖用途選項，後端也不會送出相關參數。切回 V4 後會重新顯示並保留原本的參考圖草稿。
+
 頁面三欄：
 
 - 左欄：模型、prompt、片段庫、角色、參考圖、尺寸與生成參數。
@@ -141,6 +143,8 @@ Random Prompt：
 - 沒有可用 metadata 時會補寫 NovelAI 相容 `Comment`，並附 `TimeTavernNovelAIMetadata`。
 - 一般歷史存在瀏覽器 IndexedDB。
 - 收藏存在 server 端 `data/novelai-album/`。
+
+純靜態版位於 <https://nightsay2002.github.io/novelai-image-static/>。它直接從瀏覽器連線 NovelAI，Token、參考圖草稿、分頁歷史與收藏均保存在該瀏覽器，不依賴本專案 server。
 
 NovelAI 預設：
 

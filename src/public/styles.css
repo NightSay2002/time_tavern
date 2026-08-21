@@ -4445,6 +4445,22 @@ body.novelai-bright-body textarea {
   background: #ffffff;
 }
 
+.nai-card.is-model-unsupported,
+.nai-field-grid > label.is-model-unsupported {
+  border-color: rgba(145, 126, 156, 0.32);
+  background: #f8f5f9;
+}
+
+.is-model-unsupported .nai-card-title strong,
+.is-model-unsupported .nai-card-hint,
+.nai-field-grid > label.is-model-unsupported {
+  color: #897b91;
+}
+
+.is-model-unsupported :disabled {
+  cursor: not-allowed;
+}
+
 .nai-card-title,
 .nai-title-row {
   display: flex;
