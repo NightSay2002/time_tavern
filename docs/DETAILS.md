@@ -140,11 +140,14 @@ Random Prompt：
 圖片與 metadata：
 
 - 匯入圖片時可讀取 PNG 文字 chunks，以及 Alpha／RGB 最低位元中的 NovelAI stealth metadata。
+- 只有偵測到可用的圖片設定時，拖放用途選擇才會顯示「匯入設定」。
 - 下載 PNG 時優先保留 NovelAI 原生可匯回的 `Comment` metadata。
 - 沒有可用 metadata 時會補寫 NovelAI 相容 `Comment`，並附 `TimeTavernNovelAIMetadata`。
 - 下載「純圖片」時會移除 `tEXt`、`iTXt`、`zTXt`，並清除 Alpha／RGB 最低位元中的 `stealth_pnginfo`、`stealth_pngcomp`、`stealth_rgbinfo`、`stealth_rgbcomp`。
-- 一般歷史存在瀏覽器 IndexedDB。
-- 收藏存在 server 端 `data/novelai-album/`。
+- 一般歷史存在瀏覽器 IndexedDB，每頁載入 20 張，支援逐張刪除與一鍵清空。新圖片以 Blob 與縮圖保存，避免同時載入大量原圖。
+- 收藏存在 server 端 `data/novelai-album/`；右側可切換歷史與收藏，取消收藏後圖片會回到歷史。
+- 點擊主圖會開啟圖片檢視器，支援拖曳移動與滾輪縮放。
+- Vibe Transfer、Image2Image 與 Precise Reference 圖片會保存在瀏覽器本地草稿，離開頁面後再返回仍會還原。
 
 純靜態版位於 <https://nightsay2002.github.io/novelai-image-static/>。它直接從瀏覽器連線 NovelAI，Token、參考圖草稿、分頁歷史與收藏均保存在該瀏覽器，不依賴本專案 server。
 

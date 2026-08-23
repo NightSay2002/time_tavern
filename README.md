@@ -97,38 +97,23 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 主頁：
 
 - 角色卡：建立、裁切封面、世界書、開場對話、匯入/匯出。
-- Prompt 編輯：角色模式、正文規則、大模型、模塊、觸發條件、並行跑圖（可繼續正文或完全停止正文）、追加詞；NovelAI 跑圖可選 V5 Full／Curated，V5 會固定 Karras 並停用 Variety+；正文最近對話使用 API message role，不會把回合編號加入內容，壓縮合併區塊只標示 user/assistant。
+- Prompt 編輯：角色模式、正文規則、大模型、模塊、觸發條件、並行跑圖與追加詞。
 - 模型內容：查看、保存、匯出標準壓縮模型與自訂大模型內容。
-- 對話：串流生成、停止、改寫較早輸入、訊息編輯重算、存檔與載入、AI 呼叫紀錄；紀錄會顯示實際 API role，不另外建立回合編號。
+- 對話：串流生成、停止、改寫較早輸入、訊息編輯重算、存檔與載入、AI 呼叫紀錄。
 - 時間統計：天數、日期、早中晚、關鍵字與自動切換。
 - 預設：儲存、套用或手動更新本機預設。
 
 NovelAI：
 
-- 支援 NAI Diffusion V5 Full／Curated，以及既有 V4.5、V4、V3 模型。
-- 模型、尺寸、Steps、Guidance、Sampler、Seed、Variety+；V5 會固定使用 Karras、停用 Variety+，並隱藏目前尚未支援的 Vibe Transfer 與 Precise Reference。
-- Fixed Prompt / Random Prompt 片段庫。
-- Character Prompts、Vibe Transfer、Image2Image、Precise Reference。
-- 拖入圖片時，會讀取一般 PNG metadata 與 NovelAI Alpha/RGB stealth metadata；只有偵測成功才顯示「匯入設定」。
-- 圖片生成、Loop Generate、下載 metadata；右側可切換本地歷史與收藏，取消收藏會把圖片移回歷史。
-- Vibe Transfer、Image2Image、Precise Reference 圖片會保存在此瀏覽器的本地草稿，離開頁面後再返回仍會還原。
-- 本地歷史每頁載入 20 張，支援逐張刪除或一鍵清空；新圖片以 Blob 與縮圖保存，避免大量原圖同時載入造成卡頓。
-- 圖片檢視器：點擊主圖放大，拖曳移動，滾輪縮放。
-- 下載「純圖片」會移除 PNG 文字 metadata 與 NovelAI Alpha/RGB stealth metadata。
-- NovelAI 預設保存/啟用。
+- 支援 NAI Diffusion V5、V4.5、V4 與 V3，並提供常用生成參數、Prompt 片段與參考圖功能。
+- 支援連續生成、圖片設定匯入、下載、收藏、本地歷史與放大檢視。
+- 支援 NovelAI 預設的保存與啟用。
 - 純靜態版本：<https://nightsay2002.github.io/novelai-image-static/>；Token 與圖片只保存在使用者瀏覽器。
 
 Discord：
 
 - 六個 Slash 指令：`/ai_start`、`/ai_status`、`/stop`、`/player_set`、`/reload`、`/quick_send`。
-- `/ai_status num:1` 查看目前狀態；`num:2` 以左右按鈕逐張瀏覽角色卡與編號。
-- `/ai_start num:0` 使用目前角色卡或助手；`num:1...N` 切換到瀏覽器中的角色卡編號並開始。啟用頻道後可直接輸入對話；Bot 私訊也可直接輸入。
-- Bot 加入伺服器時會在可發言的文字頻道送出使用說明；使用者安裝應用程式後會收到私人聊天提示。
-- 多玩家座位：`user1`、`user2` 等。
-- `/quick_send` 提供保持時間、推進場景、時間流逝與繼續等快捷模板。
-- `/reload num comment` 可改寫倒數第 `num` 次使用者輸入並重新生成後續。
-- Discord 訊息編輯後可從該處重算分支。
-- 使用者可用反應標記喜歡/不喜歡，回饋會附到下一輪。
+- 支援頻道與私訊直接對話、角色卡瀏覽、多玩家座位、訊息重算與反應回饋。
 
 ## 預覽
 
