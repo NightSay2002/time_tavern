@@ -4792,9 +4792,9 @@ function createTemplateVariables(currentState = state, runtimeUserName = "", rol
   };
 }
 
-function createAssistantTemplateVariables(runtimeUserName = "") {
+function createAssistantTemplateVariables() {
   return {
-    user: safeText(runtimeUserName) || "{{user}}",
+    user: "{{user}}",
     chur: ""
   };
 }
@@ -6263,11 +6263,11 @@ function getDialogueContextRounds(currentState = null) {
   return envFirstNumber(["CHAT_DIALOGUE_CONTEXT_ROUNDS", "DEEPSEEK_DIALOGUE_CONTEXT_ROUNDS"], DEFAULT_DIALOGUE_CONTEXT_ROUNDS);
 }
 
-function buildCharacterCardCreationAssistantSystemPrompt(state, runtimeUserName = "") {
+function buildCharacterCardCreationAssistantSystemPrompt(state) {
   const activeAssistant = getActiveAssistantCard(state);
   return finalizePromptTemplate(
     safeText(activeAssistant?.prompt) || getCharacterCardCreationAssistantPrompt(),
-    createAssistantTemplateVariables(runtimeUserName)
+    createAssistantTemplateVariables()
   ).trim();
 }
 
@@ -7913,12 +7913,12 @@ function buildReasonerHistoryMessages(state, runtimeUserName = "") {
   return buildSimpleCompressedReasonerMessages(state, runtimeUserName);
 }
 
-function buildCharacterCardCreationAssistantMessages(state, runtimeUserName = "") {
+function buildCharacterCardCreationAssistantMessages(state) {
   const latestUser = getLatestUserMessage(state);
   const baseMessages = [
     {
       role: "system",
-      content: buildCharacterCardCreationAssistantSystemPrompt(state, runtimeUserName)
+      content: buildCharacterCardCreationAssistantSystemPrompt(state)
     }
   ];
 
@@ -9432,9 +9432,9 @@ async function callChatApiReasonerHistory(state, runtimeUserName = "", options =
   });
 }
 
-async function callChatApiCharacterCardCreationAssistant(state, runtimeUserName = "", options = {}) {
+async function callChatApiCharacterCardCreationAssistant(state) {
   return callChatApiCompletion({
-    messages: buildCharacterCardCreationAssistantMessages(state, runtimeUserName, options),
+    messages: buildCharacterCardCreationAssistantMessages(state),
     purpose: "character_card_creation_assistant_chat"
   });
 }
@@ -9460,7 +9460,7 @@ async function runAdvancedConversationTurnParallel(state, runtimeUserName = "", 
 async function runReasonerHistoryConversationTurn(state, runtimeUserName = "", options = {}) {
   if (hasActiveAssistantTarget(state)) {
     try {
-      return await callChatApiCharacterCardCreationAssistant(state, runtimeUserName, options);
+      return await callChatApiCharacterCardCreationAssistant(state);
     } catch (error) {
       if (isGenerationStoppedError(error)) {
         throw error;
@@ -9542,7 +9542,7 @@ async function generateStreamingConversationAssistant({ state: currentState, run
   if (hasActiveAssistantTarget(currentState)) {
     onPhaseStatus?.("chat");
     const streamed = await callChatApiCompletionStreamRaw({
-      messages: buildCharacterCardCreationAssistantMessages(currentState, runtimeUserName),
+      messages: buildCharacterCardCreationAssistantMessages(currentState),
       purpose: "character_card_creation_assistant_chat",
       onReasoningDelta,
       onContentDelta
