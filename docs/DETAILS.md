@@ -139,8 +139,10 @@ Random Prompt：
 
 圖片與 metadata：
 
+- 匯入圖片時可讀取 PNG 文字 chunks，以及 Alpha／RGB 最低位元中的 NovelAI stealth metadata。
 - 下載 PNG 時優先保留 NovelAI 原生可匯回的 `Comment` metadata。
 - 沒有可用 metadata 時會補寫 NovelAI 相容 `Comment`，並附 `TimeTavernNovelAIMetadata`。
+- 下載「純圖片」時會移除 `tEXt`、`iTXt`、`zTXt`，並清除 Alpha／RGB 最低位元中的 `stealth_pnginfo`、`stealth_pngcomp`、`stealth_rgbinfo`、`stealth_rgbcomp`。
 - 一般歷史存在瀏覽器 IndexedDB。
 - 收藏存在 server 端 `data/novelai-album/`。
 

@@ -1,3 +1,5 @@
+import { gunzipSync } from "./vendor/fflate.module.js";
+
 const el = {
   novelAiForm: document.getElementById("novelAiForm"),
   novelAiStatus: document.getElementById("novelAiStatus"),
@@ -3090,6 +3092,177 @@ function stripPngTextMetadata(bytes) {
   return concatBytes(output);
 }
 
+const NOVELAI_STEALTH_SIGNATURES = new Set([
+  "stealth_pnginfo",
+  "stealth_pngcomp",
+  "stealth_rgbinfo",
+  "stealth_rgbcomp"
+]);
+
+const MAX_NOVELAI_STEALTH_BYTES = 16 * 1024 * 1024;
+
+function createPngStealthBitReader(imageData, channels = []) {
+  const width = Number(imageData?.width) || 0;
+  const height = Number(imageData?.height) || 0;
+  const pixels = imageData?.data;
+  const availableBits = width * height * channels.length;
+  let bitOffset = 0;
+
+  function readBit() {
+    if (!pixels || bitOffset >= availableBits) {
+      return null;
+    }
+    const pixelIndex = Math.floor(bitOffset / channels.length);
+    const channel = channels[bitOffset % channels.length];
+    const x = Math.floor(pixelIndex / height);
+    const y = pixelIndex % height;
+    bitOffset += 1;
+    return pixels[(y * width + x) * 4 + channel] & 1;
+  }
+
+  function readBytes(byteCount) {
+    const output = new Uint8Array(byteCount);
+    for (let byteIndex = 0; byteIndex < byteCount; byteIndex += 1) {
+      for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
+        const bit = readBit();
+        if (bit === null) {
+          return null;
+        }
+        output[byteIndex] = (output[byteIndex] << 1) | bit;
+      }
+    }
+    return output;
+  }
+
+  function readPayload(bitLength) {
+    const output = new Uint8Array(Math.ceil(bitLength / 8));
+    for (let bitIndex = 0; bitIndex < bitLength; bitIndex += 1) {
+      const bit = readBit();
+      if (bit === null) {
+        return null;
+      }
+      output[Math.floor(bitIndex / 8)] |= bit << (7 - (bitIndex % 8));
+    }
+    return output;
+  }
+
+  return {
+    availableBits,
+    get bitOffset() {
+      return bitOffset;
+    },
+    readBytes,
+    readPayload
+  };
+}
+
+function readPngStealthSignature(imageData, channels = []) {
+  const signatureBytes = createPngStealthBitReader(imageData, channels).readBytes(15);
+  return signatureBytes ? String.fromCharCode(...signatureBytes) : "";
+}
+
+function readPngStealthData(imageData, channels = []) {
+  const reader = createPngStealthBitReader(imageData, channels);
+  const signatureBytes = reader.readBytes(15);
+  const signature = signatureBytes ? String.fromCharCode(...signatureBytes) : "";
+  if (!NOVELAI_STEALTH_SIGNATURES.has(signature)) {
+    return null;
+  }
+  const lengthBytes = reader.readBytes(4);
+  if (!lengthBytes) {
+    return null;
+  }
+  const bitLength = (
+    (lengthBytes[0] << 24) |
+    (lengthBytes[1] << 16) |
+    (lengthBytes[2] << 8) |
+    lengthBytes[3]
+  ) >>> 0;
+  if (
+    bitLength <= 0 ||
+    bitLength > MAX_NOVELAI_STEALTH_BYTES * 8 ||
+    bitLength > reader.availableBits - reader.bitOffset
+  ) {
+    return null;
+  }
+  const payload = reader.readPayload(bitLength);
+  return payload ? { signature, payload } : null;
+}
+
+function stripPngStealthImageData(imageData) {
+  const alphaSignature = readPngStealthSignature(imageData, [3]);
+  const rgbSignature = readPngStealthSignature(imageData, [0, 1, 2]);
+  const channels = new Set();
+  if (NOVELAI_STEALTH_SIGNATURES.has(alphaSignature) && alphaSignature.startsWith("stealth_png")) {
+    channels.add(3);
+  }
+  if (NOVELAI_STEALTH_SIGNATURES.has(rgbSignature) && rgbSignature.startsWith("stealth_rgb")) {
+    channels.add(0);
+    channels.add(1);
+    channels.add(2);
+  }
+  if (!channels.size) {
+    return false;
+  }
+  for (let pixelOffset = 0; pixelOffset < imageData.data.length; pixelOffset += 4) {
+    channels.forEach((channel) => {
+      imageData.data[pixelOffset + channel] |= 1;
+    });
+  }
+  return true;
+}
+
+async function decodePngBlobImageData(blob) {
+  if (typeof createImageBitmap !== "function") {
+    return null;
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
+  } catch {
+    bitmap = await createImageBitmap(blob);
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      throw new Error("瀏覽器無法讀取圖片像素資料。");
+    }
+    context.drawImage(bitmap, 0, 0);
+    return { canvas, context, imageData: context.getImageData(0, 0, canvas.width, canvas.height) };
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
+async function stripPngStealthMetadata(blob) {
+  const decoded = await decodePngBlobImageData(blob);
+  if (!decoded || !stripPngStealthImageData(decoded.imageData)) {
+    return blob;
+  }
+  decoded.context.putImageData(decoded.imageData, 0, 0);
+  const cleanedBlob = await canvasToBlob(decoded.canvas, "image/png");
+  if (!cleanedBlob) {
+    throw new Error("瀏覽器無法輸出已清除資料的圖片。");
+  }
+  return cleanedBlob;
+}
+
+async function readPngStealthMetadataText(blob) {
+  const decoded = await decodePngBlobImageData(blob);
+  if (!decoded) {
+    return "";
+  }
+  const encoded = readPngStealthData(decoded.imageData, [3]) || readPngStealthData(decoded.imageData, [0, 1, 2]);
+  if (!encoded) {
+    return "";
+  }
+  const payload = encoded.signature.endsWith("comp") ? gunzipSync(encoded.payload) : encoded.payload;
+  return new TextDecoder().decode(payload);
+}
+
 function buildNovelAiCompatibleComment(item = {}) {
   const existingMetadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
   const settings = normalizeSettings(existingMetadata.settings || item.settings || existingMetadata);
@@ -3220,14 +3393,13 @@ function injectPngMetadataForDownload(blob, item = {}) {
   });
 }
 
-function stripPngMetadataForDownload(blob) {
-  return blob.arrayBuffer().then((buffer) => {
-    const bytes = new Uint8Array(buffer);
-    if (findPngIendOffset(bytes) < 0) {
-      return blob;
-    }
-    return new Blob([stripPngTextMetadata(bytes)], { type: "image/png" });
-  });
+async function stripPngMetadataForDownload(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (findPngIendOffset(bytes) < 0) {
+    return blob;
+  }
+  const chunkCleanedBlob = new Blob([stripPngTextMetadata(bytes)], { type: "image/png" });
+  return stripPngStealthMetadata(chunkCleanedBlob);
 }
 
 function openDownloadDialog(item = {}) {
@@ -3427,8 +3599,7 @@ function parseMetadataText(value = "") {
   }
 }
 
-function extractMetadataFromPng(bytes) {
-  const entries = readPngMetadataEntries(bytes);
+function extractMetadataFromEntries(entries = {}) {
   const embedded = parseMetadataText(entries.NovelAIMetadata);
   if (embedded && typeof embedded === "object") {
     return embedded;
@@ -3457,6 +3628,36 @@ function extractMetadataFromPng(bytes) {
   };
 }
 
+function extractMetadataFromPng(bytes) {
+  return extractMetadataFromEntries(readPngMetadataEntries(bytes));
+}
+
+function extractMetadataFromStealthText(value = "") {
+  const parsed = parseMetadataText(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const hasPngEntryShape = ["NovelAIMetadata", "Comment", "Description", "Software", "Source"]
+    .some((key) => Object.hasOwn(parsed, key));
+  if (hasPngEntryShape) {
+    return extractMetadataFromEntries(parsed);
+  }
+  return extractMetadataFromEntries({
+    Comment: JSON.stringify(parsed),
+    Description: parsed.prompt || parsed?.v4_prompt?.caption?.base_caption || "",
+    Software: parsed.Software || parsed.software || parsed.model || "NovelAI",
+    Source: parsed.seed ?? ""
+  });
+}
+
+async function extractMetadataFromPngFile(file) {
+  const chunkMetadata = extractMetadataFromPng(new Uint8Array(await file.arrayBuffer()));
+  if (chunkMetadata) {
+    return chunkMetadata;
+  }
+  return extractMetadataFromStealthText(await readPngStealthMetadataText(file));
+}
+
 function applyMetadataToForm(metadata = {}) {
   setFormSettings(metadata?.settings ? metadata.settings : metadata, { save: true, includeBaseImage: false });
   el.novelAiMetadataStatus.textContent = "已讀取 metadata 並還原設定。";
@@ -3467,7 +3668,7 @@ async function importMetadataFromFile(file) {
     return;
   }
   try {
-    const metadata = extractMetadataFromPng(new Uint8Array(await file.arrayBuffer()));
+    const metadata = await extractMetadataFromPngFile(file);
     if (!metadata) {
       throw new Error("這張圖片沒有可讀取的 NovelAI PNG metadata。");
     }
@@ -3486,7 +3687,7 @@ async function hasImportableNovelAiMetadata(file) {
     return false;
   }
   try {
-    return Boolean(extractMetadataFromPng(new Uint8Array(await file.arrayBuffer())));
+    return Boolean(await extractMetadataFromPngFile(file));
   } catch {
     return false;
   }
