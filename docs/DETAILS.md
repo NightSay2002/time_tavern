@@ -110,7 +110,7 @@ Prompt 與大模型：
 
 ## NovelAI 細節
 
-支援 `nai-diffusion-5-full`、`nai-diffusion-5-curated` 與既有 V4.5／V4／V3 模型。V5 請求使用 `params_version: 4` 與 Karras noise schedule；NovelAI 尚未開放 V5 的 Variety+、Vibe Transfer 與 Precise Reference，因此選用 V5 時會停用 Variety+，並隱藏 Vibe Transfer、Precise Reference 及其拖圖用途選項，後端也不會送出相關參數。切回 V4 後會重新顯示並保留原本的參考圖草稿。
+獨立 NovelAI 頁與 Prompt 編輯跑圖設定均支援 `nai-diffusion-5-full`、`nai-diffusion-5-curated` 及既有 V4.5／V4／V3 模型。V5 請求使用 `params_version: 4` 與 Karras noise schedule；NovelAI 尚未開放 V5 的 Variety+、Vibe Transfer 與 Precise Reference，因此選用 V5 時會停用 Variety+，並隱藏 Vibe Transfer、Precise Reference 及其拖圖用途選項，後端也不會送出相關參數。切回 V4 後會重新顯示並保留原本的參考圖草稿。
 
 頁面三欄：
 

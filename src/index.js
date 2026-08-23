@@ -4285,8 +4285,10 @@ function normalizeModelImageGenerationSettings(input = {}) {
   const height = clampInteger(source.height, 1216, 64, 2048);
   const rawSeed = safeText(source.seed);
   const seedNumber = Number(rawSeed);
+  const model = normalizePlainText(source.model) || "nai-diffusion-4-5-curated";
+  const isV5 = isNovelAiV5Model(model);
   return {
-    model: normalizePlainText(source.model) || "nai-diffusion-4-5-curated",
+    model,
     negativePrompt: normalizePlainText(source.negativePrompt || source.negative_prompt || source.uc),
     width,
     height,
@@ -4295,9 +4297,11 @@ function normalizeModelImageGenerationSettings(input = {}) {
     scale: clampNumber(source.scale ?? source.guidance ?? source.promptGuidance, 6, 0, 20),
     cfgRescale: clampNumber(source.cfgRescale ?? source.cfg_rescale ?? source.promptGuidanceRescale, 0, 0, 1),
     sampler: normalizePlainText(source.sampler) || "k_euler_ancestral",
-    noiseSchedule: normalizePlainText(source.noiseSchedule || source.noise_schedule) || "karras",
+    noiseSchedule: isV5
+      ? "karras"
+      : normalizePlainText(source.noiseSchedule || source.noise_schedule) || "karras",
     ucPreset: clampInteger(source.ucPreset, 0, 0, 99),
-    varietyPlus: normalizeNovelAiBoolean(source.varietyPlus ?? source.skipCfgAboveSigma, false),
+    varietyPlus: !isV5 && normalizeNovelAiBoolean(source.varietyPlus ?? source.skipCfgAboveSigma, false),
     imageFormat: normalizePlainText(source.imageFormat || source.image_format) === "webp" ? "webp" : "png",
     seed: rawSeed && Number.isFinite(seedNumber) && seedNumber >= 0 ? Math.floor(seedNumber) >>> 0 : ""
   };

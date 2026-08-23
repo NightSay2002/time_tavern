@@ -4,6 +4,7 @@ import fs from "node:fs";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const novelAiSource = fs.readFileSync(new URL("../src/public/novelai.js", import.meta.url), "utf8");
+const appSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
 
 test("NovelAI UI offers both V5 models and disables unsupported controls", () => {
   assert.match(novelAiSource, /\["nai-diffusion-5-full", "NAI Diffusion V5 Full"\]/u);
@@ -14,6 +15,17 @@ test("NovelAI UI offers both V5 models and disables unsupported controls", () =>
   assert.match(novelAiSource, /button\.hidden = isV5;/u);
   assert.match(novelAiSource, /button\.disabled = isV5;/u);
   assert.match(novelAiSource, /syncNovelAiModelCapabilities\(\{ restorePrevious: false \}\);/u);
+});
+
+test("Prompt editor offers V5 models and disables unsupported settings", () => {
+  assert.match(appSource, /\["nai-diffusion-5-full", "NAI Diffusion V5 Full"\]/u);
+  assert.match(appSource, /\["nai-diffusion-5-curated", "NAI Diffusion V5 Curated"\]/u);
+  assert.match(appSource, /function isNovelAiV5ImageModel\(model = ""\)/u);
+  assert.match(appSource, /syncPromptNovelAiModelCapabilities/u);
+  assert.match(appSource, /noiseField\.input\.value = "karras";/u);
+  assert.match(appSource, /varietyInput\.checked = false;/u);
+  assert.match(serverSource, /varietyPlus: !isV5 && normalizeNovelAiBoolean/u);
+  assert.match(serverSource, /noiseSchedule: isV5\s*\? "karras"/u);
 });
 
 test("NovelAI V5 requests use version 4 without unsupported reference parameters", () => {

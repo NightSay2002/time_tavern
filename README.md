@@ -97,7 +97,7 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 主頁：
 
 - 角色卡：建立、裁切封面、世界書、開場對話、匯入/匯出。
-- Prompt 編輯：角色模式、正文規則、大模型、模塊、觸發條件、並行跑圖（可繼續正文或完全停止正文）、追加詞；正文最近對話使用 API message role，不會把回合編號加入內容，壓縮合併區塊只標示 user/assistant。
+- Prompt 編輯：角色模式、正文規則、大模型、模塊、觸發條件、並行跑圖（可繼續正文或完全停止正文）、追加詞；NovelAI 跑圖可選 V5 Full／Curated，V5 會固定 Karras 並停用 Variety+；正文最近對話使用 API message role，不會把回合編號加入內容，壓縮合併區塊只標示 user/assistant。
 - 模型內容：查看、保存、匯出標準壓縮模型與自訂大模型內容。
 - 對話：串流生成、停止、改寫較早輸入、訊息編輯重算、存檔與載入、AI 呼叫紀錄；紀錄會顯示實際 API role，不另外建立回合編號。
 - 時間統計：天數、日期、早中晚、關鍵字與自動切換。

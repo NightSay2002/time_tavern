@@ -1367,14 +1367,20 @@ function parseBoundedInteger(value, fallback, min, max) {
   return Math.floor(parseBoundedNumber(value, fallback, min, max));
 }
 
+function isNovelAiV5ImageModel(model = "") {
+  return /nai-diffusion-5/u.test(String(model || ""));
+}
+
 function normalizeModelImageGenerationSettings(input = {}) {
   const source = input && typeof input === "object"
     ? input.imageGeneration || input.novelAiImage || input.imageSettings || input
     : {};
   const rawSeed = String(source.seed ?? "").trim();
   const seedNumber = Number(rawSeed);
+  const model = String(source.model || "nai-diffusion-4-5-curated").trim() || "nai-diffusion-4-5-curated";
+  const isV5 = isNovelAiV5ImageModel(model);
   return {
-    model: String(source.model || "nai-diffusion-4-5-curated").trim() || "nai-diffusion-4-5-curated",
+    model,
     negativePrompt: String(source.negativePrompt || source.negative_prompt || source.uc || "").trim(),
     width: parseBoundedInteger(source.width, 832, 64, 2048),
     height: parseBoundedInteger(source.height, 1216, 64, 2048),
@@ -1383,9 +1389,11 @@ function normalizeModelImageGenerationSettings(input = {}) {
     scale: parseBoundedNumber(source.scale ?? source.guidance ?? source.promptGuidance, 6, 0, 20),
     cfgRescale: parseBoundedNumber(source.cfgRescale ?? source.cfg_rescale ?? source.promptGuidanceRescale, 0, 0, 1),
     sampler: String(source.sampler || "k_euler_ancestral").trim() || "k_euler_ancestral",
-    noiseSchedule: String(source.noiseSchedule || source.noise_schedule || "karras").trim() || "karras",
+    noiseSchedule: isV5
+      ? "karras"
+      : String(source.noiseSchedule || source.noise_schedule || "karras").trim() || "karras",
     ucPreset: parseBoundedInteger(source.ucPreset, 0, 0, 99),
-    varietyPlus: Boolean(source.varietyPlus || source.skipCfgAboveSigma),
+    varietyPlus: !isV5 && Boolean(source.varietyPlus || source.skipCfgAboveSigma),
     imageFormat: String(source.imageFormat || source.image_format || "png").trim().toLowerCase() === "webp" ? "webp" : "png",
     seed: rawSeed && Number.isFinite(seedNumber) && seedNumber >= 0 ? String(Math.floor(seedNumber) >>> 0) : ""
   };
@@ -6162,6 +6170,8 @@ function renderCompressionTriggerActionEditor(actions = []) {
     };
 
     const modelField = createImageSelect("NovelAI 模型", "imageModel", imageSettings.model, [
+      ["nai-diffusion-5-full", "NAI Diffusion V5 Full"],
+      ["nai-diffusion-5-curated", "NAI Diffusion V5 Curated"],
       ["nai-diffusion-4-5-curated", "NAI Diffusion V4.5 Curated"],
       ["nai-diffusion-4-5-full", "NAI Diffusion V4.5 Full"],
       ["nai-diffusion-4-full", "NAI Diffusion V4 Full"]
@@ -6226,6 +6236,36 @@ function renderCompressionTriggerActionEditor(actions = []) {
     varietyInput.checked = Boolean(imageSettings.varietyPlus);
     varietyInput.dataset.field = "imageVarietyPlus";
     varietyLabel.append(varietyInput, document.createTextNode("Variety+"));
+
+    const syncPromptNovelAiModelCapabilities = ({ restorePrevious = true } = {}) => {
+      const isV5 = isNovelAiV5ImageModel(modelField.input.value);
+      if (isV5) {
+        if (!noiseField.input.disabled) {
+          noiseField.input.dataset.previousValue = noiseField.input.value;
+        }
+        if (!varietyInput.disabled) {
+          varietyInput.dataset.previousChecked = String(varietyInput.checked);
+        }
+        noiseField.input.value = "karras";
+        varietyInput.checked = false;
+      } else {
+        if (noiseField.input.disabled && restorePrevious) {
+          noiseField.input.value = noiseField.input.dataset.previousValue || "karras";
+        }
+        if (varietyInput.disabled && restorePrevious) {
+          varietyInput.checked = varietyInput.dataset.previousChecked === "true";
+        }
+        delete noiseField.input.dataset.previousValue;
+        delete varietyInput.dataset.previousChecked;
+      }
+      noiseField.input.disabled = isV5;
+      varietyInput.disabled = isV5;
+      const unsupportedTitle = isV5 ? "NovelAI V5 固定使用 Karras，且不支援 Variety+" : "";
+      noiseField.label.title = unsupportedTitle;
+      varietyLabel.title = unsupportedTitle;
+    };
+    modelField.input.addEventListener("change", () => syncPromptNovelAiModelCapabilities());
+    syncPromptNovelAiModelCapabilities({ restorePrevious: false });
 
     const imageSettingsGrid = document.createElement("div");
     imageSettingsGrid.className = "compression-image-settings-grid";
