@@ -41,6 +41,13 @@ import {
 } from "./discord-message.js";
 import { isAllowedDiscordUser } from "./discord-access.js";
 import {
+  buildDiscordRoleCardBrowserPayload,
+  getDiscordRoleCardByNumber,
+  getInitialDiscordRoleCardNumber,
+  normalizeDiscordRoleCardNumber,
+  parseDiscordRoleCardBrowserCustomId
+} from "./discord-role-card-browser.js";
+import {
   buildDiscordGuildWelcomeMessage,
   buildDiscordInstallUrl,
   DISCORD_USER_INSTALL_WELCOME_MESSAGE,
@@ -735,11 +742,32 @@ let activeGenerationRequest = null;
 const DISCORD_SLASH_COMMANDS = [
   {
     name: "ai_start",
-    description: "開始當前角色卡對話"
+    description: "開始目前或指定編號的角色卡對話",
+    options: [
+      {
+        name: "num",
+        description: "0 使用目前角色卡；其他數字使用角色卡瀏覽器中的編號",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        minValue: 0
+      }
+    ]
   },
   {
     name: "ai_status",
-    description: "查看目前 AI 對話狀態"
+    description: "查看目前狀態或瀏覽角色卡",
+    options: [
+      {
+        name: "num",
+        description: "1 查看狀態；2 瀏覽角色卡",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        choices: [
+          { name: "目前狀態", value: 1 },
+          { name: "瀏覽角色卡", value: 2 }
+        ]
+      }
+    ]
   },
   {
     name: "stop",
@@ -11825,8 +11853,27 @@ async function consumePendingOpening(channelId, fallbackUserName = "") {
   });
 }
 
-async function startSessionFromDiscord(channelId, userInfo) {
+async function startSessionFromDiscord(channelId, userInfo, requestedRoleCardNumber = 0) {
   return withStateLock(async () => {
+    const roleCardNumber = normalizeDiscordRoleCardNumber(requestedRoleCardNumber, { allowCurrent: true });
+    if (roleCardNumber === null) {
+      return { ok: false, error: "角色卡編號必須是 0 或正整數。" };
+    }
+    if (roleCardNumber > 0) {
+      const selectedCard = getDiscordRoleCardByNumber(state.roleCards, roleCardNumber);
+      if (!selectedCard) {
+        const cardCount = Array.isArray(state.roleCards) ? state.roleCards.length : 0;
+        return {
+          ok: false,
+          error: cardCount > 0
+            ? `找不到角色卡 ${roleCardNumber}，目前可用編號為 1 至 ${cardCount}。`
+            : "目前沒有可使用的角色卡。"
+        };
+      }
+      state.activeRoleCardId = selectedCard.id;
+      state.activeAssistantMode = null;
+    }
+
     const card = getActiveRoleCard(state);
     if (!card && !hasActiveAssistantTarget(state)) {
       return {
@@ -11900,6 +11947,23 @@ function buildDiscordStatusText() {
     `玩家分配: ${playerLines.length > 0 ? playerLines.join("｜") : "尚未分配"}`
   ];
   return lines.join("\n");
+}
+
+async function sendDiscordRoleCardBrowser(interaction) {
+  const payload = buildDiscordRoleCardBrowserPayload(state, getInitialDiscordRoleCardNumber(state));
+  await interaction.reply({
+    ...payload,
+    flags: MessageFlags.Ephemeral
+  });
+}
+
+async function handleDiscordRoleCardBrowserButton(interaction) {
+  const roleCardNumber = parseDiscordRoleCardBrowserCustomId(interaction.customId);
+  if (roleCardNumber === null) {
+    return false;
+  }
+  await interaction.update(buildDiscordRoleCardBrowserPayload(state, roleCardNumber));
+  return true;
 }
 
 function isActiveDiscordAutoChatChannel(messageOrChannelId) {
@@ -12227,6 +12291,15 @@ async function handleSlashCommand(interaction) {
   const name = interaction.commandName;
 
   if (name === "ai_status") {
+    const option = interaction.options.getInteger("num");
+    if (option === 2) {
+      await sendDiscordRoleCardBrowser(interaction);
+      return;
+    }
+    if (option !== 1) {
+      await safeSendInteractionText(interaction, "請選擇 1 查看狀態，或選擇 2 瀏覽角色卡。", { ephemeral: true });
+      return;
+    }
     await safeSendInteractionText(interaction, buildDiscordStatusText(), { ephemeral: true });
     return;
   }
@@ -12335,22 +12408,14 @@ async function handleSlashCommand(interaction) {
   }
 
   if (name === "ai_start") {
-    if (!getActiveRoleCard(state) && !hasActiveAssistantTarget(state)) {
-      await safeSendInteractionText(
-        interaction,
-        "尚未選擇角色卡或助手模式。請先在網頁啟用角色卡或助手。",
-        { ephemeral: true }
-      );
-      return;
-    }
-
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
+    const roleCardNumber = interaction.options.getInteger("num");
     const result = await startSessionFromDiscord(interaction.channelId, {
       userId: interaction.user.id,
       userName: interaction.user.username
-    });
+    }, roleCardNumber);
     if (!result.ok) {
       await interaction.editReply(result.error);
       return;
@@ -12613,7 +12678,10 @@ function setupDiscordBot() {
   });
 
   discordClient.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) {
+    const isChatInputCommand = interaction.isChatInputCommand();
+    const isRoleCardBrowserButton = interaction.isButton() &&
+      parseDiscordRoleCardBrowserCustomId(interaction.customId) !== null;
+    if (!isChatInputCommand && !isRoleCardBrowserButton) {
       return;
     }
     if (!isAllowedDiscordUser(interaction.user?.id, DISCORD_ALLOWED_USER_ID)) {
@@ -12622,6 +12690,10 @@ function setupDiscordBot() {
     }
 
     try {
+      if (isRoleCardBrowserButton) {
+        await handleDiscordRoleCardBrowserButton(interaction);
+        return;
+      }
       if (shouldDeferSlashCommandEarly(interaction.commandName) && !interaction.deferred && !interaction.replied) {
         await interaction.deferReply();
       }

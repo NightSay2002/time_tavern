@@ -2,11 +2,11 @@ import crypto from "node:crypto";
 
 export const DISCORD_GUILD_WELCOME_LINES = [
   "點我頭像>傳送訊息>開始私人聊天>我會對你說的任何話作出反應",
-  "伺服器先加到應用程式中> 用/ai_start >我會對這頻道說的任何話作出反應"
+  "伺服器先加到應用程式中> 用/ai_start num:0 >我會對這頻道說的任何話作出反應"
 ];
 
 export const DISCORD_USER_INSTALL_WELCOME_MESSAGE =
-  "我會對你說的任何話作出反應 到網頁選角色卡 再輸入/ai_start開始";
+  "我會對你說的任何話作出反應 到網頁選角色卡 再輸入/ai_start num:0開始";
 
 export function buildDiscordInstallUrl(clientId = "") {
   const normalizedClientId = String(clientId || "").trim();

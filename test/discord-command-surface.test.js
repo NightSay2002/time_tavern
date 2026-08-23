@@ -27,6 +27,9 @@ test("Discord exposes exactly the six supported Slash commands", () => {
     "quick_send"
   ]);
   assert.doesNotMatch(serverSource, /interaction\.commandName\s*===?\s*"ai(?:_help)?"/u);
+  assert.match(serverSource, /name:\s*"ai_start",[\s\S]*?name:\s*"num",[\s\S]*?minValue:\s*0/u);
+  assert.match(serverSource, /name:\s*"ai_status",[\s\S]*?目前狀態[\s\S]*?瀏覽角色卡/u);
+  assert.match(serverSource, /handleDiscordRoleCardBrowserButton\(interaction\)/u);
 });
 
 test("web exposes exactly four slash command menu entries", () => {

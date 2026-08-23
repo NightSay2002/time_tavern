@@ -121,7 +121,8 @@ NovelAI：
 Discord：
 
 - 六個 Slash 指令：`/ai_start`、`/ai_status`、`/stop`、`/player_set`、`/reload`、`/quick_send`。
-- `/ai_start` 啟用頻道後可直接輸入對話；Bot 私訊也可直接輸入，不需要文字指令前綴。
+- `/ai_status num:1` 查看目前狀態；`num:2` 以左右按鈕逐張瀏覽角色卡與編號。
+- `/ai_start num:0` 使用目前角色卡或助手；`num:1...N` 切換到瀏覽器中的角色卡編號並開始。啟用頻道後可直接輸入對話；Bot 私訊也可直接輸入。
 - Bot 加入伺服器時會在可發言的文字頻道送出使用說明；使用者安裝應用程式後會收到私人聊天提示。
 - 多玩家座位：`user1`、`user2` 等。
 - `/quick_send` 提供保持時間、推進場景、時間流逝與繼續等快捷模板。
