@@ -1,4 +1,11 @@
-﻿const el = {
+﻿import {
+  createChatApiProviderDrafts,
+  getChatApiProviderEnvEntries,
+  normalizeChatApiProviderSetting,
+  resolveChatApiReasoningEffort
+} from "./chat-api-provider-settings.js";
+
+const el = {
   mobileInfoToggleBtn: document.getElementById("mobileInfoToggleBtn"),
   mobileInfoDrawer: document.getElementById("mobileInfoDrawer"),
   startStatus: document.getElementById("startStatus"),
@@ -655,29 +662,17 @@ const ENV_FIELD_GROUPS = [
         help: "主聊天、大模型處理、補寫與角色卡助手都使用此模型；系統不會因圖片自動切換模型。"
       },
       {
-        key: "DEEPSEEK_REASONING_EFFORT",
-        label: "DeepSeek 思考模式強度",
+        key: "CHAT_API_REASONING_EFFORT",
+        label: "思考模式強度",
         type: "select",
         options: [
-          ["", "使用 API 預設（目前為高）"],
+          ["", "使用 API 預設"],
           ["none", "關閉（使用溫度）"],
           ["low", "低"],
           ["high", "高"],
           ["max", "最大"]
         ],
-        help: "只套用於 DeepSeek provider。選擇關閉後 CHAT_API_TEMPERATURE 才會生效；低／高／最大會開啟思考且忽略溫度。"
-      },
-      {
-        key: "GLM_REASONING_EFFORT",
-        label: "GLM 5.3 思考模式強度",
-        type: "select",
-        options: [
-          ["", "使用 API 預設（最大）"],
-          ["low", "低"],
-          ["high", "高"],
-          ["max", "最大"]
-        ],
-        help: "只套用於智譜 provider 的 GLM-5.3 系列。此系列保持思考模式開啟。"
+        help: "DeepSeek 可關閉思考並使用溫度；GLM-5.3 保持思考開啟，因此不提供關閉選項。其他 provider 不使用此設定。"
       },
       {
         key: "CHAT_API_REQUEST_TIMEOUT_MS",
@@ -810,10 +805,11 @@ const ENV_FIELD_GROUPS = [
   }
 ];
 const ENV_ALIAS_KEYS = {
-  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY"],
+  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY", "CUSTOM_API_KEY"],
   CHAT_API_KEY2: ["CONVERSATION_API_KEY2", "DEEPSEEK_API_KEY2", "DEEPSEEK_KEY2", "deepseek_key2"],
-  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ZHIPU_MODEL", "GLM_MODEL"],
-  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL"],
+  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "CUSTOM_MODEL"],
+  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL", "OPENAI_BASE_URL", "GEMINI_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "CUSTOM_API_BASE_URL"],
+  CHAT_API_REASONING_EFFORT: ["DEEPSEEK_REASONING_EFFORT", "GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"],
   CHAT_API_REQUEST_TIMEOUT_MS: ["CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
   CHAT_API_MAX_TOKENS: ["CONVERSATION_API_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS"],
   CHAT_API_MAX_TOKENS_PARAM: ["CONVERSATION_API_MAX_TOKENS_PARAM"],
@@ -845,6 +841,8 @@ let uiLanguage = readStoredUiLanguage();
 let uiLanguageObserver = null;
 const uiLanguageTextOriginals = new WeakMap();
 const uiLanguageAttrOriginals = new WeakMap();
+let activeChatApiProviderSetting = "deepseek";
+let chatApiProviderDrafts = {};
 
 function normalizeUiLanguage(value = "") {
   return value === UI_LANGUAGE_SIMPLIFIED ? UI_LANGUAGE_SIMPLIFIED : UI_LANGUAGE_TRADITIONAL;
@@ -2189,6 +2187,51 @@ function getEnvFieldValue(parsedEnv, key) {
   return "";
 }
 
+function saveCurrentChatApiProviderDraft() {
+  const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
+  chatApiProviderDrafts[provider] = {
+    key: document.getElementById("envField_CHAT_API_KEY")?.value || "",
+    model: document.getElementById("envField_CHAT_API_MODEL")?.value || "",
+    baseUrl: document.getElementById("envField_CHAT_API_BASE_URL")?.value || ""
+  };
+}
+
+function syncChatApiReasoningField() {
+  const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
+  const input = document.getElementById("envField_CHAT_API_REASONING_EFFORT");
+  if (!input) {
+    return;
+  }
+  const noneOption = Array.from(input.options || []).find((option) => option.value === "none");
+  if (noneOption) {
+    const unavailable = provider === "zhipu";
+    noneOption.disabled = unavailable;
+    noneOption.hidden = unavailable;
+    if (unavailable && input.value === "none") {
+      input.value = "";
+    }
+  }
+  input.disabled = !["deepseek", "zhipu"].includes(provider);
+}
+
+function showChatApiProviderDraft(provider) {
+  activeChatApiProviderSetting = normalizeChatApiProviderSetting(provider);
+  const draft = chatApiProviderDrafts[activeChatApiProviderSetting] || {};
+  const keyInput = document.getElementById("envField_CHAT_API_KEY");
+  const modelInput = document.getElementById("envField_CHAT_API_MODEL");
+  const baseUrlInput = document.getElementById("envField_CHAT_API_BASE_URL");
+  if (keyInput) {
+    keyInput.value = draft.key || "";
+  }
+  if (modelInput) {
+    modelInput.value = draft.model || "";
+  }
+  if (baseUrlInput) {
+    baseUrlInput.value = draft.baseUrl || "";
+  }
+  syncChatApiReasoningField();
+}
+
 function renderEnvImagePreview(preview, value = "", emptyText = "未設定頭像") {
   if (!preview) {
     return;
@@ -2548,6 +2591,18 @@ function renderEnvSettingsForm(content = "") {
   }
 
   const { parsed, orderedEntries } = parseEnvContent(content);
+  const providerState = createChatApiProviderDrafts(parsed);
+  activeChatApiProviderSetting = providerState.activeProvider;
+  chatApiProviderDrafts = providerState.drafts;
+  const activeDraft = chatApiProviderDrafts[activeChatApiProviderSetting] || {};
+  const formEnv = {
+    ...parsed,
+    CHAT_API_PROVIDER: activeChatApiProviderSetting,
+    CHAT_API_KEY: activeDraft.key || "",
+    CHAT_API_MODEL: activeDraft.model || "",
+    CHAT_API_BASE_URL: activeDraft.baseUrl || "",
+    CHAT_API_REASONING_EFFORT: resolveChatApiReasoningEffort(parsed, activeChatApiProviderSetting)
+  };
   el.envSettingsFields.innerHTML = "";
 
   ENV_FIELD_GROUPS.forEach((group) => {
@@ -2567,7 +2622,7 @@ function renderEnvSettingsForm(content = "") {
 
     const grid = document.createElement("div");
     grid.className = "env-grid";
-    group.fields.forEach((field) => grid.appendChild(createEnvField(field, parsed)));
+    group.fields.forEach((field) => grid.appendChild(createEnvField(field, formEnv)));
     section.appendChild(grid);
     if (group.title === "對話API") {
       section.appendChild(createChatApiProcessingKeyControls(parsed));
@@ -2578,6 +2633,7 @@ function renderEnvSettingsForm(content = "") {
 
   envExtraEntries = orderedEntries.filter((entry) => !isManagedEnvKey(entry.key) && !ENV_DROPPED_KEYS.has(entry.key));
   renderEnvExtraRows(envExtraEntries);
+  syncChatApiReasoningField();
 }
 
 function collectEnvFieldValues() {
@@ -2605,6 +2661,7 @@ function collectEnvExtraEntries() {
 }
 
 function buildEnvContentFromForm() {
+  saveCurrentChatApiProviderDraft();
   const values = collectEnvFieldValues();
   const lines = [
     "# 由網頁環境設定表單自動生成。",
@@ -2623,6 +2680,10 @@ function buildEnvContentFromForm() {
       lines.push(`${field.key}=${formatEnvValue(values[field.key] || "")}`);
     });
     if (group.title === "對話API") {
+      lines.push("# 各供應商先前使用的 Key、模型與 Base URL；切換供應商時會自動帶回。");
+      getChatApiProviderEnvEntries(chatApiProviderDrafts).forEach(([key, value]) => {
+        lines.push(`${key}=${formatEnvValue(value)}`);
+      });
       const processingKeys = collectChatApiProcessingKeyValues();
       if (processingKeys.length > 0) {
         lines.push("# 大模型處理用對話 API Key。依啟用的大模型順序使用；Key 不足時沿用最後一把。");
@@ -2654,7 +2715,7 @@ function setChatApiTestStatus(type = "", message = "") {
 }
 
 function isChatApiEnvField(key = "") {
-  return key.startsWith("CHAT_API_") || key === "DEEPSEEK_REASONING_EFFORT" || key === "GLM_REASONING_EFFORT";
+  return key.startsWith("CHAT_API_");
 }
 
 async function testChatApiConnection() {
@@ -8962,7 +9023,12 @@ function bindEvents() {
       }
     });
     el.envSettingsForm.addEventListener("change", (event) => {
-      if (isChatApiEnvField(event.target?.dataset?.envKey || "")) {
+      const key = event.target?.dataset?.envKey || "";
+      if (key === "CHAT_API_PROVIDER") {
+        saveCurrentChatApiProviderDraft();
+        showChatApiProviderDraft(event.target.value);
+      }
+      if (isChatApiEnvField(key)) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
       }
     });

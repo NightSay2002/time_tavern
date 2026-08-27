@@ -29,11 +29,11 @@
 | `PORT` | `3234` | 本地 HTTP server port。 |
 | `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`custom`。 |
-| `CHAT_API_KEY` | 空 | 主聊天、補寫、角色卡助手、大模型處理使用。 |
+| `CHAT_API_KEY` | 空 | 目前供應商的主聊天、補寫、角色卡助手與大模型處理 Key。 |
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
-| `DEEPSEEK_REASONING_EFFORT` | 空 | DeepSeek 思考強度；空值使用 API 預設，`none` 關閉，或設為 `low`、`high`、`max`。思考關閉後 temperature 才會生效。 |
-| `GLM_REASONING_EFFORT` | 空 | GLM-5.3 系列思考強度；空值使用 API 預設，或設為 `low`、`high`、`max`，不可關閉思考。 |
+| `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定保存各供應商先前使用的 Key、模型與 Base URL；目前選中的值仍同步寫入上述 `CHAT_API_*` 欄位。 |
+| `CHAT_API_REASONING_EFFORT` | 空 | 共用思考強度欄位；空值使用 API 預設，或設為 `low`、`high`、`max`。DeepSeek 另支援 `none` 關閉思考並啟用 temperature；GLM-5.3 不接受 `none`。舊版兩個變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
 | `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改 `max_completion_tokens`。 |
@@ -77,6 +77,7 @@ Provider 預設 base URL：
 GLM 與圖片輸入：
 
 - `glm-5.3` 是文字模型；`glm-5.3-flash` 原生支援文字與圖片。兩者都使用同一個 `CHAT_API_MODEL` 欄位，程式不會因附件自動切換模型。
+- 網頁切換 provider 時會保存目前 Key、模型與 Base URL 到該供應商的本機欄位，再帶入新供應商先前保存的值；切回 DeepSeek 會恢復原本的 DeepSeek Key 與模型。
 - 網頁與 Discord 支援 PNG、JPEG、WebP、GIF，可只傳圖片或同時輸入文字。圖片會隨 user 訊息保存，編輯重算與 `/reload` 會保留原附件。
 - 發送 API 時圖片使用 OpenAI-compatible `messages[].content[]` 的 `image_url` Base64 Data URL；AI 呼叫紀錄只保留圖片類型與大小，不保存第二份 Base64。
 - 若選擇的模型不支援圖片，供應商會直接回傳模型能力錯誤，不會轉送其他模型。

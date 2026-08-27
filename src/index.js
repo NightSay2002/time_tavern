@@ -8215,7 +8215,7 @@ function getDefaultChatApiBaseUrl(provider = getChatApiProvider()) {
 function getChatApiBaseUrl() {
   const provider = getChatApiProvider();
   return envFirstText(
-    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "DEEPSEEK_BASE_URL"],
+    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", ...getChatApiProviderBaseUrlAliases(provider)],
     getDefaultChatApiBaseUrl(provider)
   );
 }
@@ -8245,15 +8245,7 @@ function isModelImagePromptPurpose(purpose = "") {
 
 function getPrimaryChatApiKey() {
   const provider = getChatApiProvider();
-  const providerKeys = provider === "openai"
-    ? ["OPENAI_API_KEY"]
-    : provider === "gemini"
-      ? ["GEMINI_API_KEY"]
-      : provider === "deepseek"
-        ? ["DEEPSEEK_API_KEY"]
-        : provider === "zhipu"
-          ? ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"]
-        : [];
+  const providerKeys = getChatApiProviderKeyAliases(provider);
   return envFirstText([
     "CHAT_API_KEY",
     "CONVERSATION_API_KEY",
@@ -8323,8 +8315,9 @@ function getContextCompressionChatApiKey(purpose = "context_compression") {
 
 function getChatApiModel(purpose = "chat") {
   const settings = normalizeConversationSettings(state?.conversationSettings);
+  const provider = getChatApiProvider();
   return envFirstText(
-    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
     settings.chatOutputModel || DEFAULT_CHAT_API_MODEL
   );
 }
@@ -8358,13 +8351,13 @@ function getChatApiTemperature(purpose = "chat", temperature = null) {
 
 function getDeepSeekReasoningEffort(envSource = process.env) {
   return normalizeDeepSeekReasoningEffort(
-    envObjectFirstText(envSource, ["DEEPSEEK_REASONING_EFFORT"])
+    envObjectFirstText(envSource, ["CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"])
   );
 }
 
 function getGlmReasoningEffort(envSource = process.env) {
   return normalizeGlmReasoningEffort(
-    envObjectFirstText(envSource, ["GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"])
+    envObjectFirstText(envSource, ["CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"])
   );
 }
 
@@ -8871,6 +8864,49 @@ function getChatApiProviderKeyAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
   if (normalizedProvider === "zhipu") {
     return ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"];
   }
+  if (normalizedProvider === "custom") {
+    return ["CUSTOM_API_KEY"];
+  }
+  return [];
+}
+
+function getChatApiProviderModelAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
+  const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openai") {
+    return ["OPENAI_MODEL"];
+  }
+  if (normalizedProvider === "gemini") {
+    return ["GEMINI_MODEL"];
+  }
+  if (normalizedProvider === "deepseek") {
+    return ["DEEPSEEK_MODEL"];
+  }
+  if (normalizedProvider === "zhipu") {
+    return ["ZHIPU_MODEL", "GLM_MODEL"];
+  }
+  if (normalizedProvider === "custom") {
+    return ["CUSTOM_MODEL"];
+  }
+  return [];
+}
+
+function getChatApiProviderBaseUrlAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
+  const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openai") {
+    return ["OPENAI_BASE_URL"];
+  }
+  if (normalizedProvider === "gemini") {
+    return ["GEMINI_BASE_URL"];
+  }
+  if (normalizedProvider === "deepseek") {
+    return ["DEEPSEEK_BASE_URL"];
+  }
+  if (normalizedProvider === "zhipu") {
+    return ["ZHIPU_BASE_URL", "BIGMODEL_BASE_URL"];
+  }
+  if (normalizedProvider === "custom") {
+    return ["CUSTOM_API_BASE_URL"];
+  }
   return [];
 }
 
@@ -8880,7 +8916,7 @@ function resolveChatApiTestConfig(envSource = {}) {
   );
   const baseUrl = envObjectFirstText(
     envSource,
-    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "DEEPSEEK_BASE_URL"],
+    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", ...getChatApiProviderBaseUrlAliases(provider)],
     getDefaultChatApiBaseUrl(provider)
   );
   const apiKey = envObjectFirstText(
@@ -8894,7 +8930,7 @@ function resolveChatApiTestConfig(envSource = {}) {
   );
   const model = envObjectFirstText(
     envSource,
-    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
     DEFAULT_CHAT_API_MODEL
   );
   const requestTimeoutMs = Math.min(

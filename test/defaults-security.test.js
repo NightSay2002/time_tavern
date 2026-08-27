@@ -12,4 +12,8 @@ test("published defaults exclude Discord credentials and identifiers", () => {
   assert.equal(Object.hasOwn(environmentValues, "DISCORD_BOT_TOKEN"), false);
   assert.equal(Object.hasOwn(environmentValues, "DISCORD_CLIENT_ID"), false);
   assert.equal(Object.hasOwn(environmentValues, "DISCORD_ALLOWED_USER_ID"), false);
+  assert.deepEqual(
+    Object.keys(environmentValues).filter((key) => /(?:^|_)API_KEY$/u.test(key)),
+    []
+  );
 });

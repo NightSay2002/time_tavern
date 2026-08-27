@@ -8,7 +8,8 @@ const htmlSource = fs.readFileSync(new URL("../src/public/index.html", import.me
 
 test("GLM provider uses the selected chat model without a vision-model override", () => {
   assert.match(serverSource, /return "https:\/\/open\.bigmodel\.cn\/api\/paas\/v4"/u);
-  assert.match(serverSource, /\["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "ZHIPU_MODEL", "GLM_MODEL"/u);
+  assert.match(serverSource, /\["CHAT_API_MODEL", "CONVERSATION_API_MODEL", \.\.\.getChatApiProviderModelAliases\(provider\)\]/u);
+  assert.match(serverSource, /return \["ZHIPU_MODEL", "GLM_MODEL"\]/u);
   assert.doesNotMatch(serverSource, /CHAT_API_(?:VISION|IMAGE)_MODEL/u);
 });
 
