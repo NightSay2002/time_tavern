@@ -5,11 +5,12 @@ import fs from "node:fs";
 const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
 
 test("AI log display does not add message indexes as context round labels", () => {
-  const formatterStart = webSource.indexOf("function formatAiLogMessages(messages)");
+  const formatterStart = webSource.indexOf("function formatAiLogMessages(messages, contentStore = {})");
   const formatterEnd = webSource.indexOf("\nfunction renderAiLogs", formatterStart);
   const formatter = webSource.slice(formatterStart, formatterEnd);
 
-  assert.match(formatter, /\.map\(\(message\) => formatAiLogMessage\(message\)\)/u);
+  assert.match(formatter, /\.map\(\(message\) => formatAiLogMessage\(\{/u);
+  assert.match(formatter, /content: resolveAiLogStoredText\(message, "content", contentStore\)/u);
   assert.doesNotMatch(formatter, /#\$\{index \+ 1\}/u);
 });
 

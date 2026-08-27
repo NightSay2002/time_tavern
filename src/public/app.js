@@ -20,6 +20,14 @@
   editAiOutputBtn: document.getElementById("editAiOutputBtn"),
   contextCompressionInspectBtn: document.getElementById("contextCompressionInspectBtn"),
   timeTrackingSettingsBtn: document.getElementById("timeTrackingSettingsBtn"),
+  otherActionsBtn: document.getElementById("otherActionsBtn"),
+  otherActionsDialog: document.getElementById("otherActionsDialog"),
+  openDefaultsMenuBtn: document.getElementById("openDefaultsMenuBtn"),
+  defaultsMenuDialog: document.getElementById("defaultsMenuDialog"),
+  closeDefaultsMenuBtn: document.getElementById("closeDefaultsMenuBtn"),
+  openNovelAiMenuBtn: document.getElementById("openNovelAiMenuBtn"),
+  novelAiMenuDialog: document.getElementById("novelAiMenuDialog"),
+  closeNovelAiMenuBtn: document.getElementById("closeNovelAiMenuBtn"),
   novelAiImageBtn: document.getElementById("novelAiImageBtn"),
   novelAiStoryboardBtn: document.getElementById("novelAiStoryboardBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
@@ -27,6 +35,7 @@
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
   updateDefaultsBtn: document.getElementById("updateDefaultsBtn"),
   uiLanguageToggleBtn: document.getElementById("uiLanguageToggleBtn"),
+  feedbackLink: document.getElementById("feedbackLink"),
   mobilePageChatBtn: document.getElementById("mobilePageChatBtn"),
   mobilePageControlsBtn: document.getElementById("mobilePageControlsBtn"),
 
@@ -208,6 +217,7 @@ let selectedCompressionProfileId = "standard";
 let contextCompressionDialogPayload = null;
 let selectedContextCompressionProfileId = "standard";
 let roleCardPickerPage = 1;
+let roleCardDialogReturnToPicker = false;
 let sessionPickerPage = 1;
 let selectedSessionPreviewId = "";
 let selectedSessionPreview = null;
@@ -3952,7 +3962,6 @@ function clearChatInputValue() {
 }
 
 function openRoleCardPicker() {
-  roleCardPickerPage = 1;
   const loading = document.createElement("p");
   loading.className = "form-hint";
   loading.textContent = "正在載入角色卡...";
@@ -4420,7 +4429,7 @@ function createRoleCardPickerTile(card, state) {
   editBtn.disabled = Boolean(pendingRoleCardStartId);
   editBtn.addEventListener("click", () => {
     el.roleCardPickerDialog?.close();
-    openRoleCardDialog(card);
+    openRoleCardDialog(card, { returnToPicker: true });
   });
 
   const exportBtn = document.createElement("button");
@@ -5323,18 +5332,83 @@ function formatAiLogMessage(message = {}) {
   return [contextLabelMatch[0].trim(), messageContent || "(空白)"].join("\n");
 }
 
-function formatAiLogMessages(messages) {
+function resolveAiLogStoredText(source, field, contentStore = {}) {
+  if (typeof source?.[field] === "string") {
+    return source[field];
+  }
+  const reference = String(source?.[`${field}Ref`] || "").trim();
+  return typeof contentStore?.[reference] === "string" ? contentStore[reference] : "";
+}
+
+function formatAiLogMessages(messages, contentStore = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return "無";
   }
 
   return messages
-    .map((message) => formatAiLogMessage(message))
+    .map((message) => formatAiLogMessage({
+      ...message,
+      content: resolveAiLogStoredText(message, "content", contentStore)
+    }))
     .join("\n\n----------------\n\n");
+}
+
+function populateAiLogBody(body, log, contentStore, usageText) {
+  if (usageText) {
+    const usageLabel = document.createElement("label");
+    usageLabel.textContent = "本次 Token 消耗";
+    const usageArea = document.createElement("pre");
+    usageArea.className = "ai-log-block";
+    usageArea.textContent = usageText;
+    usageLabel.appendChild(usageArea);
+    body.append(usageLabel);
+  }
+
+  const costText = formatUsageCostBreakdown(log.usage);
+  if (costText) {
+    const costLabel = document.createElement("label");
+    costLabel.textContent = "本次使用金額";
+    const costArea = document.createElement("pre");
+    costArea.className = "ai-log-block cost";
+    costArea.textContent = costText;
+    costLabel.appendChild(costArea);
+    body.append(costLabel);
+  }
+
+  const requestLabel = document.createElement("label");
+  requestLabel.textContent = "送給 AI 的內容";
+  const requestArea = document.createElement("pre");
+  requestArea.className = "ai-log-block";
+  requestArea.textContent = formatAiLogMessages(log.requestMessages || [], contentStore);
+  requestLabel.appendChild(requestArea);
+  body.append(requestLabel);
+
+  const reasoningContent = resolveAiLogStoredText(log, "debugReasoningContent", contentStore);
+  if (reasoningContent) {
+    const reasoningLabel = document.createElement("label");
+    reasoningLabel.textContent = "模型思考過程";
+    const reasoningArea = document.createElement("pre");
+    reasoningArea.className = "ai-log-block reasoning";
+    reasoningArea.textContent = reasoningContent;
+    reasoningLabel.appendChild(reasoningArea);
+    body.append(reasoningLabel);
+  }
+
+  const responseText = resolveAiLogStoredText(log, "responseText", contentStore);
+  const responseLabel = document.createElement("label");
+  responseLabel.textContent = log.error ? "AI 輸出 / 錯誤內容" : "AI 輸出";
+  const responseArea = document.createElement("pre");
+  responseArea.className = "ai-log-block";
+  responseArea.textContent = log.error ? `${responseText}\n\n[Error]\n${log.error}` : responseText;
+  responseLabel.appendChild(responseArea);
+  body.append(responseLabel);
 }
 
 function renderAiLogs(state) {
   const logs = Array.isArray(state.aiLogs) ? [...state.aiLogs].reverse() : [];
+  const contentStore = state.aiLogContentStore && typeof state.aiLogContentStore === "object"
+    ? state.aiLogContentStore
+    : {};
   el.aiLogs.innerHTML = "";
 
   if (!logs.length) {
@@ -5395,55 +5469,13 @@ function renderAiLogs(state) {
 
     const body = document.createElement("div");
     body.className = "ai-log-body";
-
-    if (usageText) {
-      const usageLabel = document.createElement("label");
-      usageLabel.textContent = "本次 Token 消耗";
-      const usageArea = document.createElement("pre");
-      usageArea.className = "ai-log-block";
-      usageArea.textContent = usageText;
-      usageLabel.appendChild(usageArea);
-      body.append(usageLabel);
-    }
-
-    const costText = formatUsageCostBreakdown(log.usage);
-    if (costText) {
-      const costLabel = document.createElement("label");
-      costLabel.textContent = "本次使用金額";
-      const costArea = document.createElement("pre");
-      costArea.className = "ai-log-block cost";
-      costArea.textContent = costText;
-      costLabel.appendChild(costArea);
-      body.append(costLabel);
-    }
-
-    const requestLabel = document.createElement("label");
-    requestLabel.textContent = "送給 AI 的內容";
-    const requestArea = document.createElement("pre");
-    requestArea.className = "ai-log-block";
-    requestArea.textContent = formatAiLogMessages(log.requestMessages || []);
-    requestLabel.appendChild(requestArea);
-
-    const responseLabel = document.createElement("label");
-    responseLabel.textContent = log.error ? "AI 輸出 / 錯誤內容" : "AI 輸出";
-    const responseArea = document.createElement("pre");
-    responseArea.className = "ai-log-block";
-    responseArea.textContent = log.error ? `${log.responseText || ""}\n\n[Error]\n${log.error}` : log.responseText || "";
-    responseLabel.appendChild(responseArea);
-
-    body.append(requestLabel);
-
-    if (log.debugReasoningContent) {
-      const reasoningLabel = document.createElement("label");
-      reasoningLabel.textContent = "模型思考過程";
-      const reasoningArea = document.createElement("pre");
-      reasoningArea.className = "ai-log-block reasoning";
-      reasoningArea.textContent = log.debugReasoningContent;
-      reasoningLabel.appendChild(reasoningArea);
-      body.append(reasoningLabel);
-    }
-
-    body.append(responseLabel);
+    wrapper.addEventListener("toggle", () => {
+      if (!wrapper.open || body.dataset.rendered === "true") {
+        return;
+      }
+      body.dataset.rendered = "true";
+      populateAiLogBody(body, log, contentStore, usageText);
+    });
     wrapper.append(summary, body);
     el.aiLogs.appendChild(wrapper);
   });
@@ -7511,7 +7543,8 @@ function renderRoleCardLorebookEditor(entries = []) {
   });
 }
 
-function openRoleCardDialog(card = null) {
+function openRoleCardDialog(card = null, options = {}) {
+  roleCardDialogReturnToPicker = Boolean(options.returnToPicker);
   if (card) {
     el.roleCardDialogTitle.textContent = "編輯角色卡";
     roleCardCoverImageReadTask = null;
@@ -8432,6 +8465,13 @@ function bindEvents() {
   }
 
   el.createRoleCardBtn.addEventListener("click", () => openRoleCardDialog(null));
+  el.roleCardDialog?.addEventListener("close", () => {
+    if (!roleCardDialogReturnToPicker) {
+      return;
+    }
+    roleCardDialogReturnToPicker = false;
+    openRoleCardPicker();
+  });
   if (el.createAssistantCardBtn) {
     el.createAssistantCardBtn.addEventListener("click", createAssistantCard);
   }
@@ -8795,6 +8835,44 @@ function bindEvents() {
     });
   }
 
+  if (el.otherActionsBtn) {
+    el.otherActionsBtn.addEventListener("click", () => {
+      el.otherActionsDialog?.showModal();
+    });
+  }
+
+  if (el.openDefaultsMenuBtn) {
+    el.openDefaultsMenuBtn.addEventListener("click", () => {
+      el.otherActionsDialog?.close();
+      el.defaultsMenuDialog?.showModal();
+    });
+  }
+
+  if (el.closeDefaultsMenuBtn) {
+    el.closeDefaultsMenuBtn.addEventListener("click", () => {
+      el.defaultsMenuDialog?.close();
+      el.otherActionsDialog?.showModal();
+    });
+  }
+
+  if (el.openNovelAiMenuBtn) {
+    el.openNovelAiMenuBtn.addEventListener("click", () => {
+      el.otherActionsDialog?.close();
+      el.novelAiMenuDialog?.showModal();
+    });
+  }
+
+  if (el.closeNovelAiMenuBtn) {
+    el.closeNovelAiMenuBtn.addEventListener("click", () => {
+      el.novelAiMenuDialog?.close();
+      el.otherActionsDialog?.showModal();
+    });
+  }
+
+  el.feedbackLink?.addEventListener("click", () => {
+    el.otherActionsDialog?.close();
+  });
+
   if (el.novelAiImageBtn) {
     el.novelAiImageBtn.addEventListener("click", () => {
       openNovelAiDialog();
@@ -9129,6 +9207,9 @@ function bindEvents() {
   });
   bindDialogBackdropClose(el.roleCardPickerDialog);
   bindDialogBackdropClose(el.sessionPickerDialog);
+  bindDialogBackdropClose(el.otherActionsDialog);
+  bindDialogBackdropClose(el.defaultsMenuDialog);
+  bindDialogBackdropClose(el.novelAiMenuDialog);
 
 }
 

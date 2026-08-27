@@ -95,7 +95,8 @@ const APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
-const SAVED_SESSION_STORAGE_VERSION = 2;
+const SAVED_SESSION_STORAGE_VERSION = 3;
+const AI_LOG_CONTENT_REFERENCE_MIN_CHARS = 120;
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
 const BUNDLED_NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
@@ -1793,7 +1794,8 @@ function loadState() {
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
       discordPlayers: normalizeDiscordPlayerState(parsed.discordPlayers),
       conversation: normalizeConversationForClient(cloneData(parsed.conversation, [])),
-      aiLogs: Array.isArray(parsed.aiLogs) ? parsed.aiLogs.map((entry) => normalizeAiLog(entry)) : [],
+      aiLogs: expandAiLogsFromStorage(parsed.aiLogs, parsed.aiLogContentStore)
+        .map((entry) => normalizeAiLog(entry)),
       activeSavedSessionId: null
     };
     merged.turnState = normalizeTurnState(parsed.turnState, merged);
@@ -1840,12 +1842,19 @@ function saveState(state) {
   state.activeSavedSessionId = null;
   state.updatedAt = nowIso();
   persistCardState(state);
+  const compactedAiLogs = compactAiLogsForStorage(state.aiLogs);
   const {
     roleCards: _roleCards,
     assistantCards: _assistantCards,
+    aiLogs: _aiLogs,
+    aiLogContentStore: _aiLogContentStore,
     ...persistedState
   } = state;
-  writeJsonFile(STATE_FILE, persistedState);
+  writeJsonFile(STATE_FILE, {
+    ...persistedState,
+    aiLogs: compactedAiLogs.logs,
+    aiLogContentStore: compactedAiLogs.contentStore
+  });
 }
 
 function sendJson(res, status, payload) {
@@ -1952,6 +1961,98 @@ function cloneData(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function getAiLogTextFields(entry = {}) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  return [
+    ...(Array.isArray(source.requestMessages)
+      ? source.requestMessages.map((message) => typeof message?.content === "string" ? message.content : "")
+      : []),
+    typeof source.responseText === "string" ? source.responseText : "",
+    typeof source.debugReasoningContent === "string" ? source.debugReasoningContent : ""
+  ].filter((content) => content.length >= AI_LOG_CONTENT_REFERENCE_MIN_CHARS);
+}
+
+function compactAiLogsForStorage(aiLogs = []) {
+  const logs = Array.isArray(aiLogs) ? aiLogs : [];
+  const contentCounts = new Map();
+  logs.forEach((entry) => {
+    getAiLogTextFields(entry).forEach((content) => {
+      contentCounts.set(content, (contentCounts.get(content) || 0) + 1);
+    });
+  });
+
+  const contentReferences = new Map();
+  const contentStore = {};
+  contentCounts.forEach((count, content) => {
+    if (count < 2) {
+      return;
+    }
+    const reference = crypto.createHash("sha256").update(content).digest("base64url").slice(0, 32);
+    contentReferences.set(content, reference);
+    contentStore[reference] = content;
+  });
+
+  const compactTextField = (target, field, content) => {
+    const reference = contentReferences.get(content);
+    delete target[`${field}Ref`];
+    if (reference) {
+      delete target[field];
+      target[`${field}Ref`] = reference;
+      return;
+    }
+    target[field] = content;
+  };
+
+  return {
+    logs: logs.map((entry) => {
+      const source = entry && typeof entry === "object" ? entry : {};
+      const output = { ...source };
+      output.requestMessages = (Array.isArray(source.requestMessages) ? source.requestMessages : []).map((message) => {
+        const normalizedMessage = message && typeof message === "object" ? { ...message } : {};
+        compactTextField(
+          normalizedMessage,
+          "content",
+          typeof normalizedMessage.content === "string" ? normalizedMessage.content : ""
+        );
+        return normalizedMessage;
+      });
+      compactTextField(output, "responseText", typeof source.responseText === "string" ? source.responseText : "");
+      compactTextField(
+        output,
+        "debugReasoningContent",
+        typeof source.debugReasoningContent === "string" ? source.debugReasoningContent : ""
+      );
+      return output;
+    }),
+    contentStore
+  };
+}
+
+function expandAiLogsFromStorage(aiLogs = [], contentStore = {}) {
+  const store = contentStore && typeof contentStore === "object" && !Array.isArray(contentStore)
+    ? contentStore
+    : {};
+  const expandTextField = (source, field) => {
+    if (typeof source?.[field] === "string") {
+      return source[field];
+    }
+    const reference = safeText(source?.[`${field}Ref`]);
+    return typeof store[reference] === "string" ? store[reference] : "";
+  };
+  return (Array.isArray(aiLogs) ? aiLogs : []).map((entry) => {
+    const source = entry && typeof entry === "object" ? entry : {};
+    return {
+      ...source,
+      requestMessages: (Array.isArray(source.requestMessages) ? source.requestMessages : []).map((message) => ({
+        ...(message && typeof message === "object" ? message : {}),
+        content: expandTextField(message, "content")
+      })),
+      responseText: expandTextField(source, "responseText"),
+      debugReasoningContent: expandTextField(source, "debugReasoningContent")
+    };
+  });
 }
 
 function captureRuntimeSnapshot(currentState) {
@@ -2070,9 +2171,8 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.lastDiscordChannelId = safeText(source.lastDiscordChannelId);
   currentState.discordPlayers = normalizeDiscordPlayerState(source.discordPlayers);
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
-  currentState.aiLogs = Array.isArray(source.aiLogs)
-    ? source.aiLogs.map((entry) => normalizeAiLog(entry))
-    : [];
+  currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
+    .map((entry) => normalizeAiLog(entry));
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
 }
 
@@ -2133,9 +2233,18 @@ function writeSavedSessionExternalData(sessionOrId, snapshot = {}) {
   if (!sessionId) {
     return;
   }
+  const snapshotForStorage = cloneData(snapshot, {});
+  snapshotForStorage.roleCards = (Array.isArray(snapshotForStorage.roleCards) ? snapshotForStorage.roleCards : [])
+    .map((card) => {
+      const { coverImage: _coverImage, ...storedCard } = card && typeof card === "object" ? card : {};
+      return storedCard;
+    });
+  const compactedAiLogs = compactAiLogsForStorage(snapshotForStorage.aiLogs);
+  snapshotForStorage.aiLogs = compactedAiLogs.logs;
+  snapshotForStorage.aiLogContentStore = compactedAiLogs.contentStore;
   const payload = {
     version: SAVED_SESSION_STORAGE_VERSION,
-    snapshot: cloneData(snapshot, {}),
+    snapshot: snapshotForStorage,
     updatedAt: nowIso()
   };
   writeJsonFile(getSavedSessionDataFilePath(sessionId), payload);
@@ -2150,6 +2259,24 @@ function materializeSavedSessionSnapshot(session) {
   snapshot.conversation = externalData.conversation;
   snapshot.aiLogs = externalData.aiLogs;
   return snapshot;
+}
+
+function restoreSavedSessionSnapshotImages(currentState, snapshot) {
+  const output = cloneData(snapshot, {});
+  const currentCovers = new Map(
+    (Array.isArray(currentState?.roleCards) ? currentState.roleCards : [])
+      .map((card) => [safeText(card?.id), safeText(card?.coverImage)])
+      .filter(([id, coverImage]) => id && coverImage)
+  );
+  output.roleCards = (Array.isArray(output.roleCards) ? output.roleCards : []).map((card) => {
+    const storedCard = card && typeof card === "object" ? { ...card } : {};
+    const currentCover = currentCovers.get(safeText(storedCard.id));
+    if (!safeText(storedCard.coverImage) && currentCover) {
+      storedCard.coverImage = currentCover;
+    }
+    return storedCard;
+  });
+  return output;
 }
 
 function createSavedSessionMetadata(source, snapshot, index = 0) {
@@ -2274,7 +2401,11 @@ function loadSavedSessionIntoRuntime(currentState, sessionId) {
   if (!session) {
     return null;
   }
-  applyRuntimeSnapshot(currentState, materializeSavedSessionSnapshot(session));
+  const snapshot = restoreSavedSessionSnapshotImages(
+    currentState,
+    materializeSavedSessionSnapshot(session)
+  );
+  applyRuntimeSnapshot(currentState, snapshot);
   sanitizeImageGenerationCompressionState(currentState);
   currentState.activeSavedSessionId = null;
   return session;
@@ -9769,6 +9900,9 @@ async function runConversationTurnStreaming({
 }
 
 function statePayload(state) {
+  const compactedAiLogs = compactAiLogsForStorage(
+    Array.isArray(state.aiLogs) ? state.aiLogs.map((entry) => normalizeAiLog(entry)) : []
+  );
   const {
     savedSessions: _savedSessions,
     activeSavedSessionId: _activeSavedSessionId,
@@ -9777,9 +9911,8 @@ function statePayload(state) {
   return {
     ...publicState,
     conversation: normalizeConversationForClient(state.conversation),
-    aiLogs: Array.isArray(state.aiLogs)
-      ? state.aiLogs.map((entry) => normalizeAiLog(entry))
-      : [],
+    aiLogs: compactedAiLogs.logs,
+    aiLogContentStore: compactedAiLogs.contentStore,
     modularPromptConfigs: getModularPromptConfigsPayload(),
     contextCompressionPrompt: getContextCompressionPrompt(),
     characterCardCreationAssistantPrompt: getCharacterCardCreationAssistantPrompt(),

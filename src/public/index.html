@@ -74,14 +74,11 @@
           <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
           <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
           <button id="timeTrackingSettingsBtn" type="button" class="secondary">統計判斷編輯</button>
-          <button id="novelAiImageBtn" type="button" class="secondary">NovelAI 跑圖</button>
-          <button id="novelAiStoryboardBtn" type="button" class="secondary">Storyboard</button>
           <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
-          <button id="useDefaultsBtn" type="button" class="secondary">使用預設</button>
-          <button id="saveDefaultsBtn" type="button" class="secondary">儲存預設</button>
-          <button id="updateDefaultsBtn" type="button" class="secondary">使用作者預設</button>
-          <button id="uiLanguageToggleBtn" type="button" class="secondary" aria-pressed="false">簡繁轉換</button>
-          <a class="button-link secondary" href="https://discord.gg/gYBBUgvEn6" target="_blank" rel="noopener noreferrer">問題反映</a>
+        </div>
+
+        <div class="actions-block">
+          <button id="otherActionsBtn" type="button" class="secondary">其他</button>
         </div>
       </section>
 
@@ -124,6 +121,48 @@
         </section>
       </section>
     </main>
+
+    <dialog id="otherActionsDialog" class="dialog compact-action-dialog">
+      <form method="dialog" class="stack compact-action-shell">
+        <div class="role-picker-header">
+          <h3>其他</h3>
+          <button type="submit" class="muted">關閉</button>
+        </div>
+        <div class="compact-action-list">
+          <button id="openDefaultsMenuBtn" type="button" class="secondary">預設</button>
+          <button id="uiLanguageToggleBtn" type="button" class="secondary" aria-pressed="false">簡繁轉換：繁體</button>
+          <a id="feedbackLink" class="button-link secondary" href="https://discord.gg/gYBBUgvEn6" target="_blank" rel="noopener noreferrer">問題反映</a>
+          <button id="openNovelAiMenuBtn" type="button" class="secondary">NovelAI</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="defaultsMenuDialog" class="dialog compact-action-dialog">
+      <form method="dialog" class="stack compact-action-shell">
+        <div class="role-picker-header">
+          <h3>預設</h3>
+          <button id="closeDefaultsMenuBtn" type="button" class="muted">返回</button>
+        </div>
+        <div class="compact-action-list">
+          <button id="useDefaultsBtn" type="button" class="secondary">使用預設</button>
+          <button id="saveDefaultsBtn" type="button" class="secondary">儲存預設</button>
+          <button id="updateDefaultsBtn" type="button" class="secondary">使用作者預設</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="novelAiMenuDialog" class="dialog compact-action-dialog">
+      <form method="dialog" class="stack compact-action-shell">
+        <div class="role-picker-header">
+          <h3>NovelAI</h3>
+          <button id="closeNovelAiMenuBtn" type="button" class="muted">返回</button>
+        </div>
+        <div class="compact-action-list">
+          <button id="novelAiImageBtn" type="button" class="secondary">NovelAI 跑圖</button>
+          <button id="novelAiStoryboardBtn" type="button" class="secondary">Storyboard</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="roleCardDialog" class="dialog">
       <form id="roleCardForm" method="dialog" class="stack">

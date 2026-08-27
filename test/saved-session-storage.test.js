@@ -18,13 +18,25 @@ test("saved-session summaries use metadata without opening full snapshots", () =
   assert.match(summarySource, /session\.messageCount/);
 });
 
-test("app state stores cards separately and session files keep the full snapshot", () => {
+test("app state stores cards separately and session snapshots omit repeated cover images", () => {
   const saveStateSource = functionSource("saveState", "sendJson");
   const sessionWriterSource = functionSource("writeSavedSessionExternalData", "materializeSavedSessionSnapshot");
   assert.match(saveStateSource, /roleCards: _roleCards/);
   assert.match(saveStateSource, /assistantCards: _assistantCards/);
   assert.match(saveStateSource, /persistCardState\(state\)/);
-  assert.match(sessionWriterSource, /snapshot: cloneData\(snapshot, \{\}\)/);
+  assert.match(sessionWriterSource, /coverImage: _coverImage/);
+  assert.match(sessionWriterSource, /compactAiLogsForStorage/);
+  assert.match(sessionWriterSource, /snapshot: snapshotForStorage/);
+});
+
+test("AI logs use shared content references in storage and expand for display", () => {
+  const saveStateSource = functionSource("saveState", "sendJson");
+  const statePayloadSource = functionSource("statePayload", "clearDiscordLoginRetryTimer");
+  const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
+  assert.match(saveStateSource, /compactAiLogsForStorage\(state\.aiLogs\)/);
+  assert.match(statePayloadSource, /aiLogContentStore: compactedAiLogs\.contentStore/);
+  assert.match(webSource, /resolveAiLogStoredText/);
+  assert.match(webSource, /wrapper\.addEventListener\("toggle"/);
 });
 
 test("100 cards and 100 saves keep app-state session metadata small", () => {
@@ -40,7 +52,7 @@ test("100 cards and 100 saves keep app-state session metadata small", () => {
     snapshot: { roleCards, conversation }
   }));
   const metadataSessions = legacySessions.map((session, index) => ({
-    storageVersion: 2,
+    storageVersion: 3,
     id: session.id,
     name: session.name,
     roleCardId: `card-${index + 1}`,
