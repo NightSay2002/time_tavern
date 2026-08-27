@@ -28,7 +28,11 @@ test("Discord exposes exactly the six supported Slash commands", () => {
   ]);
   assert.doesNotMatch(serverSource, /interaction\.commandName\s*===?\s*"ai(?:_help)?"/u);
   assert.match(serverSource, /name:\s*"ai_start",[\s\S]*?name:\s*"num",[\s\S]*?minValue:\s*0/u);
-  assert.match(serverSource, /name:\s*"ai_status",[\s\S]*?目前狀態[\s\S]*?瀏覽角色卡/u);
+  const statusCommand = serverSource.match(/name:\s*"ai_status",[\s\S]*?\n  \},\n  \{\n    name:\s*"stop"/u)?.[0] || "";
+  assert.match(statusCommand, /description:\s*"1 查看狀態；2 瀏覽角色卡"/u);
+  assert.match(statusCommand, /minValue:\s*1/u);
+  assert.match(statusCommand, /maxValue:\s*2/u);
+  assert.doesNotMatch(statusCommand, /choices:/u);
   assert.match(serverSource, /handleDiscordRoleCardBrowserButton\(interaction\)/u);
 });
 

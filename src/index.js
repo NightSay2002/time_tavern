@@ -779,10 +779,8 @@ const DISCORD_SLASH_COMMANDS = [
         description: "1 查看狀態；2 瀏覽角色卡",
         type: ApplicationCommandOptionType.Integer,
         required: true,
-        choices: [
-          { name: "目前狀態", value: 1 },
-          { name: "瀏覽角色卡", value: 2 }
-        ]
+        minValue: 1,
+        maxValue: 2
       }
     ]
   },

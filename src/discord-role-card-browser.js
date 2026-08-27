@@ -12,11 +12,15 @@ function safeText(value) {
 }
 
 function formatRoleCardMode(mode) {
-  if (mode === "multi_role") {
+  const normalized = safeText(mode).toLowerCase();
+  if (normalized === "multi" || normalized === "multi_role") {
     return "多角色";
   }
-  if (mode === "no_role") {
+  if (normalized === "no_role" || normalized === "norole" || normalized === "none") {
     return "無角色";
+  }
+  if (normalized && normalized !== "single" && normalized !== "single_role") {
+    return "自訂模式";
   }
   return "單角色";
 }
