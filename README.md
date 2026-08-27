@@ -64,7 +64,7 @@ CHAT_API_KEY=你的_API_Key
 CHAT_API_MODEL=deepseek-v4-pro
 ```
 
-DeepSeek 預設使用 `deepseek-v4-pro`。`DEEPSEEK_REASONING_EFFORT` 可留空使用 API 預設，或設為 `none`、`low`、`high`、`max`；只有 `none` 關閉思考模式時，`CHAT_API_TEMPERATURE` 才會生效。
+也可把 provider 改為 `zhipu` 並選用 `glm-5.3` 或原生多模態的 `glm-5.3-flash`；系統始終使用 `CHAT_API_MODEL` 指定的模型，不會因上傳圖片自動換模型。完整 provider 設定見 [細節文件](docs/DETAILS.md)。
 
 NovelAI 圖片功能另外填：
 
@@ -99,7 +99,7 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 - 角色卡與助手：建立、編輯、裁切封面、世界書、開場對話、匯入/匯出角色卡，並可建立獨立 Prompt 助手。
 - Prompt 編輯：角色模式、正文規則、大模型、模塊、觸發條件、並行跑圖與追加詞。
 - 模型內容：查看、保存、匯出標準壓縮模型與自訂大模型內容。
-- 對話：串流生成、停止、改寫較早輸入、訊息編輯重算、存檔與載入、AI 呼叫紀錄。
+- 對話：串流生成、圖片輸入、停止、改寫較早輸入、訊息編輯重算、存檔與載入、AI 呼叫紀錄。
 - 時間統計：天數、日期、早中晚、關鍵字與自動切換。
 - 預設：儲存、套用或手動更新本機預設。
 
@@ -113,7 +113,7 @@ NovelAI：
 Discord：
 
 - 六個 Slash 指令：`/ai_start`、`/ai_status`、`/stop`、`/player_set`、`/reload`、`/quick_send`。
-- 支援頻道與私訊直接對話、角色卡瀏覽、多玩家座位、訊息重算與反應回饋。
+- 支援頻道與私訊直接對話、文字／圖片附件、角色卡瀏覽、多玩家座位、訊息重算與反應回饋。
 
 ## 預覽
 

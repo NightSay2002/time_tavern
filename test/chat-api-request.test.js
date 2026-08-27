@@ -3,7 +3,8 @@ import test from "node:test";
 
 import {
   buildChatApiRequestBody,
-  normalizeDeepSeekReasoningEffort
+  normalizeDeepSeekReasoningEffort,
+  normalizeGlmReasoningEffort
 } from "../src/chat-api-request.js";
 
 const baseRequest = {
@@ -58,4 +59,31 @@ test("API default and non-DeepSeek providers preserve the existing request shape
   assert.equal(openAiBody.thinking, undefined);
   assert.equal(openAiBody.reasoning_effort, undefined);
   assert.equal(openAiBody.temperature, 0.5);
+});
+
+test("GLM 5.3 uses the selected model directly and keeps native thinking enabled", () => {
+  assert.equal(normalizeGlmReasoningEffort(" HIGH "), "high");
+  assert.equal(normalizeGlmReasoningEffort("none"), "");
+
+  const messages = [{
+    role: "user",
+    content: [
+      { type: "text", text: "看看這張圖" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AA==" } }
+    ]
+  }];
+  const body = buildChatApiRequestBody({
+    provider: "zhipu",
+    model: "glm-5.3-flash",
+    reasoningEffort: "high",
+    temperature: 0.5,
+    maxTokens: 32000,
+    messages
+  });
+
+  assert.equal(body.model, "glm-5.3-flash");
+  assert.equal(body.temperature, 0.5);
+  assert.deepEqual(body.thinking, { type: "enabled", clear_thinking: false });
+  assert.equal(body.reasoning_effort, "high");
+  assert.deepEqual(body.messages, messages);
 });

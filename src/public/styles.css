@@ -1932,6 +1932,51 @@ dialog.session-picker-dialog {
   background: #181331;
 }
 
+.chat-image-preview {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.chat-image-preview[hidden] {
+  display: none;
+}
+
+.chat-image-preview-item {
+  position: relative;
+  flex: 0 0 72px;
+  width: 72px;
+  height: 72px;
+}
+
+.chat-image-preview-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: 1px solid rgba(210, 202, 255, 0.28);
+  border-radius: 8px;
+}
+
+.chat-input .chat-image-remove-button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(18, 14, 38, 0.88);
+  color: #fff;
+  font-size: 19px;
+  line-height: 1;
+}
+
 .chat-input textarea {
   height: 48px;
   min-height: 48px;
@@ -2036,6 +2081,15 @@ dialog.session-picker-dialog {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.chat-input .chat-image-button {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  background: #312c4e;
+  color: #d7d1f5;
+  font-size: 24px;
 }
 
 .chat-input button {
@@ -4139,7 +4193,19 @@ body.novelai-studio-body .novelai-small-preview {
     border-radius: 11px;
   }
 
-  .chat-plus-button {
+  .chat-input .chat-image-button {
+    width: 42px;
+    min-width: 42px;
+    padding: 0;
+  }
+
+  .chat-image-preview-item {
+    flex-basis: 60px;
+    width: 60px;
+    height: 60px;
+  }
+
+  .chat-input .chat-plus-button {
     width: 40px;
     min-width: 40px;
     padding: 0;

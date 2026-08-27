@@ -1,4 +1,5 @@
 const DEEPSEEK_REASONING_EFFORTS = new Set(["none", "low", "high", "max"]);
+const GLM_REASONING_EFFORTS = new Set(["low", "high", "max"]);
 
 export function normalizeChatApiMaxTokensParamName(value = "") {
   return value === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens";
@@ -7,6 +8,11 @@ export function normalizeChatApiMaxTokensParamName(value = "") {
 export function normalizeDeepSeekReasoningEffort(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
   return DEEPSEEK_REASONING_EFFORTS.has(normalized) ? normalized : "";
+}
+
+export function normalizeGlmReasoningEffort(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return GLM_REASONING_EFFORTS.has(normalized) ? normalized : "";
 }
 
 export function buildChatApiRequestBody({
@@ -21,23 +27,35 @@ export function buildChatApiRequestBody({
   maxTokensParamName = "max_tokens"
 }) {
   const normalizedProvider = String(provider || "").trim().toLowerCase();
-  const normalizedEffort = normalizeDeepSeekReasoningEffort(reasoningEffort);
-  const explicitDeepSeekThinking = normalizedProvider === "deepseek" && normalizedEffort;
+  const normalizedDeepSeekEffort = normalizeDeepSeekReasoningEffort(reasoningEffort);
+  const normalizedGlmEffort = normalizeGlmReasoningEffort(reasoningEffort);
+  const explicitDeepSeekThinking = normalizedProvider === "deepseek" && normalizedDeepSeekEffort;
+  const isGlm53 = normalizedProvider === "zhipu" && /^glm-5\.3(?:-|$)/iu.test(String(model || "").trim());
   const requestBody = {
     model,
     messages
   };
 
-  if (!explicitDeepSeekThinking || normalizedEffort === "none") {
+  if (!explicitDeepSeekThinking || normalizedDeepSeekEffort === "none") {
     requestBody.temperature = temperature;
   }
 
   if (explicitDeepSeekThinking) {
     requestBody.thinking = {
-      type: normalizedEffort === "none" ? "disabled" : "enabled"
+      type: normalizedDeepSeekEffort === "none" ? "disabled" : "enabled"
     };
-    if (normalizedEffort !== "none") {
-      requestBody.reasoning_effort = normalizedEffort;
+    if (normalizedDeepSeekEffort !== "none") {
+      requestBody.reasoning_effort = normalizedDeepSeekEffort;
+    }
+  }
+
+  if (isGlm53) {
+    requestBody.thinking = {
+      type: "enabled",
+      clear_thinking: false
+    };
+    if (normalizedGlmEffort) {
+      requestBody.reasoning_effort = normalizedGlmEffort;
     }
   }
 

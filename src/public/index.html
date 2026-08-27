@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260724-mobile-drawer" />
+    <link rel="stylesheet" href="/styles.css?v=20260827-chat-images" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -104,10 +104,13 @@
 
           <form id="chatForm" class="chat-input">
             <div id="chatCommandMenu" class="chat-command-menu" role="listbox" aria-label="功能列表" hidden></div>
+            <div id="chatImagePreview" class="chat-image-preview" aria-label="待上傳圖片" hidden></div>
             <button id="chatPlusButton" type="button" class="chat-plus-button" aria-label="附加功能" aria-expanded="false" aria-controls="chatCommandMenu">＋</button>
             <textarea id="chatInput" rows="2" placeholder="輸入對話內容"></textarea>
             <div id="chatCommandComposer" class="chat-command-composer" hidden></div>
             <div class="chat-actions">
+              <input id="chatImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+              <button id="chatImageButton" type="button" class="chat-image-button" title="附加圖片" aria-label="附加圖片"><span aria-hidden="true">▧</span></button>
               <button id="sendBtn" type="submit">送出</button>
             </div>
           </form>
@@ -560,6 +563,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20260730-context-labels"></script>
+    <script type="module" src="/app.js?v=20260827-glm-images"></script>
   </body>
 </html>

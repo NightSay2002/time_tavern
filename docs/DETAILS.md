@@ -28,15 +28,18 @@
 | --- | --- | --- |
 | `PORT` | `3234` | 本地 HTTP server port。 |
 | `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
-| `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`custom`。 |
+| `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`custom`。 |
 | `CHAT_API_KEY` | 空 | 主聊天、補寫、角色卡助手、大模型處理使用。 |
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
 | `DEEPSEEK_REASONING_EFFORT` | 空 | DeepSeek 思考強度；空值使用 API 預設，`none` 關閉，或設為 `low`、`high`、`max`。思考關閉後 temperature 才會生效。 |
+| `GLM_REASONING_EFFORT` | 空 | GLM-5.3 系列思考強度；空值使用 API 預設，或設為 `low`、`high`、`max`，不可關閉思考。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
 | `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改 `max_completion_tokens`。 |
 | `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature，可設定 `0–2` 並支援小數；DeepSeek 思考模式開啟時不生效。 |
+| `CHAT_IMAGE_ATTACHMENT_MAX_COUNT` | `4` | 網頁與 Discord 每次最多附加圖片數。 |
+| `CHAT_IMAGE_ATTACHMENT_MAX_BYTES` | `5242880` | 每張聊天圖片大小上限，單位 bytes。 |
 | `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | 大模型內容處理可按順序使用不同 key。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
@@ -66,9 +69,18 @@ Provider 預設 base URL：
 | `deepseek` | `https://api.deepseek.com` |
 | `openai` | `https://api.openai.com/v1` |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `zhipu` | `https://open.bigmodel.cn/api/paas/v4` |
 | `custom` | 必須自行設定 `CHAT_API_BASE_URL` |
 
-舊變數如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_BASE_URL` 仍會讀取；新設定建議統一用 `CHAT_API_*`。
+舊變數如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY` 與 provider 專用 Base URL 仍會讀取；新設定建議統一用 `CHAT_API_*`。
+
+GLM 與圖片輸入：
+
+- `glm-5.3` 是文字模型；`glm-5.3-flash` 原生支援文字與圖片。兩者都使用同一個 `CHAT_API_MODEL` 欄位，程式不會因附件自動切換模型。
+- 網頁與 Discord 支援 PNG、JPEG、WebP、GIF，可只傳圖片或同時輸入文字。圖片會隨 user 訊息保存，編輯重算與 `/reload` 會保留原附件。
+- 發送 API 時圖片使用 OpenAI-compatible `messages[].content[]` 的 `image_url` Base64 Data URL；AI 呼叫紀錄只保留圖片類型與大小，不保存第二份 Base64。
+- 若選擇的模型不支援圖片，供應商會直接回傳模型能力錯誤，不會轉送其他模型。
+- 智譜參考：[GLM-5.3](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3)、[GLM-5.3-Flash](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)。
 
 ## 主頁功能細節
 
@@ -108,6 +120,7 @@ Prompt 與大模型：
 - 串流生成會先顯示思考/生成過程，正文出現後替換正式內容。
 - `/stop` 或網頁停止按鈕會取消目前生成。
 - 編輯網頁使用者訊息或 Discord 原始訊息時，會刪除後續分支並重新生成。
+- 網頁輸入列可預覽及移除待上傳圖片；Discord 私訊與已啟用頻道會讀取訊息中的支援圖片附件。
 
 ## NovelAI 細節
 

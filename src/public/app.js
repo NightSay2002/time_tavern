@@ -40,6 +40,9 @@
   chatPlusButton: document.getElementById("chatPlusButton"),
   chatCommandComposer: document.getElementById("chatCommandComposer"),
   chatInput: document.getElementById("chatInput"),
+  chatImageInput: document.getElementById("chatImageInput"),
+  chatImageButton: document.getElementById("chatImageButton"),
+  chatImagePreview: document.getElementById("chatImagePreview"),
   sendBtn: document.getElementById("sendBtn"),
   stopChatBtn: document.getElementById("stopChatBtn"),
   discordBotLinkBtn: document.getElementById("discordBotLinkBtn"),
@@ -215,6 +218,7 @@ let coverCropChangeImageHandler = null;
 let envExtraEntries = [];
 let chatStreamRenderFrame = 0;
 let isChatStreaming = false;
+let pendingChatImages = [];
 let dailyWelcomeAudioArmed = false;
 let chatCommandMenuOpen = false;
 let selectedChatCommandIndex = 0;
@@ -604,7 +608,7 @@ const ENV_FIELD_GROUPS = [
   },
   {
     title: "對話API",
-    description: "支援 OpenAI-compatible Chat Completions API。DeepSeek、OpenAI、Gemini 可直接用對應 provider 或自訂 Base URL。",
+    description: "支援 OpenAI-compatible Chat Completions API。DeepSeek、OpenAI、Gemini、智譜 GLM 可直接使用。",
     fields: [
       {
         key: "CHAT_API_PROVIDER",
@@ -614,6 +618,7 @@ const ENV_FIELD_GROUPS = [
           ["deepseek", "DeepSeek"],
           ["openai", "OpenAI / ChatGPT"],
           ["gemini", "Gemini"],
+          ["zhipu", "智譜 GLM / BigModel"],
           ["custom", "自訂 OpenAI-compatible"]
         ],
         help: "決定預設 Base URL；custom 供應商必須另外填 CHAT_API_BASE_URL。"
@@ -623,21 +628,21 @@ const ENV_FIELD_GROUPS = [
         label: "對話 API Key",
         type: "password",
         autocomplete: "off",
-        help: "可填 DeepSeek、OpenAI 或 Gemini API key；舊版 DEEPSEEK_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 會自動帶入。"
+        help: "可填 DeepSeek、OpenAI、Gemini 或智譜 API key；舊版 provider 專用 key 會自動帶入。"
       },
       {
         key: "CHAT_API_BASE_URL",
         label: "對話 API Base URL",
         type: "text",
         placeholder: "留空使用供應商預設",
-        help: "OpenAI-compatible base，例如 https://api.openai.com/v1 或 https://generativelanguage.googleapis.com/v1beta/openai。"
+        help: "留空使用 provider 預設。智譜預設為 https://open.bigmodel.cn/api/paas/v4。"
       },
       {
         key: "CHAT_API_MODEL",
         label: "API輸出模型",
         type: "text",
-        placeholder: "deepseek-v4-pro / gpt-4.1 / gemini-2.5-flash",
-        help: "主聊天、大模型處理、補寫與角色卡助手都會使用此模型。"
+        placeholder: "deepseek-v4-pro / glm-5.3-flash / gpt-4.1",
+        help: "主聊天、大模型處理、補寫與角色卡助手都使用此模型；系統不會因圖片自動切換模型。"
       },
       {
         key: "DEEPSEEK_REASONING_EFFORT",
@@ -651,6 +656,18 @@ const ENV_FIELD_GROUPS = [
           ["max", "最大"]
         ],
         help: "只套用於 DeepSeek provider。選擇關閉後 CHAT_API_TEMPERATURE 才會生效；低／高／最大會開啟思考且忽略溫度。"
+      },
+      {
+        key: "GLM_REASONING_EFFORT",
+        label: "GLM 5.3 思考模式強度",
+        type: "select",
+        options: [
+          ["", "使用 API 預設（最大）"],
+          ["low", "低"],
+          ["high", "高"],
+          ["max", "最大"]
+        ],
+        help: "只套用於智譜 provider 的 GLM-5.3 系列。此系列保持思考模式開啟。"
       },
       {
         key: "CHAT_API_REQUEST_TIMEOUT_MS",
@@ -783,10 +800,10 @@ const ENV_FIELD_GROUPS = [
   }
 ];
 const ENV_ALIAS_KEYS = {
-  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"],
+  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY"],
   CHAT_API_KEY2: ["CONVERSATION_API_KEY2", "DEEPSEEK_API_KEY2", "DEEPSEEK_KEY2", "deepseek_key2"],
-  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL"],
-  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL"],
+  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ZHIPU_MODEL", "GLM_MODEL"],
+  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL"],
   CHAT_API_REQUEST_TIMEOUT_MS: ["CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
   CHAT_API_MAX_TOKENS: ["CONVERSATION_API_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS"],
   CHAT_API_MAX_TOKENS_PARAM: ["CONVERSATION_API_MAX_TOKENS_PARAM"],
@@ -1686,13 +1703,81 @@ async function request(url, options = {}) {
   return data;
 }
 
-async function requestChatStream(content, handlers = {}) {
+function getChatImageUploadLimits() {
+  return {
+    maxBytes: Math.max(1, Number(appState?.chatApi?.imageAttachmentMaxBytes) || 5 * 1024 * 1024),
+    maxCount: Math.max(1, Math.floor(Number(appState?.chatApi?.imageAttachmentMaxCount) || 4))
+  };
+}
+
+function renderPendingChatImages() {
+  if (!el.chatImagePreview) {
+    return;
+  }
+  el.chatImagePreview.hidden = pendingChatImages.length === 0;
+  el.chatImagePreview.replaceChildren(...pendingChatImages.map((image, index) => {
+    const item = document.createElement("div");
+    item.className = "chat-image-preview-item";
+    const img = document.createElement("img");
+    img.src = image.imageUrl;
+    img.alt = image.fileName || `待上傳圖片 ${index + 1}`;
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "chat-image-remove-button";
+    removeButton.title = "移除圖片";
+    removeButton.setAttribute("aria-label", `移除 ${image.fileName || `圖片 ${index + 1}`}`);
+    removeButton.textContent = "×";
+    removeButton.addEventListener("click", () => {
+      pendingChatImages.splice(index, 1);
+      renderPendingChatImages();
+      realignMobileChat();
+    });
+    item.append(img, removeButton);
+    return item;
+  }));
+}
+
+function readChatImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve({
+      imageUrl: String(reader.result || ""),
+      fileName: file.name,
+      contentType: file.type,
+      size: file.size
+    }));
+    reader.addEventListener("error", () => reject(new Error(`無法讀取圖片 ${file.name || "附件"}。`)));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addPendingChatImages(files = []) {
+  const supportedTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+  const { maxBytes, maxCount } = getChatImageUploadLimits();
+  const selectedFiles = Array.from(files || []);
+  if (pendingChatImages.length + selectedFiles.length > maxCount) {
+    throw new Error(`每次最多上傳 ${maxCount} 張圖片。`);
+  }
+  selectedFiles.forEach((file) => {
+    if (!supportedTypes.has(String(file.type || "").toLowerCase())) {
+      throw new Error(`不支援 ${file.name || "這張圖片"} 的格式。`);
+    }
+    if (file.size > maxBytes) {
+      throw new Error(`${file.name || "圖片"} 超過 ${Math.ceil(maxBytes / 1024 / 1024)} MB 上限。`);
+    }
+  });
+  pendingChatImages.push(...await Promise.all(selectedFiles.map((file) => readChatImageFile(file))));
+  renderPendingChatImages();
+  realignMobileChat();
+}
+
+async function requestChatStream(content, images = [], handlers = {}) {
   const response = await fetch("/api/chat/send-stream", {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
     },
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ content, images })
   });
 
   if (!response.ok) {
@@ -2559,7 +2644,7 @@ function setChatApiTestStatus(type = "", message = "") {
 }
 
 function isChatApiEnvField(key = "") {
-  return key.startsWith("CHAT_API_") || key === "DEEPSEEK_REASONING_EFFORT";
+  return key.startsWith("CHAT_API_") || key === "DEEPSEEK_REASONING_EFFORT" || key === "GLM_REASONING_EFFORT";
 }
 
 async function testChatApiConnection() {
@@ -5435,7 +5520,7 @@ function scheduleChatStreamRender() {
   }
 }
 
-function appendOptimisticChatTurn(content = "") {
+function appendOptimisticChatTurn(content = "", images = []) {
   if (!appState) {
     return null;
   }
@@ -5445,6 +5530,7 @@ function appendOptimisticChatTurn(content = "") {
     id: createClientMessageId("temp_user"),
     role: "user",
     content,
+    ...(images.length > 0 ? { images } : {}),
     source: "web",
     createdAt: userCreatedAt,
     updatedAt: userCreatedAt
@@ -8538,6 +8624,20 @@ function bindEvents() {
     });
   }
 
+  el.chatImageButton?.addEventListener("click", () => {
+    el.chatImageInput?.click();
+  });
+
+  el.chatImageInput?.addEventListener("change", async () => {
+    try {
+      await addPendingChatImages(el.chatImageInput.files);
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      el.chatImageInput.value = "";
+    }
+  });
+
   el.chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (activeChatCommandForm) {
@@ -8549,13 +8649,14 @@ function bindEvents() {
       return;
     }
     const content = el.chatInput.value.trim();
-    if (!content) {
-      showToast("請先輸入內容", "error");
+    const images = pendingChatImages.map((image) => ({ ...image }));
+    if (!content && images.length === 0) {
+      showToast("請輸入內容或附加圖片", "error");
       return;
     }
     closeChatCommandMenu();
 
-    if (await handleChatSlashCommand(content)) {
+    if (images.length === 0 && await handleChatSlashCommand(content)) {
       resizeChatInput();
       realignMobileChat({ scroll: true });
       return;
@@ -8564,11 +8665,14 @@ function bindEvents() {
     try {
       isChatStreaming = true;
       renderStatus(appState);
-      const streamingAssistantMessage = appendOptimisticChatTurn(content);
+      const displayContent = content || "請查看附加圖片。";
+      const streamingAssistantMessage = appendOptimisticChatTurn(displayContent, images);
       el.chatInput.value = "";
+      pendingChatImages = [];
+      renderPendingChatImages();
       resizeChatInput();
       realignMobileChat({ scroll: true });
-      await requestChatStream(content, {
+      await requestChatStream(content, images, {
         onEvent: (streamEvent) => {
           if (streamEvent.type === "done" && streamEvent.state) {
             const previousImageCount = (appState?.conversation || []).filter((message) => isImageOnlyMessage(message)).length;
@@ -8589,6 +8693,10 @@ function bindEvents() {
       await refresh();
       showToast("已送出");
     } catch (error) {
+      if (images.length > 0 && pendingChatImages.length === 0) {
+        pendingChatImages = images;
+        renderPendingChatImages();
+      }
       showToast(error.message, "error");
       if (appState) {
         renderStatus(appState);

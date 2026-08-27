@@ -63,8 +63,16 @@ import {
 import {
   buildChatApiRequestBody,
   normalizeChatApiMaxTokensParamName,
-  normalizeDeepSeekReasoningEffort
+  normalizeDeepSeekReasoningEffort,
+  normalizeGlmReasoningEffort
 } from "./chat-api-request.js";
+import {
+  buildMultimodalMessageContent,
+  getMessageChatImages,
+  isSupportedChatImageAttachment,
+  normalizeChatImageAttachments,
+  sanitizeChatApiMessagesForLog
+} from "./chat-images.js";
 import {
   buildStoryboardExecutionPlan,
   composeStoryboardSceneSettings,
@@ -101,7 +109,9 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "CONVERSATION_API_KEY",
   "DEEPSEEK_API_KEY",
   "OPENAI_API_KEY",
-  "GEMINI_API_KEY"
+  "GEMINI_API_KEY",
+  "ZHIPU_API_KEY",
+  "BIGMODEL_API_KEY"
 ]);
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 let appDefaultEnvironmentValuesCache = null;
@@ -127,6 +137,9 @@ const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
 const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
 const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
+const DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_COUNT = 4;
+const DEFAULT_IMAGE_ONLY_USER_CONTENT = "請查看附加圖片。";
 const DISCORD_LOGIN_RETRY_INITIAL_MS = envNumber("DISCORD_LOGIN_RETRY_INITIAL_MS", 15_000);
 const DISCORD_LOGIN_RETRY_MAX_MS = envNumber("DISCORD_LOGIN_RETRY_MAX_MS", 300_000);
 const DISCORD_LOGIN_RETRY_MAX_ATTEMPTS = envNumber("DISCORD_LOGIN_RETRY_MAX_ATTEMPTS", 0);
@@ -6333,7 +6346,7 @@ function buildCacheableDialogueMessages(messages = []) {
         : getMessageModelContent(item);
       const normalizedContent = stripLeadingContextRoundLabels(content);
       return normalizedContent
-        ? { role, content: normalizedContent }
+        ? { role, content: buildMultimodalMessageContent(normalizedContent, item) }
         : null;
     })
     .filter(Boolean);
@@ -6946,6 +6959,7 @@ function buildRecentModelImageContextMessages({
     const latestUserContent = getCurrentUserModelContent(latestUser, currentState, runtimeUserName);
     if (latestUserContent) {
       messages.push({
+        ...latestUser,
         role: "user",
         content: latestUserContent,
         requestContentPrepared: true
@@ -7932,17 +7946,20 @@ function buildCharacterCardCreationAssistantMessages(state) {
     ...baseMessages,
     ...contextMessages.map((item) => ({
       role: item.role,
-      content: getMessageModelContent(item)
+      content: buildMultimodalMessageContent(getMessageModelContent(item), item)
     })),
     {
       role: "user",
-      content: getUserBaseModelContent(latestUser)
+      content: buildMultimodalMessageContent(getUserBaseModelContent(latestUser), latestUser)
     }
   ];
 }
 
 function normalizeChatApiProvider(value = "") {
   const normalized = safeText(value).toLowerCase().replace(/[-\s]+/g, "_");
+  if (["zhipu", "glm", "bigmodel"].includes(normalized)) {
+    return "zhipu";
+  }
   if (["deepseek", "openai", "gemini", "custom"].includes(normalized)) {
     return normalized;
   }
@@ -7961,6 +7978,9 @@ function getDefaultChatApiBaseUrl(provider = getChatApiProvider()) {
   if (normalizedProvider === "gemini") {
     return "https://generativelanguage.googleapis.com/v1beta/openai";
   }
+  if (normalizedProvider === "zhipu") {
+    return "https://open.bigmodel.cn/api/paas/v4";
+  }
   if (normalizedProvider === "custom") {
     return "";
   }
@@ -7970,7 +7990,7 @@ function getDefaultChatApiBaseUrl(provider = getChatApiProvider()) {
 function getChatApiBaseUrl() {
   const provider = getChatApiProvider();
   return envFirstText(
-    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL"],
+    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "DEEPSEEK_BASE_URL"],
     getDefaultChatApiBaseUrl(provider)
   );
 }
@@ -8006,12 +8026,14 @@ function getPrimaryChatApiKey() {
       ? ["GEMINI_API_KEY"]
       : provider === "deepseek"
         ? ["DEEPSEEK_API_KEY"]
+        : provider === "zhipu"
+          ? ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"]
         : [];
   return envFirstText([
     "CHAT_API_KEY",
     "CONVERSATION_API_KEY",
     ...providerKeys,
-    "DEEPSEEK_API_KEY"
+    ...(provider === "zhipu" ? [] : ["DEEPSEEK_API_KEY"])
   ]);
 }
 
@@ -8077,7 +8099,7 @@ function getContextCompressionChatApiKey(purpose = "context_compression") {
 function getChatApiModel(purpose = "chat") {
   const settings = normalizeConversationSettings(state?.conversationSettings);
   return envFirstText(
-    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
     settings.chatOutputModel || DEFAULT_CHAT_API_MODEL
   );
 }
@@ -8115,6 +8137,33 @@ function getDeepSeekReasoningEffort(envSource = process.env) {
   );
 }
 
+function getGlmReasoningEffort(envSource = process.env) {
+  return normalizeGlmReasoningEffort(
+    envObjectFirstText(envSource, ["GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"])
+  );
+}
+
+function getChatApiReasoningEffort(envSource = process.env, provider = getChatApiProvider()) {
+  return normalizeChatApiProvider(provider) === "zhipu"
+    ? getGlmReasoningEffort(envSource)
+    : getDeepSeekReasoningEffort(envSource);
+}
+
+function getChatImageAttachmentMaxBytes() {
+  return envFirstNumber(["CHAT_IMAGE_ATTACHMENT_MAX_BYTES"], DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_BYTES);
+}
+
+function getChatImageAttachmentMaxCount() {
+  return Math.max(1, Math.floor(envFirstNumber(["CHAT_IMAGE_ATTACHMENT_MAX_COUNT"], DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_COUNT)));
+}
+
+function normalizeIncomingChatImages(images = []) {
+  return normalizeChatImageAttachments(images, {
+    maxBytes: getChatImageAttachmentMaxBytes(),
+    maxCount: getChatImageAttachmentMaxCount()
+  });
+}
+
 function getChatApiRequestTimeoutMs() {
   return envFirstNumber(
     ["CHAT_API_REQUEST_TIMEOUT_MS", "CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
@@ -8130,6 +8179,9 @@ function getChatApiMaxTokensCap(model = "") {
   const normalizedModel = safeText(model).toLowerCase();
   if (normalizedModel === "deepseek-chat") {
     return 8192;
+  }
+  if (/^glm-5\.3(?:-|$)/u.test(normalizedModel)) {
+    return 128000;
   }
   return 64000;
 }
@@ -8591,6 +8643,9 @@ function getChatApiProviderKeyAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
   if (normalizedProvider === "deepseek") {
     return ["DEEPSEEK_API_KEY"];
   }
+  if (normalizedProvider === "zhipu") {
+    return ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"];
+  }
   return [];
 }
 
@@ -8600,7 +8655,7 @@ function resolveChatApiTestConfig(envSource = {}) {
   );
   const baseUrl = envObjectFirstText(
     envSource,
-    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL"],
+    ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "DEEPSEEK_BASE_URL"],
     getDefaultChatApiBaseUrl(provider)
   );
   const apiKey = envObjectFirstText(
@@ -8609,12 +8664,12 @@ function resolveChatApiTestConfig(envSource = {}) {
       "CHAT_API_KEY",
       "CONVERSATION_API_KEY",
       ...getChatApiProviderKeyAliases(provider),
-      "DEEPSEEK_API_KEY"
+      ...(provider === "zhipu" ? [] : ["DEEPSEEK_API_KEY"])
     ]
   );
   const model = envObjectFirstText(
     envSource,
-    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL"],
     DEFAULT_CHAT_API_MODEL
   );
   const requestTimeoutMs = Math.min(
@@ -8628,7 +8683,7 @@ function resolveChatApiTestConfig(envSource = {}) {
   const maxTokensParamName = normalizeChatApiMaxTokensParamName(
     envObjectFirstText(envSource, ["CHAT_API_MAX_TOKENS_PARAM", "CONVERSATION_API_MAX_TOKENS_PARAM"], "max_tokens")
   );
-  const reasoningEffort = getDeepSeekReasoningEffort(envSource);
+  const reasoningEffort = getChatApiReasoningEffort(envSource, provider);
   return {
     provider,
     apiKey,
@@ -8672,7 +8727,7 @@ async function testChatApiConnection(envSource = {}) {
     reasoningEffort: config.reasoningEffort,
     model: config.model,
     temperature: 0,
-    maxTokens: config.provider === "deepseek" && config.reasoningEffort && config.reasoningEffort !== "none" ? 1024 : 8,
+    maxTokens: ["deepseek", "zhipu"].includes(config.provider) && config.reasoningEffort !== "none" ? 1024 : 8,
     maxTokensParamName: config.maxTokensParamName,
     messages: [
       {
@@ -8773,7 +8828,7 @@ async function callChatApiCompletionRaw({
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
-  const requestMessages = cloneData(messages, []);
+  const requestMessages = sanitizeChatApiMessagesForLog(messages);
   if (!apiKey) {
     const placeholder = getMissingChatApiKeyPlaceholder(purpose);
     appendAiLog({
@@ -8815,7 +8870,7 @@ async function callChatApiCompletionRaw({
 
   const requestBody = buildChatApiRequestBody({
     provider: getChatApiProvider(),
-    reasoningEffort: getDeepSeekReasoningEffort(),
+    reasoningEffort: getChatApiReasoningEffort(),
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,
@@ -9124,7 +9179,7 @@ async function callChatApiCompletionStreamRaw({
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
-  const requestMessages = cloneData(messages, []);
+  const requestMessages = sanitizeChatApiMessagesForLog(messages);
 
   if (!apiKey) {
     const placeholder = getMissingChatApiKeyPlaceholder(purpose);
@@ -9172,7 +9227,7 @@ async function callChatApiCompletionStreamRaw({
 
   const requestBody = buildChatApiRequestBody({
     provider: getChatApiProvider(),
-    reasoningEffort: getDeepSeekReasoningEffort(),
+    reasoningEffort: getChatApiReasoningEffort(),
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,
@@ -9641,6 +9696,7 @@ async function runConversationTurnStreaming({
   content,
   source,
   extra = {},
+  images = [],
   onPhaseStatus,
   onReasoningDelta,
   onContentDelta
@@ -9660,6 +9716,7 @@ async function runConversationTurnStreaming({
         content,
         source,
         extra,
+        userExtra: images.length > 0 ? { images } : {},
         keepTimeDirective: hasKeepTimeDirective(content),
         emptyInputMessage: "輸入不可空白。",
         notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
@@ -9694,7 +9751,9 @@ function statePayload(state) {
       provider: getChatApiProvider(),
       baseUrl: getChatApiBaseUrl(),
       model: getChatApiModel("reasoner_history_chat"),
-      maxTokensParam: getChatApiMaxTokensParamName()
+      maxTokensParam: getChatApiMaxTokensParamName(),
+      imageAttachmentMaxBytes: getChatImageAttachmentMaxBytes(),
+      imageAttachmentMaxCount: getChatImageAttachmentMaxCount()
     },
     discord: {
       enabled: Boolean(DISCORD_BOT_TOKEN),
@@ -10144,6 +10203,9 @@ async function replayConversationFromUserIndexLocked({
   }
 
   const replacedUserMessage = state.conversation[targetIndex];
+  const replayImages = Object.prototype.hasOwnProperty.call(userExtra, "images")
+    ? userExtra.images
+    : getMessageChatImages(replacedUserMessage);
   const removedDiscordReplyMessageIds = state.conversation
     .slice(targetIndex + 1)
     .flatMap((item) => item?.role === "assistant" ? getDiscordReplyMessageIds(item) : []);
@@ -10162,6 +10224,7 @@ async function replayConversationFromUserIndexLocked({
       keepTimeDirective: hasKeepTimeDirective(storedUserContent),
       userExtra: {
         ...userExtra,
+        ...(replayImages.length > 0 ? { images: replayImages } : {}),
         rewrittenUserMessageId: safeText(replacedUserMessage?.id)
       },
       assistantExtra: {
@@ -10245,6 +10308,7 @@ async function replayConversationFromMessageNumber({
 async function replayConversationFromDiscordMessageId({
   discordMessageId,
   content,
+  images = null,
   source = "discord",
   extra = {}
 }) {
@@ -10268,6 +10332,9 @@ async function replayConversationFromDiscordMessageId({
     if (targetIndex < 0) {
       throw new Error("找不到對應的原始 Discord 使用者訊息，無法從該訊息重新開始。");
     }
+    const replayImages = Array.isArray(images)
+      ? images
+      : getMessageChatImages(state.conversation[targetIndex]);
     const removedDiscordReplyMessageIds = state.conversation
       .slice(targetIndex + 1)
       .flatMap((item) => item?.role === "assistant" ? getDiscordReplyMessageIds(item) : []);
@@ -10286,7 +10353,8 @@ async function replayConversationFromDiscordMessageId({
         keepTimeDirective: hasKeepTimeDirective(storedUserContent),
         userExtra: {
           discordMessageId: normalizedMessageId,
-          replayFromDiscordEdit: true
+          replayFromDiscordEdit: true,
+          ...(replayImages.length > 0 ? { images: replayImages } : {})
         },
         assistantExtra: {
           discordMessageId: normalizedMessageId,
@@ -10305,7 +10373,7 @@ async function replayConversationFromDiscordMessageId({
   });
 }
 
-async function runConversationTurn({ content, source, extra = {} }) {
+async function runConversationTurn({ content, source, extra = {}, images = [] }) {
   return withStateLock(async () => {
     const result = await runConversationTurnWorkflow(
       createConversationTurnDeps(),
@@ -10314,6 +10382,7 @@ async function runConversationTurn({ content, source, extra = {} }) {
         content,
         source,
         extra,
+        userExtra: images.length > 0 ? { images } : {},
         keepTimeDirective: hasKeepTimeDirective(content),
         emptyInputMessage: "輸入不可空白。",
         notReadyMessage: "尚未開始。請先在網頁選擇角色卡或啟用助手。"
@@ -11302,9 +11371,16 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/chat/send" && method === "POST") {
       const body = await readBody(req);
-      const content = safeText(body.content);
+      let images;
+      try {
+        images = normalizeIncomingChatImages(body.images);
+      } catch (error) {
+        sendJson(res, 400, { error: error.message || "圖片格式錯誤。" });
+        return;
+      }
+      const content = safeText(body.content) || (images.length > 0 ? DEFAULT_IMAGE_ONLY_USER_CONTENT : "");
       if (!content) {
-        sendJson(res, 400, { error: "輸入不可空白。" });
+        sendJson(res, 400, { error: "請輸入內容或附加圖片。" });
         return;
       }
       if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
@@ -11313,6 +11389,7 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await runConversationTurn({
         content,
+        images,
         source: "web",
         extra: {
           platform: "web"
@@ -11355,9 +11432,16 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/chat/send-stream" && method === "POST") {
       const body = await readBody(req);
-      const content = safeText(body.content);
+      let images;
+      try {
+        images = normalizeIncomingChatImages(body.images);
+      } catch (error) {
+        sendJson(res, 400, { error: error.message || "圖片格式錯誤。" });
+        return;
+      }
+      const content = safeText(body.content) || (images.length > 0 ? DEFAULT_IMAGE_ONLY_USER_CONTENT : "");
       if (!content) {
-        sendJson(res, 400, { error: "輸入不可空白。" });
+        sendJson(res, 400, { error: "請輸入內容或附加圖片。" });
         return;
       }
       if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
@@ -11370,6 +11454,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const result = await runConversationTurnStreaming({
           content,
+          images,
           source: "web",
           extra: {
             platform: "web"
@@ -11438,7 +11523,8 @@ const server = http.createServer(async (req, res) => {
 function extractDiscordInput(message) {
   const raw = safeText(message.content);
   const hasTextAttachment = hasSupportedDiscordTextAttachment(message.attachments);
-  if (!raw && !hasTextAttachment) {
+  const hasImageAttachment = hasSupportedDiscordImageAttachment(message.attachments);
+  if (!raw && !hasTextAttachment && !hasImageAttachment) {
     return null;
   }
 
@@ -11446,7 +11532,7 @@ function extractDiscordInput(message) {
     return raw;
   }
 
-  if (!raw && hasTextAttachment) {
+  if (!raw && (hasTextAttachment || hasImageAttachment)) {
     return isActiveDiscordAutoChatChannel(message) ? "" : null;
   }
 
@@ -11470,6 +11556,24 @@ function isSupportedDiscordTextAttachment(attachment) {
 function hasSupportedDiscordTextAttachment(attachments) {
   return Array.from(attachments?.values?.() || attachments || [])
     .some((attachment) => isSupportedDiscordTextAttachment(attachment));
+}
+
+function hasSupportedDiscordImageAttachment(attachments) {
+  return Array.from(attachments?.values?.() || attachments || [])
+    .some((attachment) => isSupportedChatImageAttachment(attachment));
+}
+
+function getDiscordImageContentType(attachment = {}, responseContentType = "") {
+  const explicit = safeText(attachment?.contentType || responseContentType).split(";")[0].toLowerCase();
+  if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(explicit)) {
+    return explicit;
+  }
+  const name = safeText(attachment?.name || attachment?.filename).toLowerCase();
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  if (/\.jpe?g$/u.test(name)) return "image/jpeg";
+  return "";
 }
 
 async function readDiscordTextAttachment(attachment) {
@@ -11524,6 +11628,49 @@ async function buildDiscordInputWithTextAttachments(baseContent = "", attachment
   const base = safeText(baseContent);
   const attachmentText = await readDiscordTextAttachments(attachments);
   return [base, attachmentText].filter(Boolean).join("\n\n");
+}
+
+async function readDiscordImageAttachments(attachments = null) {
+  const imageAttachments = Array.from(attachments?.values?.() || attachments || [])
+    .filter((attachment) => isSupportedChatImageAttachment(attachment));
+  if (imageAttachments.length === 0) {
+    return [];
+  }
+  if (imageAttachments.length > getChatImageAttachmentMaxCount()) {
+    throw new Error(`每次最多上傳 ${getChatImageAttachmentMaxCount()} 張圖片。`);
+  }
+
+  const images = [];
+  for (const attachment of imageAttachments) {
+    const size = Number(attachment?.size || 0);
+    if (Number.isFinite(size) && size > getChatImageAttachmentMaxBytes()) {
+      throw new Error(`圖片 ${safeText(attachment?.name) || "附件"} 超過 ${Math.ceil(getChatImageAttachmentMaxBytes() / 1024 / 1024)} MB 上限。`);
+    }
+    const response = await fetch(attachment.url);
+    if (!response.ok) {
+      throw new Error(`圖片附件下載失敗 (${response.status})。`);
+    }
+    const contentLength = Number(response.headers.get("content-length") || size || 0);
+    if (Number.isFinite(contentLength) && contentLength > getChatImageAttachmentMaxBytes()) {
+      throw new Error(`圖片 ${safeText(attachment?.name) || "附件"} 超過 ${Math.ceil(getChatImageAttachmentMaxBytes() / 1024 / 1024)} MB 上限。`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = getDiscordImageContentType(attachment, response.headers.get("content-type"));
+    images.push({
+      imageUrl: `data:${contentType};base64,${buffer.toString("base64")}`,
+      fileName: safeText(attachment?.name || attachment?.filename)
+    });
+  }
+  return normalizeIncomingChatImages(images);
+}
+
+async function buildDiscordChatInput(baseContent = "", attachments = null) {
+  const content = await buildDiscordInputWithTextAttachments(baseContent, attachments);
+  const images = await readDiscordImageAttachments(attachments);
+  return {
+    content: content || (images.length > 0 ? DEFAULT_IMAGE_ONLY_USER_CONTENT : ""),
+    images
+  };
 }
 
 async function sendDiscordLongMessage(message, text) {
@@ -12088,7 +12235,8 @@ async function processDiscordChatTurn({
   userName,
   userAvatarUrl = "",
   discordMessageId,
-  userContent
+  userContent,
+  images = []
 }) {
   if (!canProcessDiscordChatInChannel(channelId, guildId)) {
     throw new Error("這個伺服器對話已固定在另一個頻道。要切換頻道，請在想使用的頻道輸入 /ai_start。");
@@ -12098,6 +12246,7 @@ async function processDiscordChatTurn({
     const pendingOpening = await consumePendingOpening(channelId, userName);
     const result = await runConversationTurn({
       content: userContent,
+      images,
       source: "discord",
       extra: {
         platform: "discord",
@@ -12125,9 +12274,9 @@ async function handleDiscordChat(message, userContent) {
     await message.reply("尚未開始。請先在網頁選擇角色卡或啟用助手，再使用對話。");
     return;
   }
-  const finalUserContent = await buildDiscordInputWithTextAttachments(userContent, message.attachments);
-  if (!finalUserContent) {
-    await message.reply("請輸入對話內容，或附上一個 .txt 檔。");
+  const chatInput = await buildDiscordChatInput(userContent, message.attachments);
+  if (!chatInput.content) {
+    await message.reply("請輸入對話內容，或附加 .txt／圖片檔。支援 PNG、JPEG、WebP 與 GIF。");
     return;
   }
 
@@ -12139,7 +12288,8 @@ async function handleDiscordChat(message, userContent) {
     userName: message.author.username,
     userAvatarUrl: getDiscordUserAvatarUrl(message.author),
     discordMessageId: message.id,
-    userContent: finalUserContent
+    userContent: chatInput.content,
+    images: chatInput.images
   });
 
   const pendingOpening = turn.pendingOpening;
@@ -12606,16 +12756,21 @@ function setupDiscordBot() {
     }
 
     const extractedInput = extractDiscordInput(message);
-    if (extractedInput === null || !extractedInput) {
+    if (extractedInput === null) {
       return;
     }
 
     try {
       const stopTyping = startTypingIndicator(message.channel);
       try {
+        const chatInput = await buildDiscordChatInput(extractedInput, message.attachments);
+        if (!chatInput.content) {
+          return;
+        }
         const result = await replayConversationFromDiscordMessageId({
           discordMessageId: message.id,
-          content: extractedInput,
+          content: chatInput.content,
+          images: chatInput.images,
           source: "discord",
           extra: {
             platform: "discord",
