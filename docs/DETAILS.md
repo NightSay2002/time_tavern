@@ -287,17 +287,19 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 
 | 檔案或目錄 | 說明 |
 | --- | --- |
-| `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容與 AI logs 摘要。 |
+| `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容、AI logs 與對話存檔摘要；不重複保存角色卡或完整存檔。 |
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/environment.env` | 根目錄 `.env` 的完整本機備份，包含 Token 與 API Key。 |
-| `data/cardstate.json` | 使用者設定與角色卡分離備份。 |
-| `data/saved-sessions/` | 網頁對話存檔的訊息與 AI 呼叫紀錄。 |
+| `data/cardstate.json` | 角色卡與助手的獨立資料檔；內容未變更時不重複寫入。 |
+| `data/saved-sessions/` | 每個網頁對話存檔各自一份完整快照，只在預覽或載入該存檔時讀取。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
 | `defaults/app-defaults.json` | 可提交的主功能與 Prompt 發布預設。 |
 | `defaults/novelai-defaults.json` | 可提交的 NovelAI 發布預設。 |
 
 `data/` 可能包含完整對話、角色設定與模型內容，不建議公開。
+
+舊版對話存檔會在首次啟動新版時轉成分離式格式。主狀態只保留名稱、角色、訊息數等清單資料，因此角色卡與存檔增加時，打開存檔清單不會逐一解析所有完整存檔。
 
 ## 開發檢查
 

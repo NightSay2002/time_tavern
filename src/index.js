@@ -95,6 +95,7 @@ const APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
+const SAVED_SESSION_STORAGE_VERSION = 2;
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
 const BUNDLED_NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
@@ -113,6 +114,8 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "ZHIPU_API_KEY",
   "BIGMODEL_API_KEY"
 ]);
+let lastPersistedCardStateContent = "";
+let savedSessionStorageMigrated = false;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 let appDefaultEnvironmentValuesCache = null;
 const environmentBackup = syncEnvironmentBackup({ envFile: ENV_FILE, dataDir: DATA_DIR });
@@ -1513,7 +1516,15 @@ function loadCardState() {
 function persistCardState(currentState) {
   ensureDataFile();
   const payload = extractCardState(currentState);
-  fs.writeFileSync(CARD_STATE_FILE, JSON.stringify(payload, null, 2), "utf8");
+  const comparableContent = JSON.stringify({
+    roleCards: payload.roleCards,
+    assistantCards: payload.assistantCards
+  });
+  if (comparableContent === lastPersistedCardStateContent && fs.existsSync(CARD_STATE_FILE)) {
+    return;
+  }
+  writeJsonFile(CARD_STATE_FILE, payload);
+  lastPersistedCardStateContent = comparableContent;
 }
 
 function saveDefaultAppSettings(currentState) {
@@ -1828,8 +1839,13 @@ function saveState(state) {
   }
   state.activeSavedSessionId = null;
   state.updatedAt = nowIso();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
   persistCardState(state);
+  const {
+    roleCards: _roleCards,
+    assistantCards: _assistantCards,
+    ...persistedState
+  } = state;
+  writeJsonFile(STATE_FILE, persistedState);
 }
 
 function sendJson(res, status, payload) {
@@ -2075,13 +2091,6 @@ function getSavedSessionDataFilePath(sessionOrId) {
   return path.join(SAVED_SESSIONS_DIR, getSavedSessionDataFileName(sessionId));
 }
 
-function stripRuntimeSnapshotHistory(snapshot = {}) {
-  const output = cloneData(snapshot, {});
-  output.conversation = [];
-  output.aiLogs = [];
-  return output;
-}
-
 function readSavedSessionExternalData(session) {
   const fallback = {
     conversation: Array.isArray(session?.snapshot?.conversation)
@@ -2097,7 +2106,15 @@ function readSavedSessionExternalData(session) {
       return fallback;
     }
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (parsed?.snapshot && typeof parsed.snapshot === "object") {
+      return {
+        snapshot: cloneData(parsed.snapshot, {}),
+        conversation: [],
+        aiLogs: []
+      };
+    }
     return {
+      snapshot: null,
       conversation: Array.isArray(parsed.conversation)
         ? cloneData(parsed.conversation, [])
         : fallback.conversation,
@@ -2107,77 +2124,100 @@ function readSavedSessionExternalData(session) {
     };
   } catch (error) {
     console.warn(`讀取存檔對話分離檔失敗：${safeText(error?.message) || "未知錯誤"}`);
-    return fallback;
+    return { snapshot: null, ...fallback };
   }
 }
 
-function writeSavedSessionExternalData(sessionOrId, data = {}) {
+function writeSavedSessionExternalData(sessionOrId, snapshot = {}) {
   const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
   if (!sessionId) {
     return;
   }
   const payload = {
-    conversation: Array.isArray(data.conversation) ? cloneData(data.conversation, []) : [],
-    aiLogs: Array.isArray(data.aiLogs) ? data.aiLogs.map((entry) => normalizeAiLog(entry)) : [],
+    version: SAVED_SESSION_STORAGE_VERSION,
+    snapshot: cloneData(snapshot, {}),
     updatedAt: nowIso()
   };
-  fs.writeFileSync(getSavedSessionDataFilePath(sessionId), JSON.stringify(payload, null, 2), "utf8");
+  writeJsonFile(getSavedSessionDataFilePath(sessionId), payload);
 }
 
 function materializeSavedSessionSnapshot(session) {
-  const snapshot = cloneData(session?.snapshot, {});
   const externalData = readSavedSessionExternalData(session);
+  if (externalData.snapshot) {
+    return externalData.snapshot;
+  }
+  const snapshot = cloneData(session?.snapshot, {});
   snapshot.conversation = externalData.conversation;
   snapshot.aiLogs = externalData.aiLogs;
   return snapshot;
 }
 
-function normalizeSavedSession(rawSession, index) {
+function createSavedSessionMetadata(source, snapshot, index = 0) {
   const now = nowIso();
-  const source = rawSession && typeof rawSession === "object" ? rawSession : {};
-  const snapshot = source.snapshot && typeof source.snapshot === "object" ? source.snapshot : source;
-  const normalizedState = createDefaultState();
-  applyRuntimeSnapshot(normalizedState, snapshot);
-  const id = safeText(source.id) || newId("session");
-  const fullSnapshot = captureRuntimeSnapshot(normalizedState);
-  const externalFilePath = getSavedSessionDataFilePath(id);
-  if (
-    !fs.existsSync(externalFilePath) &&
-    (fullSnapshot.conversation.length > 0 || fullSnapshot.aiLogs.length > 0)
-  ) {
-    writeSavedSessionExternalData(id, fullSnapshot);
-  }
-
+  const roleCardId = safeText(snapshot?.activeRoleCardId) || null;
+  const roleCard = Array.isArray(snapshot?.roleCards)
+    ? snapshot.roleCards.find((card) => safeText(card?.id) === roleCardId)
+    : null;
+  const assistantMode = normalizeAssistantMode(snapshot?.activeAssistantMode);
+  const assistantCard = assistantMode ? getAssistantCardById(snapshot, assistantMode) : null;
+  const id = safeText(source?.id) || newId("session");
   return {
+    storageVersion: SAVED_SESSION_STORAGE_VERSION,
     id,
-    name: safeText(source.name) || `對話存檔 ${index + 1}`,
-    status: safeText(source.status) === "archived" ? "archived" : "active",
+    name: safeText(source?.name) || `對話存檔 ${index + 1}`,
+    status: safeText(source?.status) === "archived" ? "archived" : "active",
     dataFile: getSavedSessionDataFileName(id),
-    snapshot: stripRuntimeSnapshotHistory(fullSnapshot),
-    createdAt: safeText(source.createdAt) || now,
-    updatedAt: safeText(source.updatedAt) || now
+    roleCardId,
+    roleCardName: safeText(assistantCard?.name) || safeText(roleCard?.name) || "未指定角色卡",
+    assistantMode,
+    messageCount: Array.isArray(snapshot?.conversation) ? snapshot.conversation.length : 0,
+    aiLogCount: Array.isArray(snapshot?.aiLogs) ? snapshot.aiLogs.length : 0,
+    createdAt: safeText(source?.createdAt) || now,
+    updatedAt: safeText(source?.updatedAt) || now
   };
 }
 
+function normalizeSavedSession(rawSession, index) {
+  const source = rawSession && typeof rawSession === "object" ? rawSession : {};
+  if (Number(source.storageVersion) >= SAVED_SESSION_STORAGE_VERSION && !source.snapshot) {
+    const id = safeText(source.id) || newId("session");
+    return {
+      storageVersion: SAVED_SESSION_STORAGE_VERSION,
+      id,
+      name: safeText(source.name) || `對話存檔 ${index + 1}`,
+      status: safeText(source.status) === "archived" ? "archived" : "active",
+      dataFile: getSavedSessionDataFileName(id),
+      roleCardId: safeText(source.roleCardId) || null,
+      roleCardName: safeText(source.roleCardName) || "未指定角色卡",
+      assistantMode: normalizeAssistantMode(source.assistantMode),
+      messageCount: Math.max(0, Number.parseInt(source.messageCount, 10) || 0),
+      aiLogCount: Math.max(0, Number.parseInt(source.aiLogCount, 10) || 0),
+      createdAt: safeText(source.createdAt) || nowIso(),
+      updatedAt: safeText(source.updatedAt) || nowIso()
+    };
+  }
+
+  const normalizedState = createDefaultState();
+  const id = safeText(source.id) || newId("session");
+  const snapshot = source.snapshot && typeof source.snapshot === "object" ? source.snapshot : source;
+  const fullSnapshotSource = materializeSavedSessionSnapshot({ ...source, id, snapshot });
+  applyRuntimeSnapshot(normalizedState, fullSnapshotSource);
+  const fullSnapshot = captureRuntimeSnapshot(normalizedState);
+  writeSavedSessionExternalData(id, fullSnapshot);
+  savedSessionStorageMigrated = true;
+  return createSavedSessionMetadata({ ...source, id }, fullSnapshot, index);
+}
+
 function buildSavedSessionSummary(session) {
-  const roleCardId = session.snapshot?.activeRoleCardId || null;
-  const externalData = readSavedSessionExternalData(session);
-  const roleCard = Array.isArray(session.snapshot?.roleCards)
-    ? session.snapshot.roleCards.find((card) => safeText(card?.id) === safeText(roleCardId))
-    : null;
-  const assistantMode = normalizeAssistantMode(session.snapshot?.activeAssistantMode);
-  const assistantCard = assistantMode
-    ? getAssistantCardById(session.snapshot, assistantMode)
-    : null;
   return {
     id: session.id,
     name: session.name,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    roleCardId,
-    roleCardName: safeText(assistantCard?.name) || safeText(roleCard?.name) || "未指定角色卡",
-    assistantMode,
-    messageCount: externalData.conversation.length
+    roleCardId: session.roleCardId || null,
+    roleCardName: safeText(session.roleCardName) || "未指定角色卡",
+    assistantMode: normalizeAssistantMode(session.assistantMode),
+    messageCount: Math.max(0, Number.parseInt(session.messageCount, 10) || 0)
   };
 }
 
@@ -2199,7 +2239,7 @@ function buildSavedSessionDetail(session) {
   return {
     ...buildSavedSessionSummary(session),
     conversation: normalizeConversationForClient(snapshot.conversation),
-    aiLogCount: Array.isArray(snapshot.aiLogs) ? snapshot.aiLogs.length : 0
+    aiLogCount: Math.max(0, Number.parseInt(session.aiLogCount, 10) || 0)
   };
 }
 
@@ -2215,16 +2255,15 @@ function createSavedSessionFromCurrentState(currentState, nameInput = "") {
   const now = nowIso();
   const sessionId = newId("session");
   const snapshotSource = captureRuntimeSnapshot(currentState);
-  const session = {
+  const sessionSource = {
     id: sessionId,
     name: safeText(nameInput) || `對話存檔 ${currentState.savedSessions.length + 1}`,
     status: "active",
-    dataFile: getSavedSessionDataFileName(sessionId),
-    snapshot: stripRuntimeSnapshotHistory(snapshotSource),
     createdAt: now,
     updatedAt: now
   };
-  writeSavedSessionExternalData(session, snapshotSource);
+  const session = createSavedSessionMetadata(sessionSource, snapshotSource, currentState.savedSessions.length);
+  writeSavedSessionExternalData(sessionId, snapshotSource);
   currentState.savedSessions.push(session);
   currentState.activeSavedSessionId = null;
   return session;
@@ -9765,7 +9804,8 @@ function statePayload(state) {
 }
 
 let state = loadState();
-if (sanitizeImageGenerationCompressionState(state)) {
+const imageGenerationCompressionStateSanitized = sanitizeImageGenerationCompressionState(state);
+if (savedSessionStorageMigrated || imageGenerationCompressionStateSanitized) {
   saveState(state);
 } else {
   persistCardState(state);
