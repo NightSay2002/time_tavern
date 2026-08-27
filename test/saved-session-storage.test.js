@@ -18,15 +18,47 @@ test("saved-session summaries use metadata without opening full snapshots", () =
   assert.match(summarySource, /session\.messageCount/);
 });
 
-test("app state stores cards separately and session snapshots omit repeated cover images", () => {
+test("app state stores cards separately and saved sessions contain conversation state only", () => {
   const saveStateSource = functionSource("saveState", "sendJson");
+  const sessionCaptureSource = functionSource("captureSavedConversationSnapshot", "captureNarrativeCheckpoint");
   const sessionWriterSource = functionSource("writeSavedSessionExternalData", "materializeSavedSessionSnapshot");
   assert.match(saveStateSource, /roleCards: _roleCards/);
   assert.match(saveStateSource, /assistantCards: _assistantCards/);
   assert.match(saveStateSource, /persistCardState\(state\)/);
-  assert.match(sessionWriterSource, /coverImage: _coverImage/);
+  assert.match(sessionCaptureSource, /conversation: cloneData/);
+  assert.match(sessionCaptureSource, /contextCompression: normalizeContextCompressionState/);
+  assert.match(sessionCaptureSource, /timeTracking: normalizeTimeTrackingState/);
+  assert.doesNotMatch(sessionCaptureSource, /userProfile:/);
+  assert.doesNotMatch(sessionCaptureSource, /roleCards:/);
+  assert.doesNotMatch(sessionCaptureSource, /assistantCards:/);
+  assert.doesNotMatch(sessionCaptureSource, /conversationSettings:/);
+  assert.doesNotMatch(sessionCaptureSource, /modularPromptConfigs:/);
+  assert.doesNotMatch(sessionWriterSource, /roleCards/);
   assert.match(sessionWriterSource, /compactAiLogsForStorage/);
   assert.match(sessionWriterSource, /snapshot: snapshotForStorage/);
+});
+
+test("loading a saved session preserves global cards, prompts, and settings", () => {
+  const loaderSource = functionSource("applySavedConversationSnapshot", "ensureSavedSessionsDir");
+  assert.doesNotMatch(loaderSource, /currentState\.roleCards\s*=/);
+  assert.doesNotMatch(loaderSource, /currentState\.assistantCards\s*=/);
+  assert.doesNotMatch(loaderSource, /currentState\.userProfile\s*=/);
+  assert.doesNotMatch(loaderSource, /currentState\.conversationSettings\s*=/);
+  assert.doesNotMatch(loaderSource, /currentState\.modularPromptConfigs\s*=/);
+  assert.match(loaderSource, /enabled: currentTimeTracking\.enabled/);
+  assert.match(loaderSource, /config: currentTimeTracking\.config/);
+  assert.match(loaderSource, /\.\.\.currentTimeTracking\.autoPeriod/);
+  assert.match(loaderSource, /const currentRoleCardRuntimeState/);
+  assert.match(loaderSource, /currentRoleCardRuntimeState\[currentState\.activeRoleCardId\]/);
+});
+
+test("full runtime snapshots still restore complete state for rollback and migration", () => {
+  const loaderSource = functionSource("applyRuntimeSnapshot", "applySavedConversationSnapshot");
+  assert.match(loaderSource, /currentState\.userProfile\s*=/);
+  assert.match(loaderSource, /currentState\.roleCards\s*=/);
+  assert.match(loaderSource, /currentState\.assistantCards\s*=/);
+  assert.match(loaderSource, /currentState\.roleCardRuntimeState\s*= normalizeRoleCardRuntimeStateMap/);
+  assert.match(loaderSource, /currentState\.conversationSettings\s*=/);
 });
 
 test("AI logs use shared content references in storage and expand for display", () => {
@@ -52,7 +84,7 @@ test("100 cards and 100 saves keep app-state session metadata small", () => {
     snapshot: { roleCards, conversation }
   }));
   const metadataSessions = legacySessions.map((session, index) => ({
-    storageVersion: 3,
+    storageVersion: 4,
     id: session.id,
     name: session.name,
     roleCardId: `card-${index + 1}`,

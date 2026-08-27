@@ -95,7 +95,7 @@ const APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
-const SAVED_SESSION_STORAGE_VERSION = 3;
+const SAVED_SESSION_STORAGE_VERSION = 4;
 const AI_LOG_CONTENT_REFERENCE_MIN_CHARS = 120;
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
@@ -2076,6 +2076,25 @@ function captureRuntimeSnapshot(currentState) {
   };
 }
 
+function captureSavedConversationSnapshot(currentState) {
+  const activeRoleCardId = safeText(currentState.activeRoleCardId) || null;
+  const roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState);
+  return {
+    activeRoleCardId,
+    activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
+    aiSessionStarted: Boolean(currentState.aiSessionStarted),
+    roleCardRuntimeState: activeRoleCardId && roleCardRuntimeState[activeRoleCardId]
+      ? { [activeRoleCardId]: roleCardRuntimeState[activeRoleCardId] }
+      : {},
+    contextCompression: normalizeContextCompressionState(currentState.contextCompression),
+    timeTracking: normalizeTimeTrackingState(currentState.timeTracking),
+    discordPlayers: normalizeDiscordPlayerState(currentState.discordPlayers),
+    turnState: normalizeTurnState(currentState.turnState, currentState),
+    conversation: cloneData(currentState.conversation, []),
+    aiLogs: cloneData(currentState.aiLogs, [])
+  };
+}
+
 function captureNarrativeCheckpoint(currentState) {
   return {
     activeRoleCardId: currentState.activeRoleCardId || null,
@@ -2176,6 +2195,59 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
 }
 
+function applySavedConversationSnapshot(currentState, snapshot) {
+  const source = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const currentTimeTracking = normalizeTimeTrackingState(currentState.timeTracking);
+  const savedTimeTracking = normalizeTimeTrackingState(source.timeTracking);
+  const activeRoleCardId = safeText(source.activeRoleCardId);
+  const activeAssistantMode = normalizeAssistantMode(source.activeAssistantMode);
+
+  currentState.activeRoleCardId = currentState.roleCards.some((card) => card.id === activeRoleCardId)
+    ? activeRoleCardId
+    : null;
+  currentState.activeAssistantMode = getAssistantCardById(currentState, activeAssistantMode)
+    ? activeAssistantMode
+    : null;
+  if (currentState.activeAssistantMode) {
+    currentState.activeRoleCardId = null;
+  }
+  currentState.aiSessionStarted = Boolean(
+    source.aiSessionStarted && (currentState.activeRoleCardId || currentState.activeAssistantMode)
+  );
+  currentState.pendingOpeningBroadcast = false;
+  currentState.lastDiscordChannelId = "";
+  currentState.discordPlayers = {
+    ...normalizeDiscordPlayerState(source.discordPlayers),
+    channelId: "",
+    updatedAt: nowIso()
+  };
+  const currentRoleCardRuntimeState = normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState);
+  const savedRoleCardRuntimeState = normalizeRoleCardRuntimeStateMap(source.roleCardRuntimeState);
+  if (currentState.activeRoleCardId) {
+    if (savedRoleCardRuntimeState[currentState.activeRoleCardId]) {
+      currentRoleCardRuntimeState[currentState.activeRoleCardId] = savedRoleCardRuntimeState[currentState.activeRoleCardId];
+    } else {
+      delete currentRoleCardRuntimeState[currentState.activeRoleCardId];
+    }
+  }
+  currentState.roleCardRuntimeState = currentRoleCardRuntimeState;
+  currentState.contextCompression = normalizeContextCompressionState(source.contextCompression);
+  currentState.timeTracking = {
+    ...savedTimeTracking,
+    enabled: currentTimeTracking.enabled,
+    autoPeriod: {
+      ...currentTimeTracking.autoPeriod,
+      turnsSinceChange: savedTimeTracking.autoPeriod.turnsSinceChange
+    },
+    config: currentTimeTracking.config,
+    updatedAt: nowIso()
+  };
+  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
+  currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
+    .map((entry) => normalizeAiLog(entry));
+  currentState.turnState = normalizeTurnState(source.turnState, currentState);
+}
+
 function ensureSavedSessionsDir() {
   fs.mkdirSync(SAVED_SESSIONS_DIR, { recursive: true });
 }
@@ -2234,11 +2306,6 @@ function writeSavedSessionExternalData(sessionOrId, snapshot = {}) {
     return;
   }
   const snapshotForStorage = cloneData(snapshot, {});
-  snapshotForStorage.roleCards = (Array.isArray(snapshotForStorage.roleCards) ? snapshotForStorage.roleCards : [])
-    .map((card) => {
-      const { coverImage: _coverImage, ...storedCard } = card && typeof card === "object" ? card : {};
-      return storedCard;
-    });
   const compactedAiLogs = compactAiLogsForStorage(snapshotForStorage.aiLogs);
   snapshotForStorage.aiLogs = compactedAiLogs.logs;
   snapshotForStorage.aiLogContentStore = compactedAiLogs.contentStore;
@@ -2261,24 +2328,6 @@ function materializeSavedSessionSnapshot(session) {
   return snapshot;
 }
 
-function restoreSavedSessionSnapshotImages(currentState, snapshot) {
-  const output = cloneData(snapshot, {});
-  const currentCovers = new Map(
-    (Array.isArray(currentState?.roleCards) ? currentState.roleCards : [])
-      .map((card) => [safeText(card?.id), safeText(card?.coverImage)])
-      .filter(([id, coverImage]) => id && coverImage)
-  );
-  output.roleCards = (Array.isArray(output.roleCards) ? output.roleCards : []).map((card) => {
-    const storedCard = card && typeof card === "object" ? { ...card } : {};
-    const currentCover = currentCovers.get(safeText(storedCard.id));
-    if (!safeText(storedCard.coverImage) && currentCover) {
-      storedCard.coverImage = currentCover;
-    }
-    return storedCard;
-  });
-  return output;
-}
-
 function createSavedSessionMetadata(source, snapshot, index = 0) {
   const now = nowIso();
   const roleCardId = safeText(snapshot?.activeRoleCardId) || null;
@@ -2295,7 +2344,7 @@ function createSavedSessionMetadata(source, snapshot, index = 0) {
     status: safeText(source?.status) === "archived" ? "archived" : "active",
     dataFile: getSavedSessionDataFileName(id),
     roleCardId,
-    roleCardName: safeText(assistantCard?.name) || safeText(roleCard?.name) || "未指定角色卡",
+    roleCardName: safeText(source?.roleCardName) || safeText(assistantCard?.name) || safeText(roleCard?.name) || "未指定角色卡",
     assistantMode,
     messageCount: Array.isArray(snapshot?.conversation) ? snapshot.conversation.length : 0,
     aiLogCount: Array.isArray(snapshot?.aiLogs) ? snapshot.aiLogs.length : 0,
@@ -2329,10 +2378,19 @@ function normalizeSavedSession(rawSession, index) {
   const snapshot = source.snapshot && typeof source.snapshot === "object" ? source.snapshot : source;
   const fullSnapshotSource = materializeSavedSessionSnapshot({ ...source, id, snapshot });
   applyRuntimeSnapshot(normalizedState, fullSnapshotSource);
-  const fullSnapshot = captureRuntimeSnapshot(normalizedState);
-  writeSavedSessionExternalData(id, fullSnapshot);
+  const migratedActiveRole = normalizedState.roleCards.find((card) => card.id === normalizedState.activeRoleCardId);
+  const migratedAssistant = getAssistantCardById(normalizedState, normalizedState.activeAssistantMode);
+  const conversationSnapshot = captureSavedConversationSnapshot(normalizedState);
+  writeSavedSessionExternalData(id, conversationSnapshot);
   savedSessionStorageMigrated = true;
-  return createSavedSessionMetadata({ ...source, id }, fullSnapshot, index);
+  return createSavedSessionMetadata({
+    ...source,
+    id,
+    roleCardName: safeText(source.roleCardName)
+      || safeText(migratedAssistant?.name)
+      || safeText(migratedActiveRole?.name)
+      || "未指定角色卡"
+  }, conversationSnapshot, index);
 }
 
 function buildSavedSessionSummary(session) {
@@ -2381,11 +2439,14 @@ function getSavedSessionById(currentState, sessionId) {
 function createSavedSessionFromCurrentState(currentState, nameInput = "") {
   const now = nowIso();
   const sessionId = newId("session");
-  const snapshotSource = captureRuntimeSnapshot(currentState);
+  const snapshotSource = captureSavedConversationSnapshot(currentState);
+  const activeRoleCard = currentState.roleCards.find((card) => card.id === currentState.activeRoleCardId);
+  const activeAssistant = getAssistantCardById(currentState, currentState.activeAssistantMode);
   const sessionSource = {
     id: sessionId,
     name: safeText(nameInput) || `對話存檔 ${currentState.savedSessions.length + 1}`,
     status: "active",
+    roleCardName: safeText(activeAssistant?.name) || safeText(activeRoleCard?.name) || "未指定角色卡",
     createdAt: now,
     updatedAt: now
   };
@@ -2401,11 +2462,7 @@ function loadSavedSessionIntoRuntime(currentState, sessionId) {
   if (!session) {
     return null;
   }
-  const snapshot = restoreSavedSessionSnapshotImages(
-    currentState,
-    materializeSavedSessionSnapshot(session)
-  );
-  applyRuntimeSnapshot(currentState, snapshot);
+  applySavedConversationSnapshot(currentState, materializeSavedSessionSnapshot(session));
   sanitizeImageGenerationCompressionState(currentState);
   currentState.activeSavedSessionId = null;
   return session;

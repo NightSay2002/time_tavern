@@ -279,7 +279,7 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `POST` | `/api/chat/reload` | 依 `num`、`comment` 改寫較早的使用者輸入並重算。 |
 | `GET` / `POST` | `/api/sessions`、`/api/sessions/save` | 列出或建立網頁對話存檔。 |
 | `GET` / `DELETE` | `/api/sessions/:id` | 預覽或刪除網頁對話存檔。 |
-| `POST` | `/api/sessions/:id/load` | 載入存檔並取代目前對話。 |
+| `POST` | `/api/sessions/:id/load` | 載入存檔的對話專屬狀態；不覆蓋全域角色卡、助手、Prompt 或設定。 |
 | `POST` | `/api/modular-prompts/:mode/preview` | 預覽 Prompt 模式。 |
 | `PUT` / `DELETE` | `/api/modular-prompts/:mode` | 保存或刪除 Prompt 模式。 |
 
@@ -292,14 +292,14 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/environment.env` | 根目錄 `.env` 的完整本機備份，包含 Token 與 API Key。 |
 | `data/cardstate.json` | 角色卡與助手的獨立資料檔；內容未變更時不重複寫入。 |
-| `data/saved-sessions/` | 每個網頁對話存檔各自一份快照；AI log 重複文字使用共用引用，角色封面沿用 `cardstate.json`，只在預覽或載入時讀取。 |
+| `data/saved-sessions/` | 每個網頁對話存檔各自一份對話專屬快照；只保存對話、回合、時間進度、壓縮內容、該角色 runtime 與 AI logs，不保存角色卡、助手、Prompt 或全域設定。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
 | `defaults/app-defaults.json` | 可提交的主功能與 Prompt 發布預設。 |
 | `defaults/novelai-defaults.json` | 可提交的 NovelAI 發布預設。 |
 
 `data/` 可能包含完整對話、角色設定與模型內容，不建議公開。
 
-舊版對話存檔會在首次啟動新版時轉成分離式格式。主狀態只保留名稱、角色、訊息數等清單資料，因此角色卡與存檔增加時，打開存檔清單不會逐一解析所有完整存檔。AI 呼叫紀錄會把同一卡、同一 Prompt 中完全相同的長文字保存一次，再由各筆紀錄引用；網頁只在展開單筆紀錄時建立完整內容。存檔不再複製所有角色封面 Base64，載入時會依角色卡 ID 從目前的角色資料補回封面。
+舊版對話存檔會在首次啟動新版時轉成對話專屬的分離式格式。主狀態只保留名稱、角色、訊息數等清單資料，因此角色卡與存檔增加時，打開存檔清單不會逐一解析所有完整存檔。AI 呼叫紀錄會把同一卡、同一 Prompt 中完全相同的長文字保存一次，再由各筆紀錄引用；網頁只在展開單筆紀錄時建立完整內容。載入時會依保存的角色卡或助手 ID 連接目前全域版本；若該 ID 已不存在，仍載入對話，但不自動啟用角色或助手。時間位置與自動切換進度會恢復，時間功能開關、輪數與關鍵字設定則保留載入前的全域值。
 
 ## 開發檢查
 
