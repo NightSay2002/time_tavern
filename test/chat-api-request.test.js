@@ -4,7 +4,8 @@ import test from "node:test";
 import {
   buildChatApiRequestBody,
   normalizeDeepSeekReasoningEffort,
-  normalizeGlmReasoningEffort
+  normalizeGlmReasoningEffort,
+  resolveChatApiReasoningEffort
 } from "../src/chat-api-request.js";
 
 const baseRequest = {
@@ -19,6 +20,21 @@ test("DeepSeek reasoning effort accepts supported values only", () => {
   assert.equal(normalizeDeepSeekReasoningEffort(" LOW "), "low");
   assert.equal(normalizeDeepSeekReasoningEffort("max"), "max");
   assert.equal(normalizeDeepSeekReasoningEffort("medium"), "");
+});
+
+test("DeepSeek API default resolves to high while explicit none remains disabled", () => {
+  assert.equal(resolveChatApiReasoningEffort("deepseek", ""), "high");
+  assert.equal(resolveChatApiReasoningEffort("deepseek", "none"), "none");
+  assert.equal(resolveChatApiReasoningEffort("zhipu", ""), "");
+  assert.equal(resolveChatApiReasoningEffort("openai", "high"), "");
+
+  const body = buildChatApiRequestBody({
+    ...baseRequest,
+    reasoningEffort: resolveChatApiReasoningEffort("deepseek", "")
+  });
+  assert.deepEqual(body.thinking, { type: "enabled" });
+  assert.equal(body.reasoning_effort, "high");
+  assert.equal(body.temperature, undefined);
 });
 
 test("DeepSeek reasoning can be disabled so temperature remains active", () => {

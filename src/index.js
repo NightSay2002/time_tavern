@@ -63,8 +63,7 @@ import {
 import {
   buildChatApiRequestBody,
   normalizeChatApiMaxTokensParamName,
-  normalizeDeepSeekReasoningEffort,
-  normalizeGlmReasoningEffort
+  resolveChatApiReasoningEffort
 } from "./chat-api-request.js";
 import {
   buildMultimodalMessageContent,
@@ -8349,22 +8348,15 @@ function getChatApiTemperature(purpose = "chat", temperature = null) {
   return Number.isFinite(envTemperature) ? envTemperature : CHAT_API_TEMPERATURE;
 }
 
-function getDeepSeekReasoningEffort(envSource = process.env) {
-  return normalizeDeepSeekReasoningEffort(
-    envObjectFirstText(envSource, ["CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"])
-  );
-}
-
-function getGlmReasoningEffort(envSource = process.env) {
-  return normalizeGlmReasoningEffort(
-    envObjectFirstText(envSource, ["CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"])
-  );
-}
-
 function getChatApiReasoningEffort(envSource = process.env, provider = getChatApiProvider()) {
-  return normalizeChatApiProvider(provider) === "zhipu"
-    ? getGlmReasoningEffort(envSource)
-    : getDeepSeekReasoningEffort(envSource);
+  const normalizedProvider = normalizeChatApiProvider(provider);
+  const settingKeys = normalizedProvider === "zhipu"
+    ? ["CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"]
+    : ["CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"];
+  return resolveChatApiReasoningEffort(
+    normalizedProvider,
+    envObjectFirstText(envSource, settingKeys)
+  );
 }
 
 function getChatImageAttachmentMaxBytes() {

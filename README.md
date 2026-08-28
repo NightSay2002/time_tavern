@@ -66,7 +66,7 @@ CHAT_API_MODEL=deepseek-v4-pro
 
 也可把 provider 改為 `zhipu` 並選用 `glm-5.3` 或原生多模態的 `glm-5.3-flash`；系統始終使用 `CHAT_API_MODEL` 指定的模型，不會因上傳圖片自動換模型。完整 provider 設定見 [細節文件](docs/DETAILS.md)。
 
-在網頁環境設定切換對話 API 供應商時，會一併切換並保留各供應商自己的 API Key、輸出模型與 Base URL；思考模式強度使用同一個欄位。
+在網頁環境設定切換對話 API 供應商時，會一併切換並保留各供應商自己的 API Key、輸出模型與 Base URL；思考模式強度使用同一個欄位。DeepSeek 的「使用預設」為高強度，選擇「關閉」才會停用思考並使用溫度。
 
 NovelAI 圖片功能另外填：
 

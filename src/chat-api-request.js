@@ -15,6 +15,17 @@ export function normalizeGlmReasoningEffort(value = "") {
   return GLM_REASONING_EFFORTS.has(normalized) ? normalized : "";
 }
 
+export function resolveChatApiReasoningEffort(provider = "", value = "") {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (normalizedProvider === "deepseek") {
+    return normalizeDeepSeekReasoningEffort(value) || "high";
+  }
+  if (normalizedProvider === "zhipu") {
+    return normalizeGlmReasoningEffort(value);
+  }
+  return "";
+}
+
 export function buildChatApiRequestBody({
   provider = "",
   reasoningEffort = "",

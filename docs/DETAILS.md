@@ -33,7 +33,7 @@
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
 | `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定保存各供應商先前使用的 Key、模型與 Base URL；目前選中的值仍同步寫入上述 `CHAT_API_*` 欄位。 |
-| `CHAT_API_REASONING_EFFORT` | 空 | 共用思考強度欄位；空值使用 API 預設，或設為 `low`、`high`、`max`。DeepSeek 另支援 `none` 關閉思考並啟用 temperature；GLM-5.3 不接受 `none`。舊版兩個變數仍可讀取。 |
+| `CHAT_API_REASONING_EFFORT` | `high` | 共用思考強度欄位；DeepSeek 空值使用 `high`，也可設為 `none` 關閉思考並啟用 temperature。GLM-5.3 空值使用 API 預設，不接受 `none`。舊版兩個變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
 | `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改 `max_completion_tokens`。 |

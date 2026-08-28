@@ -666,13 +666,13 @@ const ENV_FIELD_GROUPS = [
         label: "思考模式強度",
         type: "select",
         options: [
-          ["", "使用 API 預設"],
+          ["", "使用預設（DeepSeek：高）"],
           ["none", "關閉（使用溫度）"],
           ["low", "低"],
           ["high", "高"],
           ["max", "最大"]
         ],
-        help: "DeepSeek 可關閉思考並使用溫度；GLM-5.3 保持思考開啟，因此不提供關閉選項。其他 provider 不使用此設定。"
+        help: "DeepSeek 留空時使用高強度，也可關閉思考並使用溫度；GLM-5.3 留空時使用 API 預設。其他 provider 不使用此設定。"
       },
       {
         key: "CHAT_API_REQUEST_TIMEOUT_MS",
