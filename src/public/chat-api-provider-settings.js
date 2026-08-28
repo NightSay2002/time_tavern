@@ -1,26 +1,31 @@
 const PROVIDER_FIELDS = {
   deepseek: {
     key: ["DEEPSEEK_API_KEY"],
+    processingKey: ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"],
     model: ["DEEPSEEK_MODEL"],
     baseUrl: ["DEEPSEEK_BASE_URL"]
   },
   openai: {
     key: ["OPENAI_API_KEY"],
+    processingKey: ["OPENAI_API_KEY"],
     model: ["OPENAI_MODEL"],
     baseUrl: ["OPENAI_BASE_URL"]
   },
   gemini: {
     key: ["GEMINI_API_KEY"],
+    processingKey: ["GEMINI_API_KEY"],
     model: ["GEMINI_MODEL"],
     baseUrl: ["GEMINI_BASE_URL"]
   },
   zhipu: {
     key: ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"],
+    processingKey: ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"],
     model: ["ZHIPU_MODEL", "GLM_MODEL"],
     baseUrl: ["ZHIPU_BASE_URL", "BIGMODEL_BASE_URL"]
   },
   custom: {
     key: ["CUSTOM_API_KEY"],
+    processingKey: ["CUSTOM_API_KEY"],
     model: ["CUSTOM_MODEL"],
     baseUrl: ["CUSTOM_API_BASE_URL"]
   }
@@ -40,6 +45,27 @@ function firstValue(source, keys) {
   return "";
 }
 
+function numberedValues(source, prefixes = []) {
+  const valuesByIndex = new Map();
+  Object.entries(source || {}).forEach(([key, value]) => {
+    for (const prefix of prefixes) {
+      const match = key.match(new RegExp(`^${prefix}([2-9]\\d*)$`, "u"));
+      if (match) {
+        const index = Number(match[1]);
+        if (!valuesByIndex.has(index)) {
+          valuesByIndex.set(index, String(value ?? ""));
+        }
+        break;
+      }
+    }
+  });
+  if (valuesByIndex.size === 0) {
+    return [];
+  }
+  const maxIndex = Math.max(...valuesByIndex.keys());
+  return Array.from({ length: maxIndex - 1 }, (_, offset) => valuesByIndex.get(offset + 2) || "");
+}
+
 export function normalizeChatApiProviderSetting(value = "") {
   const normalized = text(value).toLowerCase().replace(/[-\s]+/gu, "_");
   if (["zhipu", "glm", "bigmodel"].includes(normalized)) {
@@ -56,12 +82,17 @@ export function createChatApiProviderDrafts(parsedEnv = {}) {
   const drafts = Object.fromEntries(
     Object.entries(PROVIDER_FIELDS).map(([provider, fields]) => [provider, {
       key: firstValue(source, fields.key),
+      processingKeys: numberedValues(source, fields.processingKey),
       model: firstValue(source, fields.model),
       baseUrl: firstValue(source, fields.baseUrl)
     }])
   );
   const activeDraft = drafts[activeProvider];
   activeDraft.key = text(source.CHAT_API_KEY || source.CONVERSATION_API_KEY) || activeDraft.key;
+  const activeProcessingKeys = numberedValues(source, ["CHAT_API_KEY", "CONVERSATION_API_KEY"]);
+  if (activeProcessingKeys.length > 0) {
+    activeDraft.processingKeys = activeProcessingKeys;
+  }
   activeDraft.model = text(source.CHAT_API_MODEL || source.CONVERSATION_API_MODEL) || activeDraft.model;
   activeDraft.baseUrl = text(source.CHAT_API_BASE_URL || source.CONVERSATION_API_BASE_URL) || activeDraft.baseUrl;
   return { activeProvider, drafts };
@@ -73,7 +104,11 @@ export function getChatApiProviderEnvEntries(drafts = {}) {
     return [
       [fields.key[0], text(draft.key)],
       [fields.model[0], text(draft.model)],
-      [fields.baseUrl[0], text(draft.baseUrl)]
+      [fields.baseUrl[0], text(draft.baseUrl)],
+      ...(Array.isArray(draft.processingKeys) ? draft.processingKeys : []).map((value, index) => [
+        `${fields.processingKey[0]}${index + 2}`,
+        text(value)
+      ])
     ];
   });
 }

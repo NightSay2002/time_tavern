@@ -17,14 +17,16 @@ function getTopLevelNames(source, declaration) {
   return Array.from(block.matchAll(/^ {4}name:\s*"([^"]+)"/gmu), (match) => match[1]);
 }
 
-test("Discord exposes exactly the six supported Slash commands", () => {
+test("Discord exposes exactly the eight supported Slash commands", () => {
   assert.deepEqual(getTopLevelNames(serverSource, "DISCORD_SLASH_COMMANDS"), [
     "ai_start",
     "ai_status",
     "stop",
     "player_set",
     "reload",
-    "quick_send"
+    "quick_send",
+    "archive",
+    "archive_return"
   ]);
   assert.doesNotMatch(serverSource, /interaction\.commandName\s*===?\s*"ai(?:_help)?"/u);
   assert.match(serverSource, /name:\s*"ai_start",[\s\S]*?name:\s*"num",[\s\S]*?minValue:\s*0/u);
@@ -34,6 +36,10 @@ test("Discord exposes exactly the six supported Slash commands", () => {
   assert.match(statusCommand, /maxValue:\s*2/u);
   assert.doesNotMatch(statusCommand, /choices:/u);
   assert.match(serverSource, /handleDiscordRoleCardBrowserButton\(interaction\)/u);
+  assert.match(serverSource, /name:\s*"archive",[\s\S]*?name:\s*"action"/u);
+  assert.match(serverSource, /name:\s*"archive_return",[\s\S]*?name:\s*"mode",[\s\S]*?name:\s*"num"/u);
+  assert.match(serverSource, /handleDiscordArchiveBrowserButton\(interaction\)/u);
+  assert.match(serverSource, /handleDiscordArchiveReplayButton\(interaction\)/u);
 });
 
 test("web exposes exactly four slash command menu entries", () => {

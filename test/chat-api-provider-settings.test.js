@@ -16,9 +16,12 @@ test("chat API provider drafts preserve each provider key, model, and base URL",
   const { activeProvider, drafts } = createChatApiProviderDrafts({
     CHAT_API_PROVIDER: "deepseek",
     CHAT_API_KEY: "current-deepseek-key",
+    CHAT_API_KEY2: "current-deepseek-processing-2",
+    CHAT_API_KEY3: "current-deepseek-processing-3",
     CHAT_API_MODEL: "deepseek-v4-pro",
     CHAT_API_BASE_URL: "https://api.deepseek.com",
     ZHIPU_API_KEY: "saved-zhipu-key",
+    ZHIPU_API_KEY2: "saved-zhipu-processing-2",
     ZHIPU_MODEL: "glm-5.3-flash",
     ZHIPU_BASE_URL: "https://open.bigmodel.cn/api/paas/v4"
   });
@@ -26,19 +29,24 @@ test("chat API provider drafts preserve each provider key, model, and base URL",
   assert.equal(activeProvider, "deepseek");
   assert.deepEqual(drafts.deepseek, {
     key: "current-deepseek-key",
+    processingKeys: ["current-deepseek-processing-2", "current-deepseek-processing-3"],
     model: "deepseek-v4-pro",
     baseUrl: "https://api.deepseek.com"
   });
   assert.deepEqual(drafts.zhipu, {
     key: "saved-zhipu-key",
+    processingKeys: ["saved-zhipu-processing-2"],
     model: "glm-5.3-flash",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4"
   });
 
   const entries = Object.fromEntries(getChatApiProviderEnvEntries(drafts));
   assert.equal(entries.DEEPSEEK_API_KEY, "current-deepseek-key");
+  assert.equal(entries.DEEPSEEK_API_KEY2, "current-deepseek-processing-2");
+  assert.equal(entries.DEEPSEEK_API_KEY3, "current-deepseek-processing-3");
   assert.equal(entries.DEEPSEEK_MODEL, "deepseek-v4-pro");
   assert.equal(entries.ZHIPU_API_KEY, "saved-zhipu-key");
+  assert.equal(entries.ZHIPU_API_KEY2, "saved-zhipu-processing-2");
   assert.equal(entries.ZHIPU_MODEL, "glm-5.3-flash");
 });
 
@@ -55,9 +63,26 @@ test("provider aliases and custom provider settings normalize without crossing p
   });
   assert.equal(activeProvider, "custom");
   assert.equal(drafts.custom.key, "active-custom-key");
+  assert.deepEqual(drafts.custom.processingKeys, []);
   assert.equal(drafts.custom.model, "custom-model");
   assert.equal(drafts.custom.baseUrl, "https://example.test/v1");
   assert.equal(drafts.deepseek.key, "saved-deepseek-key");
+  assert.deepEqual(drafts.deepseek.processingKeys, []);
+});
+
+test("provider drafts keep separate large-model processing keys", () => {
+  const { activeProvider, drafts } = createChatApiProviderDrafts({
+    CHAT_API_PROVIDER: "zhipu",
+    CHAT_API_KEY2: "active-glm-processing-2",
+    DEEPSEEK_API_KEY2: "saved-deepseek-processing-2",
+    OPENAI_API_KEY2: "saved-openai-processing-2",
+    ZHIPU_API_KEY2: "stale-glm-processing-2"
+  });
+
+  assert.equal(activeProvider, "zhipu");
+  assert.deepEqual(drafts.zhipu.processingKeys, ["active-glm-processing-2"]);
+  assert.deepEqual(drafts.deepseek.processingKeys, ["saved-deepseek-processing-2"]);
+  assert.deepEqual(drafts.openai.processingKeys, ["saved-openai-processing-2"]);
 });
 
 test("one reasoning field migrates the old provider-specific values", () => {
@@ -71,7 +96,10 @@ test("one reasoning field migrates the old provider-specific values", () => {
 
   assert.equal((webSource.match(/label:\s*"思考模式強度"/gu) || []).length, 1);
   assert.match(webSource, /saveCurrentChatApiProviderDraft\(\);\s+showChatApiProviderDraft\(event\.target\.value\);/u);
+  assert.match(webSource, /processingKeys:\s*collectChatApiProcessingKeyValues\(\)/u);
+  assert.match(webSource, /renderChatApiProcessingKeyRows\(draft\.processingKeys\)/u);
   assert.match(webSource, /getChatApiProviderEnvEntries\(chatApiProviderDrafts\)/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT"/u);
+  assert.match(serverSource, /getChatApiProviderKeyAliases\(provider\)/u);
 });

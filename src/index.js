@@ -43,6 +43,16 @@ import {
 } from "./discord-message.js";
 import { isAllowedDiscordUser } from "./discord-access.js";
 import {
+  buildDiscordArchiveBrowserPayload,
+  buildDiscordArchiveContinueComponents,
+  buildDiscordArchiveLatestPage,
+  buildDiscordArchiveReplayPage,
+  getDiscordArchiveByNumber,
+  getDiscordArchiveSessionsNewestFirst,
+  parseDiscordArchiveBrowserCustomId,
+  parseDiscordArchiveReplayCustomId
+} from "./discord-archive.js";
+import {
   buildDiscordRoleCardBrowserPayload,
   getDiscordRoleCardByNumber,
   getInitialDiscordRoleCardNumber,
@@ -852,6 +862,51 @@ const DISCORD_SLASH_COMMANDS = [
         description: "另起一行追加內容，例如 zzzzz",
         type: ApplicationCommandOptionType.String,
         required: false
+      }
+    ]
+  },
+  {
+    name: "archive",
+    description: "保存或瀏覽對話存檔",
+    options: [
+      {
+        name: "action",
+        description: "0 保存目前對話；1 瀏覽存檔",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        choices: [
+          { name: "0 保存目前對話", value: 0 },
+          { name: "1 瀏覽存檔", value: 1 }
+        ]
+      },
+      {
+        name: "name",
+        description: "保存名稱；未填時使用目前日期時間",
+        type: ApplicationCommandOptionType.String,
+        required: false
+      }
+    ]
+  },
+  {
+    name: "archive_return",
+    description: "載入並回放指定的對話存檔",
+    options: [
+      {
+        name: "mode",
+        description: "0 從頭回放；1 從最後對話繼續",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        choices: [
+          { name: "0 從頭回放", value: 0 },
+          { name: "1 從最後對話繼續", value: 1 }
+        ]
+      },
+      {
+        name: "num",
+        description: "存檔編號；1 是最新存檔",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        minValue: 1
       }
     ]
   }
@@ -8312,32 +8367,34 @@ function getPrimaryChatApiKey() {
 
 function getChatApiProcessingKeyEntries(envSource = process.env) {
   const source = envSource && typeof envSource === "object" ? envSource : {};
-  const entries = Object.entries(source)
+  const collectEntries = (prefixes) => Object.entries(source)
     .map(([key, value]) => {
-      const match = key.match(/^CHAT_API_KEY([2-9]\d*)$/u);
-      if (!match) {
+      const prefix = prefixes.find((candidate) => key.startsWith(candidate));
+      if (!prefix) {
         return null;
       }
-      const index = Number(match[1]);
+      const suffix = key.slice(prefix.length);
+      if (!/^[2-9]\d*$/u.test(suffix)) {
+        return null;
+      }
       const text = safeText(value);
-      return Number.isFinite(index) && index >= 2 && text ? { index, value: text } : null;
+      return text ? { index: Number(suffix), value: text } : null;
     })
     .filter(Boolean)
     .sort((a, b) => a.index - b.index);
 
-  if (!entries.some((entry) => entry.index === 2)) {
-    const legacyKey2 = envObjectFirstText(source, [
-      "CONVERSATION_API_KEY2",
-      "DEEPSEEK_API_KEY2",
-      "DEEPSEEK_KEY2",
-      "deepseek_key2"
-    ]);
-    if (legacyKey2) {
-      entries.unshift({ index: 2, value: legacyKey2 });
-    }
+  const genericEntries = collectEntries(["CHAT_API_KEY", "CONVERSATION_API_KEY"]);
+  if (genericEntries.length > 0) {
+    return genericEntries;
   }
-
-  return entries;
+  const provider = normalizeChatApiProvider(
+    envObjectFirstText(source, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
+  );
+  const providerPrefixes = getChatApiProviderKeyAliases(provider);
+  if (provider === "deepseek") {
+    providerPrefixes.push("DEEPSEEK_KEY", "deepseek_key");
+  }
+  return collectEntries(providerPrefixes);
 }
 
 function getContextCompressionProfileIdFromPurpose(purpose = "") {
@@ -10087,6 +10144,8 @@ if (savedSessionStorageMigrated || imageGenerationCompressionStateSanitized) {
 let discordConnected = false;
 let activeDiscordClient = null;
 let discordLoginRetryTimer = null;
+const activeDiscordArchiveReplays = new Map();
+const DISCORD_ARCHIVE_REPLAY_TTL_MS = 30 * 60 * 1000;
 let restartScheduled = false;
 let stateWriteQueue = Promise.resolve();
 const novelAiVibeEncodeCache = new Map();
@@ -10504,6 +10563,7 @@ async function replayConversationFromUserIndexLocked({
   userExtra = {},
   assistantExtra = {}
 }) {
+  activeDiscordArchiveReplays.clear();
   if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
     throw new Error("尚未開始。請先在網頁選擇角色卡或啟用助手。");
   }
@@ -10626,6 +10686,7 @@ async function replayConversationFromDiscordMessageId({
   source = "discord",
   extra = {}
 }) {
+  activeDiscordArchiveReplays.clear();
   return withStateLock(async () => {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
       throw new Error("尚未開始。請先在網頁選擇角色卡或啟用助手。");
@@ -10688,6 +10749,7 @@ async function replayConversationFromDiscordMessageId({
 }
 
 async function runConversationTurn({ content, source, extra = {}, images = [] }) {
+  activeDiscordArchiveReplays.clear();
   return withStateLock(async () => {
     const result = await runConversationTurnWorkflow(
       createConversationTurnDeps(),
@@ -12446,6 +12508,173 @@ async function handleDiscordRoleCardBrowserButton(interaction) {
   return true;
 }
 
+function getDiscordArchiveBrowserPayload(sessionId = "") {
+  const ordered = getDiscordArchiveSessionsNewestFirst(state.savedSessions);
+  if (!ordered.length) {
+    return buildDiscordArchiveBrowserPayload({ sessions: [] });
+  }
+  const requestedId = safeText(sessionId);
+  const session = ordered.find((item) => safeText(item?.id) === requestedId) || ordered[0];
+  const detail = buildSavedSessionDetail(session);
+  return buildDiscordArchiveBrowserPayload({
+    sessions: state.savedSessions,
+    sessionId: session.id,
+    conversation: detail.conversation
+  });
+}
+
+async function handleDiscordArchiveBrowserButton(interaction) {
+  const sessionId = parseDiscordArchiveBrowserCustomId(interaction.customId);
+  if (!sessionId) {
+    return false;
+  }
+  if (!getSavedSessionById(state, sessionId)) {
+    await interaction.update({ components: [] });
+    await safeSendInteractionText(interaction, "這個對話存檔已不存在。", { ephemeral: true });
+    return true;
+  }
+  await interaction.update(getDiscordArchiveBrowserPayload(sessionId));
+  return true;
+}
+
+function cancelDiscordArchiveReplays(userId = "", channelId = "") {
+  const normalizedUserId = safeText(userId);
+  const normalizedChannelId = safeText(channelId);
+  for (const [token, replay] of activeDiscordArchiveReplays.entries()) {
+    if (
+      (!normalizedUserId || safeText(replay.userId) === normalizedUserId) &&
+      (!normalizedChannelId || safeText(replay.channelId) === normalizedChannelId)
+    ) {
+      activeDiscordArchiveReplays.delete(token);
+    }
+  }
+}
+
+function createDiscordArchiveReplay({ sessionId, nextOffset, userId, channelId }) {
+  const now = Date.now();
+  for (const [storedToken, replay] of activeDiscordArchiveReplays.entries()) {
+    if (Number(replay.expiresAt) <= now) {
+      activeDiscordArchiveReplays.delete(storedToken);
+    }
+  }
+  const token = newId("archive");
+  activeDiscordArchiveReplays.set(token, {
+    sessionId: safeText(sessionId),
+    nextOffset: Math.max(0, Number.parseInt(nextOffset, 10) || 0),
+    userId: safeText(userId),
+    channelId: safeText(channelId),
+    expiresAt: now + DISCORD_ARCHIVE_REPLAY_TTL_MS
+  });
+  return token;
+}
+
+async function sendDiscordArchivePublicChunks(interaction, text, components = [], { fromButton = false } = {}) {
+  const chunks = splitForDiscord(text, 1800);
+  const payloadFor = (content, index) => ({
+    content: content || " ",
+    components: index === chunks.length - 1 ? components : [],
+    allowedMentions: { parse: [] }
+  });
+
+  if (fromButton) {
+    await interaction.update({ components: [] });
+    for (let index = 0; index < chunks.length; index += 1) {
+      await interaction.followUp(payloadFor(chunks[index], index));
+    }
+    return;
+  }
+
+  const firstPayload = payloadFor(chunks[0], 0);
+  if (interaction.deferred && !interaction.replied) {
+    await interaction.editReply(firstPayload);
+  } else if (!interaction.replied) {
+    await interaction.reply(firstPayload);
+  } else {
+    await interaction.followUp(firstPayload);
+  }
+  for (let index = 1; index < chunks.length; index += 1) {
+    await interaction.followUp(payloadFor(chunks[index], index));
+  }
+}
+
+function loadDiscordArchiveIntoCurrentChannel(sessionId, archiveNumber, channelId = "") {
+  const session = getSavedSessionById(state, sessionId);
+  if (!session) {
+    return null;
+  }
+  const detail = buildSavedSessionDetail(session);
+  const loaded = loadSavedSessionIntoRuntime(state, session.id);
+  if (!loaded) {
+    return null;
+  }
+  const canContinue = Boolean(state.aiSessionStarted && hasActiveConversationTarget(state));
+  const normalizedChannelId = safeText(channelId);
+  if (canContinue) {
+    state.lastDiscordChannelId = normalizedChannelId;
+    state.discordPlayers = {
+      ...normalizeDiscordPlayerState(state.discordPlayers),
+      channelId: normalizedChannelId,
+      updatedAt: nowIso()
+    };
+  }
+  saveState(state);
+  return {
+    session: buildSavedSessionSummary(loaded),
+    conversation: detail.conversation,
+    number: archiveNumber,
+    canContinue
+  };
+}
+
+function buildDiscordArchiveLoadedHeader(result, mode) {
+  const lines = [
+    `**已載入對話存檔 ${result.number}：${safeText(result.session?.name) || "未命名存檔"}**`,
+    mode === 0 ? "以下從開場開始回放；實際對話狀態已位於存檔末端。" : "以下是存檔最後五回合，可以直接繼續對話。"
+  ];
+  if (!result.canContinue) {
+    lines.push("原角色卡或助手已不存在；目前只能回放，請先在網頁重新選擇角色或使用 `/ai_start`。");
+  }
+  return lines.join("\n").trim();
+}
+
+async function handleDiscordArchiveReplayButton(interaction) {
+  const token = parseDiscordArchiveReplayCustomId(interaction.customId);
+  if (!token) {
+    return false;
+  }
+  const replay = activeDiscordArchiveReplays.get(token);
+  if (
+    !replay ||
+    Number(replay.expiresAt) <= Date.now() ||
+    safeText(replay.userId) !== safeText(interaction.user?.id) ||
+    safeText(replay.channelId) !== safeText(interaction.channelId)
+  ) {
+    activeDiscordArchiveReplays.delete(token);
+    await interaction.update({ components: [] });
+    await safeSendInteractionText(interaction, "這次存檔回放已結束，請重新使用 `/archive_return`。", { ephemeral: true });
+    return true;
+  }
+
+  const session = getSavedSessionById(state, replay.sessionId);
+  if (!session) {
+    activeDiscordArchiveReplays.delete(token);
+    await interaction.update({ components: [] });
+    await safeSendInteractionText(interaction, "這個對話存檔已不存在。", { ephemeral: true });
+    return true;
+  }
+  const detail = buildSavedSessionDetail(session);
+  const page = buildDiscordArchiveReplayPage(detail.conversation, replay.nextOffset);
+  const components = page.hasMore ? buildDiscordArchiveContinueComponents(token) : [];
+  if (page.hasMore) {
+    replay.nextOffset = page.nextOffset;
+  } else {
+    activeDiscordArchiveReplays.delete(token);
+  }
+  const text = page.hasMore ? page.text : `${page.text}\n\n**已到存檔末端。**`;
+  await sendDiscordArchivePublicChunks(interaction, text, components, { fromButton: true });
+  return true;
+}
+
 function isActiveDiscordAutoChatChannel(messageOrChannelId) {
   const channelId = typeof messageOrChannelId === "string"
     ? messageOrChannelId
@@ -12570,6 +12799,7 @@ async function processDiscordChatTurn({
   if (!canProcessDiscordChatInChannel(channelId, guildId)) {
     throw new Error("這個伺服器對話已固定在另一個頻道。要切換頻道，請在想使用的頻道輸入 /ai_start。");
   }
+  cancelDiscordArchiveReplays(userId, channelId);
   const stopTyping = startTypingIndicator(channel);
   try {
     const pendingOpening = await consumePendingOpening(channelId, userName);
@@ -12773,6 +13003,85 @@ async function welcomeNewDiscordGuild(guild) {
 async function handleSlashCommand(interaction) {
   const name = interaction.commandName;
 
+  if (name === "archive") {
+    const action = interaction.options.getInteger("action");
+    if (action !== 0 && action !== 1) {
+      await safeSendInteractionText(interaction, "請選擇 0 保存目前對話，或選擇 1 瀏覽存檔。", { ephemeral: true });
+      return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (action === 0) {
+      const inputName = safeText(interaction.options.getString("name"));
+      const defaultName = `對話存檔 ${new Date().toLocaleString("zh-Hant")}`;
+      const created = await withStateLock(() => {
+        const session = createSavedSessionFromCurrentState(state, inputName || defaultName);
+        saveState(state);
+        return buildSavedSessionSummary(session);
+      });
+      await interaction.editReply({
+        content: `已保存對話存檔：${created.name}`,
+        allowedMentions: { parse: [] }
+      });
+      return;
+    }
+    await interaction.editReply(getDiscordArchiveBrowserPayload());
+    return;
+  }
+
+  if (name === "archive_return") {
+    const mode = interaction.options.getInteger("mode");
+    const archiveNumber = interaction.options.getInteger("num");
+    if (mode !== 0 && mode !== 1) {
+      await safeSendInteractionText(interaction, "mode 只接受 0 從頭回放，或 1 從最後對話繼續。", { ephemeral: true });
+      return;
+    }
+    const resolved = getDiscordArchiveByNumber(state.savedSessions, archiveNumber);
+    if (!resolved) {
+      const total = Array.isArray(state.savedSessions) ? state.savedSessions.length : 0;
+      const error = total > 0
+        ? `找不到存檔 ${archiveNumber}，目前可用編號為 1 至 ${total}。`
+        : "目前沒有對話存檔。";
+      await safeSendInteractionText(interaction, error, { ephemeral: true });
+      return;
+    }
+
+    cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
+    await interaction.deferReply();
+    const result = await withStateLock(() => loadDiscordArchiveIntoCurrentChannel(
+      resolved.session.id,
+      resolved.number,
+      interaction.channelId
+    ));
+    if (!result) {
+      await interaction.editReply("這個對話存檔已不存在。");
+      return;
+    }
+    const header = buildDiscordArchiveLoadedHeader(result, mode);
+    if (mode === 1) {
+      const latestPage = buildDiscordArchiveLatestPage(result.conversation);
+      await sendDiscordArchivePublicChunks(interaction, `${header}\n\n${latestPage.text}`);
+      return;
+    }
+
+    const firstPage = buildDiscordArchiveReplayPage(result.conversation, 0);
+    const token = firstPage.hasMore
+      ? createDiscordArchiveReplay({
+        sessionId: result.session.id,
+        nextOffset: firstPage.nextOffset,
+        userId: interaction.user?.id,
+        channelId: interaction.channelId
+      })
+      : "";
+    const components = token ? buildDiscordArchiveContinueComponents(token) : [];
+    const endText = firstPage.hasMore ? "" : "\n\n**已到存檔末端。**";
+    await sendDiscordArchivePublicChunks(
+      interaction,
+      `${header}\n\n${firstPage.text}${endText}`,
+      components
+    );
+    return;
+  }
+
   if (name === "ai_status") {
     const option = interaction.options.getInteger("num");
     if (option === 2) {
@@ -12828,6 +13137,7 @@ async function handleSlashCommand(interaction) {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
+    cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
     const result = await rewriteRecentUserInput({
       num,
       comment,
@@ -12894,6 +13204,7 @@ async function handleSlashCommand(interaction) {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
+    cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
     const roleCardNumber = interaction.options.getInteger("num");
     const result = await startSessionFromDiscord(interaction.channelId, {
       userId: interaction.user.id,
@@ -13096,6 +13407,7 @@ function setupDiscordBot() {
         if (!chatInput.content) {
           return;
         }
+        cancelDiscordArchiveReplays(message.author.id, message.channelId);
         const result = await replayConversationFromDiscordMessageId({
           discordMessageId: message.id,
           content: chatInput.content,
@@ -13169,7 +13481,11 @@ function setupDiscordBot() {
     const isChatInputCommand = interaction.isChatInputCommand();
     const isRoleCardBrowserButton = interaction.isButton() &&
       parseDiscordRoleCardBrowserCustomId(interaction.customId) !== null;
-    if (!isChatInputCommand && !isRoleCardBrowserButton) {
+    const isArchiveBrowserButton = interaction.isButton() &&
+      parseDiscordArchiveBrowserCustomId(interaction.customId) !== null;
+    const isArchiveReplayButton = interaction.isButton() &&
+      parseDiscordArchiveReplayCustomId(interaction.customId) !== null;
+    if (!isChatInputCommand && !isRoleCardBrowserButton && !isArchiveBrowserButton && !isArchiveReplayButton) {
       return;
     }
     if (!isAllowedDiscordUser(interaction.user?.id, DISCORD_ALLOWED_USER_ID)) {
@@ -13180,6 +13496,14 @@ function setupDiscordBot() {
     try {
       if (isRoleCardBrowserButton) {
         await handleDiscordRoleCardBrowserButton(interaction);
+        return;
+      }
+      if (isArchiveBrowserButton) {
+        await handleDiscordArchiveBrowserButton(interaction);
+        return;
+      }
+      if (isArchiveReplayButton) {
+        await handleDiscordArchiveReplayButton(interaction);
         return;
       }
       if (shouldDeferSlashCommandEarly(interaction.commandName) && !interaction.deferred && !interaction.replied) {

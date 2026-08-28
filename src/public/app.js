@@ -1037,8 +1037,13 @@ function isChatApiProcessingKeyName(key = "") {
   return Boolean(match && Number(match[1]) >= 2);
 }
 
+function isProviderChatApiProcessingKeyName(key = "") {
+  return /^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|CUSTOM_API_KEY)[2-9]\d*$/u
+    .test(String(key || "").trim());
+}
+
 function isManagedEnvKey(key = "") {
-  return ENV_KNOWN_KEYS.has(key) || isChatApiProcessingKeyName(key);
+  return ENV_KNOWN_KEYS.has(key) || isChatApiProcessingKeyName(key) || isProviderChatApiProcessingKeyName(key);
 }
 
 function normalizeRoleCardMode(mode = "") {
@@ -2193,6 +2198,7 @@ function saveCurrentChatApiProviderDraft() {
   const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
   chatApiProviderDrafts[provider] = {
     key: document.getElementById("envField_CHAT_API_KEY")?.value || "",
+    processingKeys: collectChatApiProcessingKeyValues(),
     model: document.getElementById("envField_CHAT_API_MODEL")?.value || "",
     baseUrl: document.getElementById("envField_CHAT_API_BASE_URL")?.value || ""
   };
@@ -2231,6 +2237,7 @@ function showChatApiProviderDraft(provider) {
   if (baseUrlInput) {
     baseUrlInput.value = draft.baseUrl || "";
   }
+  renderChatApiProcessingKeyRows(draft.processingKeys);
   syncChatApiReasoningField();
 }
 
@@ -2461,28 +2468,6 @@ function renderEnvExtraRows(entries = []) {
   entries.forEach((entry) => el.envSettingsExtraList.appendChild(createEnvExtraRow(entry)));
 }
 
-function getChatApiProcessingKeyValues(parsedEnv = {}) {
-  const values = Object.entries(parsedEnv)
-    .map(([key, value]) => {
-      const match = key.match(/^CHAT_API_KEY([2-9]\d*)$/u);
-      if (!match) {
-        return null;
-      }
-      const index = Number(match[1]);
-      return Number.isFinite(index) && index >= 2 ? { index, value: String(value ?? "") } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.index - b.index)
-    .map((entry) => entry.value);
-
-  if (values.length > 0) {
-    return values;
-  }
-
-  const legacyKey2 = getEnvFieldValue(parsedEnv, "CHAT_API_KEY2");
-  return [legacyKey2 || ""];
-}
-
 function renumberChatApiProcessingKeyRows() {
   const rows = Array.from(document.querySelectorAll("[data-chat-api-processing-key-row]"));
   rows.forEach((row, index) => {
@@ -2537,20 +2522,26 @@ function createChatApiProcessingKeyRow(value = "", keyIndex = 2) {
   return row;
 }
 
-function createChatApiProcessingKeyControls(parsedEnv = {}) {
+function renderChatApiProcessingKeyRows(values = [], list = document.getElementById("chatApiProcessingKeyList")) {
+  if (!list) {
+    return;
+  }
+  const processingKeys = Array.isArray(values) && values.length > 0 ? values : [""];
+  list.replaceChildren(...processingKeys.map((value, index) => createChatApiProcessingKeyRow(value, index + 2)));
+}
+
+function createChatApiProcessingKeyControls(processingKeys = []) {
   const wrapper = document.createElement("div");
   wrapper.className = "chat-api-processing-keys";
 
   const hint = document.createElement("p");
   hint.className = "form-hint";
-  hint.textContent = "大模型處理用對話 API Key 會依目前啟用的大模型順序使用；Key 不足時沿用最後一把。";
+  hint.textContent = "大模型處理用對話 API Key 會依目前啟用的大模型順序使用；Key 不足時沿用最後一把。這組 Key 會跟隨對話 API 供應商切換。";
 
   const list = document.createElement("div");
   list.id = "chatApiProcessingKeyList";
   list.className = "env-extra-list chat-api-processing-key-list";
-  getChatApiProcessingKeyValues(parsedEnv).forEach((value, index) => {
-    list.appendChild(createChatApiProcessingKeyRow(value, index + 2));
-  });
+  renderChatApiProcessingKeyRows(processingKeys, list);
 
   const addBtn = document.createElement("button");
   addBtn.type = "button";
@@ -2627,7 +2618,7 @@ function renderEnvSettingsForm(content = "") {
     group.fields.forEach((field) => grid.appendChild(createEnvField(field, formEnv)));
     section.appendChild(grid);
     if (group.title === "對話API") {
-      section.appendChild(createChatApiProcessingKeyControls(parsed));
+      section.appendChild(createChatApiProcessingKeyControls(activeDraft.processingKeys));
       section.appendChild(createChatApiTestControls());
     }
     el.envSettingsFields.appendChild(section);
@@ -2688,7 +2679,7 @@ function buildEnvContentFromForm() {
       });
       const processingKeys = collectChatApiProcessingKeyValues();
       if (processingKeys.length > 0) {
-        lines.push("# 大模型處理用對話 API Key。依啟用的大模型順序使用；Key 不足時沿用最後一把。");
+        lines.push("# 大模型處理用對話 API Key。依啟用的大模型順序使用；Key 不足時沿用最後一把，並隨對話 API 供應商切換。");
         processingKeys.forEach((value, index) => {
           lines.push(`CHAT_API_KEY${index + 2}=${formatEnvValue(value)}`);
         });

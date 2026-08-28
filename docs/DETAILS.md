@@ -40,7 +40,7 @@
 | `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature，可設定 `0–2` 並支援小數；DeepSeek 思考模式開啟時不生效。 |
 | `CHAT_IMAGE_ATTACHMENT_MAX_COUNT` | `4` | 網頁與 Discord 每次最多附加圖片數。 |
 | `CHAT_IMAGE_ATTACHMENT_MAX_BYTES` | `5242880` | 每張聊天圖片大小上限，單位 bytes。 |
-| `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | 大模型內容處理可按順序使用不同 key。 |
+| `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | 大模型內容處理按啟用順序使用，Key 不足時沿用最後一把；網頁切換對話 API 供應商時會連同整組處理 Key 一起切換。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
@@ -186,6 +186,8 @@ Slash 指令：
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
 | `/reload` | `num`、`comment` | 直接改寫倒數第 `num` 次使用者輸入並重新生成；`1` 代表最近一次。 |
 | `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；所有模板都可在括號內補充並另起一行追加內容。 |
+| `/archive` | `action`、選填 `name` | `0` 保存目前對話，未填名稱時使用日期時間；`1` 私密瀏覽存檔，1 號是最新存檔。 |
+| `/archive_return` | `mode`、`num` | 載入第 `num` 號存檔；`mode:0` 從頭公開回放，`mode:1` 顯示最後五回合並從末端繼續。 |
 
 Discord 行為：
 
@@ -193,6 +195,9 @@ Discord 行為：
 - Bot 新加入伺服器時，會優先在系統頻道、否則在第一個有權發言的文字頻道送出私人聊天與 `/ai_start` 使用說明。
 - 應用程式安裝到使用者帳號時，`APPLICATION_AUTHORIZED` Webhook 會觸發 Bot 私訊使用說明。
 - `/ai_start num:0` 或指定角色卡編號後，會把該伺服器的對話固定在目前頻道。
+- `/archive action:1` 每次私密顯示一份存檔的名稱、角色與最後對話，使用左右按鈕翻頁；完整存檔只在顯示時讀取。
+- `/archive_return mode:0` 會先把 runtime 載入到存檔末端，再公開顯示開場白與最初五回合；每按一次「繼續」追加五回合。新對話會終止尚未完成的回放，並直接從存檔末端繼續。
+- 存檔回放以一組 user 與下一則可見 assistant 為一回合，不顯示 `model_image` 等模型不可見訊息。載入仍保留目前全域角色卡、助手、Prompt 與設定。
 - 已啟用的頻道與 Bot 私訊可以直接輸入對話，不需要文字指令前綴。
 - 第一個發言者自動成為 `user1`，第二個成為 `user2`。
 - `/player_set 2` 可手動把自己設成 `user2`。
