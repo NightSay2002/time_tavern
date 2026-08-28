@@ -10,6 +10,17 @@ export function hasActiveConversationTarget(state = {}) {
   return Boolean(safeText(state?.activeRoleCardId) || hasActiveAssistantTarget(state));
 }
 
+export function hasTimePeriodAdvanceWord(text = "", words = []) {
+  const normalizedText = safeText(text).normalize("NFKC").toLowerCase();
+  if (!normalizedText || !Array.isArray(words)) {
+    return false;
+  }
+  return words.some((word) => {
+    const normalizedWord = safeText(word).normalize("NFKC").toLowerCase();
+    return normalizedWord && normalizedText.includes(normalizedWord);
+  });
+}
+
 function requireDependency(deps, name) {
   const dependency = deps?.[name];
   if (typeof dependency !== "function") {
@@ -111,8 +122,11 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
     deps.markPendingAssistantFeedbackApplied?.(pendingAssistantFeedback, userMessage);
   }
 
-  deps.resolvePendingTimeTrackingBeforeUserTurn?.(currentState, storedUserContent);
-  deps.updateTimeTrackingFromMessage?.(currentState, userMessage);
+  const advancedTimePeriod = deps.advanceTimeTrackingFromUserInput?.(currentState, storedUserContent) === true;
+  if (!advancedTimePeriod) {
+    deps.resolvePendingTimeTrackingBeforeUserTurn?.(currentState, storedUserContent);
+    deps.updateTimeTrackingFromMessage?.(currentState, userMessage);
+  }
 
   const runtimeUserName = requireDependency(deps, "resolveRuntimeUserName")(currentState, turnExtra, input);
   deps.attachTriggeredLorebooksToUserMessage?.(userMessage, currentState, runtimeUserName);

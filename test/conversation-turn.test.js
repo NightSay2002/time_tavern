@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   hasActiveAssistantTarget,
   hasActiveConversationTarget,
+  hasTimePeriodAdvanceWord,
   runConversationTurnWorkflow
 } from "../src/conversation-turn.js";
 
@@ -73,6 +74,13 @@ test("custom assistants count as active conversation targets", () => {
   assert.equal(hasActiveConversationTarget({ activeAssistantMode: "  " }), false);
 });
 
+test("time period advance words match normalized user text", () => {
+  assert.equal(hasTimePeriodAdvanceWord("現在時間流逝了", ["時間流逝"]), true);
+  assert.equal(hasTimePeriodAdvanceWord("ＴＩＭＥ ＳＫＩＰ", ["time skip"]), true);
+  assert.equal(hasTimePeriodAdvanceWord("繼續對話", ["時間流逝"]), false);
+  assert.equal(hasTimePeriodAdvanceWord("任意內容", []), false);
+});
+
 test("applies a pending time transition before generating the current reply", async () => {
   const events = [];
   const state = createPendingState();
@@ -112,6 +120,34 @@ test("keeps the current time when the current user turn contains the keep direct
   assert.equal(state.timeTracking.pendingTransition, null);
   assert.equal(state.timeTracking.autoPeriod.turnsSinceChange, 0);
   assert.equal(events.find((event) => event.type === "generate")?.period, "morning");
+});
+
+test("a user period-advance word moves one period before generation", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.advanceTimeTrackingFromUserInput = (currentState, content) => {
+    if (!content.includes("時間流逝")) {
+      return false;
+    }
+    currentState.timeTracking.currentPeriod = "noon";
+    currentState.timeTracking.pendingTransition = null;
+    currentState.timeTracking.autoPeriod.turnsSinceChange = 0;
+    events.push({ type: "advance-user-time", period: "noon" });
+    return true;
+  };
+
+  await runConversationTurnWorkflow(deps, {
+    state,
+    content: "時間流逝",
+    source: "web"
+  });
+
+  assert.equal(state.timeTracking.currentPeriod, "noon");
+  assert.equal(state.timeTracking.pendingTransition, null);
+  assert.equal(events.some((event) => event.type === "resolve"), false);
+  assert.equal(events.some((event) => event.type === "update-user-time"), false);
+  assert.equal(events.find((event) => event.type === "generate")?.period, "noon");
 });
 
 test("saves an image-only turn without creating or post-processing an assistant message", async () => {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ensureAssistantOpeningContext,
   findRecentUserMessageIndex,
   normalizeRecentUserInputNumber
 } from "../src/conversation-history.js";
@@ -51,4 +52,14 @@ test("reload num must be a positive integer", () => {
   assert.equal(normalizeRecentUserInputNumber(0), null);
   assert.equal(normalizeRecentUserInputNumber(1.5), null);
   assert.equal(normalizeRecentUserInputNumber("nope"), null);
+});
+
+test("assistant opening is inserted once before conversation context", () => {
+  assert.deepEqual(ensureAssistantOpeningContext([], "開場對白"), [
+    { role: "assistant", content: "開場對白", source: "opening" }
+  ]);
+  assert.deepEqual(ensureAssistantOpeningContext([], ""), []);
+
+  const existing = [{ role: "assistant", content: "既有開場", source: "opening" }];
+  assert.equal(ensureAssistantOpeningContext(existing, "新開場"), existing);
 });

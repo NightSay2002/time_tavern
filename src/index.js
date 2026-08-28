@@ -23,9 +23,11 @@ import {
 import {
   hasActiveAssistantTarget,
   hasActiveConversationTarget,
+  hasTimePeriodAdvanceWord,
   runConversationTurnWorkflow
 } from "./conversation-turn.js";
 import {
+  ensureAssistantOpeningContext,
   findRecentUserMessageIndex,
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
@@ -198,6 +200,7 @@ const CHAT_API_COST_PRICING = [
   { label: "Claude Opus 4.7 / 4.6 / 4.5", aliases: ["claude-opus-4.7", "claude opus 4.7", "claude-opus-4.6", "claude opus 4.6", "claude-opus-4.5", "claude opus 4.5"], currency: "USD", inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5.00, outputPerMillion: 25.00 }
 ];
 const DEFAULT_TIME_TRACKING_CONFIG = {
+  periodAdvanceWords: [],
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
   connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
   noChangeWords: ["等到", "等一下", "的時候", "的时候"],
@@ -529,6 +532,7 @@ function normalizeAssistantCard(input = {}, index = 0) {
     name: safeText(source.name || source.title || source.label) || (id === CHARACTER_CARD_CREATION_ASSISTANT_MODE ? DEFAULT_ASSISTANT_CARD_NAME : `新助手 ${index + 1}`),
     description: safeText(source.description || source.intro) || (id === CHARACTER_CARD_CREATION_ASSISTANT_MODE ? DEFAULT_ASSISTANT_CARD_DESCRIPTION : "自訂助手卡。"),
     prompt: safeText(source.prompt || source.systemPrompt || source.system_prompt) || (id === CHARACTER_CARD_CREATION_ASSISTANT_MODE ? fallback.prompt : getCharacterCardCreationAssistantPrompt()),
+    openingDialogue: safeText(source.openingDialogue || source.opening_dialogue || source.firstMessage || source.first_message),
     locked: id === CHARACTER_CARD_CREATION_ASSISTANT_MODE || source.locked === true,
     createdAt: safeText(source.createdAt) || nowIso(),
     updatedAt: safeText(source.updatedAt) || nowIso()
@@ -571,15 +575,21 @@ function getActiveAssistantName(currentState = state) {
   return safeText(getActiveAssistantCard(currentState)?.name) || DEFAULT_ASSISTANT_CARD_NAME;
 }
 
-function saveCharacterCardCreationAssistantPrompt(content = "") {
+function saveCharacterCardCreationAssistantPrompt(content = "", options = {}) {
   const nextPrompt = safeText(content) || getCharacterCardCreationAssistantPrompt();
+  const hasOpeningDialogue = Object.prototype.hasOwnProperty.call(options, "openingDialogue");
   characterCardCreationAssistantPrompt = nextPrompt;
   updateLocalAppDefaults((defaults) => ({
     ...defaults,
     version: Math.max(3, Number(defaults.version || 0)),
     assistantCards: normalizeAssistantCards(defaults.assistantCards).map((card) =>
       card.id === CHARACTER_CARD_CREATION_ASSISTANT_MODE
-        ? { ...card, prompt: nextPrompt, updatedAt: nowIso() }
+        ? {
+            ...card,
+            prompt: nextPrompt,
+            ...(hasOpeningDialogue ? { openingDialogue: safeText(options.openingDialogue) } : {}),
+            updatedAt: nowIso()
+          }
         : card
     )
   }));
@@ -1076,6 +1086,10 @@ function normalizeTimePeriod(value = TIME_PERIOD_MORNING) {
 function normalizeTimeTrackingConfig(input = {}) {
   const source = input && typeof input === "object" ? input : {};
   return {
+    periodAdvanceWords: normalizeTimeTrackingWordList(
+      source.periodAdvanceWords || source.timePeriodAdvanceWords || source.nextPeriodWords,
+      DEFAULT_TIME_TRACKING_CONFIG.periodAdvanceWords
+    ),
     nextDayWords: normalizeTimeTrackingWordList(
       source.nextDayWords || source.dayWords || source.dayProgressWords,
       DEFAULT_TIME_TRACKING_CONFIG.nextDayWords
@@ -2520,6 +2534,25 @@ function startAssistantCard(currentState, assistantId) {
   currentState.roleCardRuntimeState = {};
   resetGeneratedBackendContextPreservingManual(currentState);
   return assistant;
+}
+
+function appendAssistantOpeningMessage(currentState, assistant, extra = {}) {
+  const openingDialogue = safeText(assistant?.openingDialogue);
+  if (!openingDialogue) {
+    return null;
+  }
+  const openingMessage = createMessageRecord({
+    role: "assistant",
+    content: openingDialogue,
+    source: "opening",
+    extra: {
+      assistantCardId: safeText(assistant?.id),
+      ...extra,
+      stateAfterTurnSnapshot: captureNarrativeCheckpoint(currentState)
+    }
+  });
+  appendConversationMessage(openingMessage);
+  return openingMessage;
 }
 
 function deleteAssistantCard(currentState, assistantId) {
@@ -5769,6 +5802,27 @@ function advanceTimeTrackingPeriod(timeTracking = {}) {
   };
 }
 
+function advanceTimeTrackingFromUserInput(currentState, userInput = "") {
+  if (!currentState || typeof currentState !== "object" || hasActiveAssistantTarget(currentState)) {
+    return false;
+  }
+  const timeTracking = normalizeTimeTrackingState(currentState.timeTracking);
+  if (!timeTracking.enabled) {
+    currentState.timeTracking = timeTracking;
+    return false;
+  }
+  if (!hasTimePeriodAdvanceWord(userInput, timeTracking.config.periodAdvanceWords)) {
+    currentState.timeTracking = timeTracking;
+    return false;
+  }
+  currentState.timeTracking = normalizeTimeTrackingState({
+    ...advanceTimeTrackingPeriod(timeTracking),
+    pendingTransition: null,
+    updatedAt: nowIso()
+  });
+  return true;
+}
+
 function shouldWarnBeforeAutoTimePeriodSwitch(timeTracking = {}) {
   const normalized = normalizeTimeTrackingState(timeTracking);
   const autoPeriod = normalizeTimeTrackingAutoPeriodConfig(normalized.autoPeriod);
@@ -8164,7 +8218,10 @@ function buildCharacterCardCreationAssistantMessages(state) {
     return baseMessages;
   }
 
-  const contextMessages = getAllConversationContextMessages(state, latestUser.id);
+  const contextMessages = ensureAssistantOpeningContext(
+    getAllConversationContextMessages(state, latestUser.id),
+    getActiveAssistantCard(state)?.openingDialogue
+  );
 
   return [
     ...baseMessages,
@@ -9921,6 +9978,7 @@ function createConversationTurnDeps(options = {}) {
     createMessageRecord,
     appendConversationMessage,
     markPendingAssistantFeedbackApplied,
+    advanceTimeTrackingFromUserInput,
     resolvePendingTimeTrackingBeforeUserTurn,
     updateTimeTrackingFromMessage,
     resolveRuntimeUserName: (currentState, turnExtra = {}) =>
@@ -11207,12 +11265,13 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/assistant-modes/character-card-creation/start" && method === "POST") {
       const result = await withStateLock(async () => {
-        startAssistantCard(state, CHARACTER_CARD_CREATION_ASSISTANT_MODE);
+        const assistant = startAssistantCard(state, CHARACTER_CARD_CREATION_ASSISTANT_MODE);
+        const openingMessage = appendAssistantOpeningMessage(state, assistant, { platform: "web" });
         saveState(state);
-        return { state: statePayload(state), status: 200 };
+        return { openingMessage, state: statePayload(state), status: 200 };
       });
 
-      sendJson(res, 200, { openingMessage: null, state: result.state });
+      sendJson(res, 200, { openingMessage: result.openingMessage, state: result.state });
       return;
     }
 
@@ -11229,6 +11288,7 @@ const server = http.createServer(async (req, res) => {
         name: safeText(body?.name) || "新助手",
         description: safeText(body?.description) || "自訂助手卡。",
         prompt: safeText(body?.prompt) || getCharacterCardCreationAssistantPrompt(),
+        openingDialogue: safeText(body?.openingDialogue),
         createdAt: now,
         updatedAt: now
       }, getAssistantCards(state).length);
@@ -11251,9 +11311,14 @@ const server = http.createServer(async (req, res) => {
       card.name = safeText(body?.name) || card.name || DEFAULT_ASSISTANT_CARD_NAME;
       card.description = safeText(body?.description) || card.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
       card.prompt = safeText(body?.prompt) || card.prompt || getCharacterCardCreationAssistantPrompt();
+      if (Object.prototype.hasOwnProperty.call(body || {}, "openingDialogue")) {
+        card.openingDialogue = safeText(body.openingDialogue);
+      }
       card.updatedAt = nowIso();
       if (card.id === CHARACTER_CARD_CREATION_ASSISTANT_MODE) {
-        saveCharacterCardCreationAssistantPrompt(card.prompt);
+        saveCharacterCardCreationAssistantPrompt(card.prompt, {
+          openingDialogue: card.openingDialogue
+        });
       }
       saveState(state);
       sendJson(res, 200, { assistantCard: card, state: statePayload(state) });
@@ -11278,14 +11343,15 @@ const server = http.createServer(async (req, res) => {
         if (!assistant) {
           return { error: "助手不存在", status: 404 };
         }
+        const openingMessage = appendAssistantOpeningMessage(state, assistant, { platform: "web" });
         saveState(state);
-        return { state: statePayload(state), status: 200 };
+        return { openingMessage, state: statePayload(state), status: 200 };
       });
       if (result.error) {
         sendJson(res, result.status || 400, { error: result.error });
         return;
       }
-      sendJson(res, 200, { openingMessage: null, state: result.state });
+      sendJson(res, 200, { openingMessage: result.openingMessage, state: result.state });
       return;
     }
 
@@ -12298,10 +12364,17 @@ async function startSessionFromDiscord(channelId, userInfo, requestedRoleCardNum
     state.roleCardRuntimeState = {};
     resetGeneratedBackendContextPreservingManual(state);
     if (hasActiveAssistantTarget(state)) {
+      const assistant = getActiveAssistantCard(state);
+      const openingMessage = appendAssistantOpeningMessage(state, assistant, {
+        platform: "discord",
+        discordChannelId: channelId,
+        discordUserId: userInfo.userId,
+        discordUserName: userInfo.userName
+      });
       saveState(state);
       return {
         ok: true,
-        openingDialogue: `${getActiveAssistantName(state)} 已啟用，請直接輸入你的需求。`,
+        openingDialogue: openingMessage?.content || `${getActiveAssistantName(state)} 已啟用，請直接輸入你的需求。`,
         roleCardName: getActiveAssistantName(state)
       };
     }

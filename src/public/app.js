@@ -144,6 +144,7 @@ const el = {
   timeTrackingMonth: document.getElementById("timeTrackingMonth"),
   timeTrackingDate: document.getElementById("timeTrackingDate"),
   timeTrackingPeriod: document.getElementById("timeTrackingPeriod"),
+  timeTrackingPeriodAdvanceWords: document.getElementById("timeTrackingPeriodAdvanceWords"),
   timeTrackingAutoPeriodEnabled: document.getElementById("timeTrackingAutoPeriodEnabled"),
   timeTrackingAutoPeriodRounds: document.getElementById("timeTrackingAutoPeriodRounds"),
   timeTrackingNextDayWords: document.getElementById("timeTrackingNextDayWords"),
@@ -168,6 +169,7 @@ const el = {
   assistantCardId: document.getElementById("assistantCardId"),
   assistantCardName: document.getElementById("assistantCardName"),
   assistantCardDescription: document.getElementById("assistantCardDescription"),
+  assistantCardOpeningDialogue: document.getElementById("assistantCardOpeningDialogue"),
   assistantPromptInput: document.getElementById("assistantPromptInput"),
   cancelAssistantPromptDialog: document.getElementById("cancelAssistantPromptDialog"),
 
@@ -7960,6 +7962,7 @@ function getTimeTrackingDialogPayload() {
       roundsPerPeriod: Math.max(1, Math.floor(Number(el.timeTrackingAutoPeriodRounds?.value || 3)))
     },
     config: {
+      periodAdvanceWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingPeriodAdvanceWords?.value || ""),
       nextDayWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNextDayWords?.value || ""),
       connectorWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingConnectorWords?.value || ""),
       noChangeWords: normalizeTimeTrackingWordListForEditor(el.timeTrackingNoChangeWords?.value || ""),
@@ -8014,6 +8017,7 @@ function renderTimeTrackingDialog(timeTracking = {}) {
   if (el.timeTrackingAutoPeriodRounds) {
     el.timeTrackingAutoPeriodRounds.value = Math.max(1, Math.floor(Number(autoPeriod.roundsPerPeriod || 3)));
   }
+  setTextareaWordList(el.timeTrackingPeriodAdvanceWords, config.periodAdvanceWords || []);
   setTextareaWordList(el.timeTrackingNextDayWords, config.nextDayWords || []);
   setTextareaWordList(el.timeTrackingConnectorWords, config.connectorWords || []);
   setTextareaWordList(el.timeTrackingNoChangeWords, config.noChangeWords || []);
@@ -8079,6 +8083,9 @@ async function openAssistantPromptDialog(assistantCardInput = null) {
     if (el.assistantCardDescription) {
       el.assistantCardDescription.value = assistantCard?.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
     }
+    if (el.assistantCardOpeningDialogue) {
+      el.assistantCardOpeningDialogue.value = assistantCard?.openingDialogue || "";
+    }
     el.assistantPromptDialog?.showModal();
   } catch (error) {
     showToast(error.message, "error");
@@ -8093,6 +8100,7 @@ async function saveAssistantPrompt() {
       body: JSON.stringify({
         name: el.assistantCardName?.value || DEFAULT_ASSISTANT_CARD_NAME,
         description: el.assistantCardDescription?.value || "",
+        openingDialogue: el.assistantCardOpeningDialogue?.value || "",
         prompt: el.assistantPromptInput?.value || ""
       })
     });
@@ -8108,6 +8116,9 @@ async function saveAssistantPrompt() {
       }
       if (el.assistantCardDescription) {
         el.assistantCardDescription.value = payload.assistantCard.description || "";
+      }
+      if (el.assistantCardOpeningDialogue) {
+        el.assistantCardOpeningDialogue.value = payload.assistantCard.openingDialogue || "";
       }
     }
     renderRoleCards(appState);

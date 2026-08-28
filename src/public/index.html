@@ -403,6 +403,11 @@
             </select>
           </label>
           <label>
+            時間段更改詞
+            <textarea id="timeTrackingPeriodAdvanceWords" rows="2" placeholder="時間流逝"></textarea>
+          </label>
+          <p class="form-hint">user 輸入命中時，本回合立即前進一個時間段：早上→中午→晚上→翌日早上。</p>
+          <label>
             配合詞
             <textarea id="timeTrackingConnectorWords" rows="4" placeholder="來到&#10;已經&#10;現在"></textarea>
           </label>
@@ -475,6 +480,10 @@
         <label>
           簡介
           <textarea id="assistantCardDescription" rows="3"></textarea>
+        </label>
+        <label>
+          開場對白
+          <textarea id="assistantCardOpeningDialogue" rows="5" placeholder="選填；啟用助手時顯示，並作為第一則 assistant 訊息。"></textarea>
         </label>
         <label>
           Prompt

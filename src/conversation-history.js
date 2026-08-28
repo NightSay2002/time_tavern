@@ -21,3 +21,19 @@ export function findRecentUserMessageIndex(conversation = [], number = 1) {
   }
   return -1;
 }
+
+export function ensureAssistantOpeningContext(contextMessages = [], openingDialogue = "") {
+  const messages = Array.isArray(contextMessages) ? contextMessages : [];
+  const opening = typeof openingDialogue === "string" ? openingDialogue.trim() : "";
+  if (!opening || messages.some((message) => message?.source === "opening")) {
+    return messages;
+  }
+  return [
+    {
+      role: "assistant",
+      content: opening,
+      source: "opening"
+    },
+    ...messages
+  ];
+}
