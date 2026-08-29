@@ -44,7 +44,7 @@ if ! node_is_usable; then
   exit 1
 fi
 
-if [ ! -d "node_modules" ] || [ ! -d "node_modules/discord.js" ]; then
+if [ ! -d "node_modules/discord.js" ] || [ ! -d "node_modules/opencc-js" ]; then
   echo "Installing dependencies..."
   npm install || {
     echo "npm install failed."

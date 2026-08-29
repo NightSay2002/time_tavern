@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   chooseUpdateAction,
   getProjectStatusEntries,
@@ -57,4 +58,12 @@ test("startup update scope ignores server manager runtime files", () => {
       { indexStatus: "?", worktreeStatus: "?", path: "new-project-file.js" }
     ]
   );
+});
+
+test("platform launchers install newly required runtime dependencies", () => {
+  const macLauncher = fs.readFileSync(new URL("../start-mac.command", import.meta.url), "utf8");
+  const windowsLauncher = fs.readFileSync(new URL("../start-win.bat", import.meta.url), "utf8");
+
+  assert.match(macLauncher, /node_modules\/opencc-js/u);
+  assert.match(windowsLauncher, /node_modules\\opencc-js/u);
 });

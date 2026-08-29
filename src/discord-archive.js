@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle
 } from "discord.js";
+import { localizeSystemText, normalizeUiLanguage, UI_LANGUAGE_SIMPLIFIED } from "./ui-language.js";
 
 const ARCHIVE_BROWSER_PREFIX = "archive_browser:";
 const ARCHIVE_REPLAY_PREFIX = "archive_replay:";
@@ -36,16 +37,16 @@ function getArchiveTurnNumber(message = {}, fallback = 1) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function formatArchiveMessage(label, message = {}) {
-  const content = safeText(message?.content) || "（空白訊息）";
-  return `**${label}**\n${content}`;
+function formatArchiveMessage(label, message = {}, language) {
+  const content = safeText(message?.content) || localizeSystemText("（空白訊息）", language);
+  return `**${localizeSystemText(label, language)}**\n${content}`;
 }
 
-function formatArchiveRound(round = {}, fallbackTurnNumber = 1) {
+function formatArchiveRound(round = {}, fallbackTurnNumber = 1, language) {
   const turnNumber = getArchiveTurnNumber(round.user, fallbackTurnNumber);
-  const blocks = [formatArchiveMessage(`使用者｜第 ${turnNumber} 回合`, round.user)];
+  const blocks = [formatArchiveMessage(`使用者｜第 ${turnNumber} 回合`, round.user, language)];
   if (round.assistant) {
-    blocks.push(formatArchiveMessage("AI", round.assistant));
+    blocks.push(formatArchiveMessage("AI", round.assistant, language));
   }
   return blocks.join("\n\n");
 }
@@ -99,38 +100,38 @@ export function buildDiscordArchiveTranscript(conversation = []) {
   return { openings, rounds };
 }
 
-export function buildDiscordArchiveReplayPage(conversation = [], startOffset = 0) {
+export function buildDiscordArchiveReplayPage(conversation = [], startOffset = 0, language) {
   const transcript = buildDiscordArchiveTranscript(conversation);
   const offset = Math.max(0, Number.parseInt(startOffset, 10) || 0);
   const pageRounds = transcript.rounds.slice(offset, offset + ARCHIVE_REPLAY_PAGE_SIZE);
   const blocks = [];
   if (offset === 0) {
     transcript.openings.forEach((message) => {
-      blocks.push(formatArchiveMessage("開場白", message));
+      blocks.push(formatArchiveMessage("開場白", message, language));
     });
   }
   pageRounds.forEach((round, index) => {
-    blocks.push(formatArchiveRound(round, offset + index + 1));
+    blocks.push(formatArchiveRound(round, offset + index + 1, language));
   });
   const nextOffset = offset + pageRounds.length;
   return {
-    text: blocks.join("\n\n---\n\n") || "這個存檔沒有可回放的文字對話。",
+    text: blocks.join("\n\n---\n\n") || localizeSystemText("這個存檔沒有可回放的文字對話。", language),
     nextOffset,
     hasMore: nextOffset < transcript.rounds.length,
     totalRounds: transcript.rounds.length
   };
 }
 
-export function buildDiscordArchiveLatestPage(conversation = []) {
+export function buildDiscordArchiveLatestPage(conversation = [], language) {
   const transcript = buildDiscordArchiveTranscript(conversation);
   if (transcript.rounds.length === 0) {
-    return buildDiscordArchiveReplayPage(conversation, 0);
+    return buildDiscordArchiveReplayPage(conversation, 0, language);
   }
   const startOffset = Math.max(0, transcript.rounds.length - ARCHIVE_REPLAY_PAGE_SIZE);
   const pageRounds = transcript.rounds.slice(startOffset);
   return {
     text: pageRounds
-      .map((round, index) => formatArchiveRound(round, startOffset + index + 1))
+      .map((round, index) => formatArchiveRound(round, startOffset + index + 1, language))
       .join("\n\n---\n\n"),
     nextOffset: transcript.rounds.length,
     hasMore: false,
@@ -152,7 +153,7 @@ export function parseDiscordArchiveReplayCustomId(customId = "") {
     : null;
 }
 
-export function buildDiscordArchiveContinueComponents(token = "") {
+export function buildDiscordArchiveContinueComponents(token = "", language) {
   const normalizedToken = safeText(token);
   if (!normalizedToken) {
     return [];
@@ -161,7 +162,7 @@ export function buildDiscordArchiveContinueComponents(token = "") {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`${ARCHIVE_REPLAY_PREFIX}${normalizedToken}`)
-        .setLabel("繼續")
+        .setLabel(localizeSystemText("繼續", language))
         .setStyle(ButtonStyle.Primary)
     )
   ];
@@ -170,12 +171,14 @@ export function buildDiscordArchiveContinueComponents(token = "") {
 export function buildDiscordArchiveBrowserPayload({
   sessions = [],
   sessionId = "",
-  conversation = []
+  conversation = [],
+  language
 } = {}) {
+  const text = (value) => localizeSystemText(value, language);
   const ordered = getDiscordArchiveSessionsNewestFirst(sessions);
   if (!ordered.length) {
     return {
-      content: "目前沒有對話存檔。",
+      content: text("目前沒有對話存檔。"),
       components: [],
       allowedMentions: { parse: [] }
     };
@@ -187,36 +190,38 @@ export function buildDiscordArchiveBrowserPayload({
   const transcript = buildDiscordArchiveTranscript(conversation);
   const lastRound = transcript.rounds.at(-1);
   const lastDialogue = lastRound
-    ? truncateText(formatArchiveRound(lastRound, transcript.rounds.length))
+    ? truncateText(formatArchiveRound(lastRound, transcript.rounds.length, language))
     : transcript.openings.length > 0
-      ? truncateText(formatArchiveMessage("開場白", transcript.openings.at(-1)))
-      : "尚無可顯示的對話。";
+      ? truncateText(formatArchiveMessage("開場白", transcript.openings.at(-1), language))
+      : text("尚無可顯示的對話。");
   const updatedAt = safeText(session?.updatedAt || session?.createdAt);
   const updatedText = updatedAt
-    ? new Date(updatedAt).toLocaleString("zh-Hant")
-    : "未知時間";
+    ? new Date(updatedAt).toLocaleString(
+      normalizeUiLanguage(language) === UI_LANGUAGE_SIMPLIFIED ? "zh-CN" : "zh-Hant"
+    )
+    : text("未知時間");
   const number = index + 1;
   const content = [
-    `**對話存檔 ${number} / ${ordered.length}**`,
-    `編號：${number}`,
-    `名稱：${safeText(session?.name) || "未命名存檔"}`,
-    `角色：${safeText(session?.roleCardName) || "未指定角色卡"}`,
-    `更新：${updatedText}`,
+    `**${text("對話存檔")} ${number} / ${ordered.length}**`,
+    `${text("編號：")}${number}`,
+    `${text("名稱：")}${safeText(session?.name) || text("未命名存檔")}`,
+    `${text("角色：")}${safeText(session?.roleCardName) || text("未指定角色卡")}`,
+    `${text("更新：")}${updatedText}`,
     "",
-    "**最後的對話**",
+    `**${text("最後的對話")}**`,
     lastDialogue,
     "",
-    `使用 \`/archive_return mode:0 num:${number}\` 從頭回放，或使用 \`mode:1\` 從末端繼續。`
+    `${text("使用")} \`/archive_return mode:0 num:${number}\` ${text("從頭回放，或使用")} \`mode:1\` ${text("從末端繼續。")}`
   ].join("\n");
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`${ARCHIVE_BROWSER_PREFIX}${ordered[Math.max(0, index - 1)].id}`)
-      .setLabel("上一個")
+      .setLabel(text("上一個"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(index <= 0),
     new ButtonBuilder()
       .setCustomId(`${ARCHIVE_BROWSER_PREFIX}${ordered[Math.min(ordered.length - 1, index + 1)].id}`)
-      .setLabel("下一個")
+      .setLabel(text("下一個"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(index >= ordered.length - 1)
   );

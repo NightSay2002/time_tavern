@@ -1,9 +1,17 @@
 ﻿import {
+  canDisableChatApiReasoning,
   createChatApiProviderDrafts,
   getChatApiProviderEnvEntries,
   normalizeChatApiProviderSetting,
   resolveChatApiReasoningEffort
 } from "./chat-api-provider-settings.js";
+import {
+  createUiLanguageController,
+  normalizeUiLanguage,
+  readStoredUiLanguage,
+  UI_LANGUAGE_SIMPLIFIED,
+  UI_LANGUAGE_TRADITIONAL
+} from "./ui-language.js";
 
 const el = {
   mobileInfoToggleBtn: document.getElementById("mobileInfoToggleBtn"),
@@ -16,11 +24,21 @@ const el = {
   contextCompressionModeHint: document.getElementById("contextCompressionModeHint"),
 
   selectRoleCardBtn: document.getElementById("selectRoleCardBtn"),
+  openCreateMenuBtn: document.getElementById("openCreateMenuBtn"),
+  createMenuDialog: document.getElementById("createMenuDialog"),
+  closeCreateMenuBtn: document.getElementById("closeCreateMenuBtn"),
   createRoleCardBtn: document.getElementById("createRoleCardBtn"),
   createAssistantCardBtn: document.getElementById("createAssistantCardBtn"),
   importRoleCardBtn: document.getElementById("importRoleCardBtn"),
   roleCardImportFile: document.getElementById("roleCardImportFile"),
   roleCardList: document.getElementById("roleCardList"),
+  globalLorebookBtn: document.getElementById("globalLorebookBtn"),
+  globalLorebookDialog: document.getElementById("globalLorebookDialog"),
+  globalLorebookForm: document.getElementById("globalLorebookForm"),
+  globalLorebookEnabled: document.getElementById("globalLorebookEnabled"),
+  globalLorebookList: document.getElementById("globalLorebookList"),
+  addGlobalLorebookEntryBtn: document.getElementById("addGlobalLorebookEntryBtn"),
+  closeGlobalLorebookDialog: document.getElementById("closeGlobalLorebookDialog"),
   selectSessionBtn: document.getElementById("selectSessionBtn"),
   saveSessionBtn: document.getElementById("saveSessionBtn"),
 
@@ -144,6 +162,9 @@ const el = {
   timeTrackingMonth: document.getElementById("timeTrackingMonth"),
   timeTrackingDate: document.getElementById("timeTrackingDate"),
   timeTrackingPeriod: document.getElementById("timeTrackingPeriod"),
+  timeTrackingStartPointMeta: document.getElementById("timeTrackingStartPointMeta"),
+  setTimeTrackingStartPointBtn: document.getElementById("setTimeTrackingStartPointBtn"),
+  clearTimeTrackingStartPointBtn: document.getElementById("clearTimeTrackingStartPointBtn"),
   timeTrackingPeriodAdvanceWords: document.getElementById("timeTrackingPeriodAdvanceWords"),
   timeTrackingAutoPeriodEnabled: document.getElementById("timeTrackingAutoPeriodEnabled"),
   timeTrackingAutoPeriodRounds: document.getElementById("timeTrackingAutoPeriodRounds"),
@@ -166,6 +187,7 @@ const el = {
 
   assistantPromptDialog: document.getElementById("assistantPromptDialog"),
   assistantPromptForm: document.getElementById("assistantPromptForm"),
+  assistantPromptDialogTitle: document.getElementById("assistantPromptDialogTitle"),
   assistantCardId: document.getElementById("assistantCardId"),
   assistantCardName: document.getElementById("assistantCardName"),
   assistantCardDescription: document.getElementById("assistantCardDescription"),
@@ -217,6 +239,7 @@ let mobileInfoOpen = false;
 let mobileViewportUpdateFrame = 0;
 let mobileMessageScrollFrame = 0;
 let roleCardLorebooksDraft = [];
+let globalLorebookEntriesDraft = [];
 let roleCardCustomSectionsDraft = [];
 let roleCardOpeningDialoguesDraft = [];
 let selectedRoleCardOpeningId = "";
@@ -230,6 +253,7 @@ let roleCardDialogReturnToPicker = false;
 let sessionPickerPage = 1;
 let selectedSessionPreviewId = "";
 let selectedSessionPreview = null;
+let timeTrackingStartPointDraft = null;
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
 let coverCropConfirmHandler = null;
@@ -266,11 +290,7 @@ const KEYWORD_FOLLOWUP_STOP_AFTER_MODEL = "stop_after_model";
 const KEYWORD_FOLLOWUP_IMAGE_PARALLEL_REASONER = "image_parallel_reasoner";
 const KEYWORD_FOLLOWUP_IMAGE_ONLY = "image_only";
 const MODEL_APPEND_PLAYER_OTHER = "userx";
-const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
-const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
-const UI_LANGUAGE_STORAGE_KEY = "time_tavern_ui_language";
 const DAILY_WELCOME_PLAYED_STORAGE_KEY = "time_tavern_daily_welcome_played";
-const UI_LANGUAGE_TEXT_ATTRS = ["placeholder", "title", "aria-label", "alt", "value"];
 const ASSISTANT_FEEDBACK_LABELS = {
   like: "喜歡",
   dislike: "不喜歡"
@@ -365,207 +385,6 @@ const CHAT_COMMAND_MENU_ITEMS = [
     ]
   }
 ];
-const UI_LANGUAGE_SKIP_TEXT_SELECTOR = [
-  "script",
-  "style",
-  "template",
-  "input",
-  "textarea",
-  "pre",
-  "code",
-  ".markdown-body",
-  ".message-preview",
-  ".message-reasoning-content",
-  ".ai-log-block",
-  "[data-ui-language-skip]"
-].join(",");
-const UI_LANGUAGE_SKIP_ATTR_SELECTOR = [
-  "script",
-  "style",
-  "template",
-  "pre",
-  "code",
-  ".markdown-body",
-  ".message-preview",
-  ".message-reasoning-content",
-  ".ai-log-block",
-  "[data-ui-language-skip]"
-].join(",");
-const UI_T2S_PHRASES = [
-  ["伺服器", "服务器"],
-  ["本地服务器", "本地服务器"],
-  ["滑鼠", "鼠标"],
-  ["介面", "界面"],
-  ["網頁", "网页"],
-  ["資料", "资料"],
-  ["訊息", "讯息"],
-  ["寫卡助手", "写卡助手"],
-  ["簡繁轉換", "简繁转换"],
-  ["繁體", "繁体"],
-  ["簡體", "简体"]
-];
-const UI_T2S_CHARS = {
-  並: "并",
-  併: "并",
-  來: "来",
-  係: "系",
-  個: "个",
-  們: "们",
-  偵: "侦",
-  儲: "储",
-  備: "备",
-  傳: "传",
-  傷: "伤",
-  內: "内",
-  關: "关",
-  刪: "删",
-  則: "则",
-  創: "创",
-  劇: "剧",
-  動: "动",
-  務: "务",
-  匯: "汇",
-  區: "区",
-  協: "协",
-  參: "参",
-  啟: "启",
-  單: "单",
-  嗎: "吗",
-  圍: "围",
-  圖: "图",
-  團: "团",
-  場: "场",
-  塊: "块",
-  壓: "压",
-  壞: "坏",
-  學: "学",
-  寫: "写",
-  實: "实",
-  專: "专",
-  對: "对",
-  導: "导",
-  張: "张",
-  後: "后",
-  從: "从",
-  復: "复",
-  應: "应",
-  態: "态",
-  憶: "忆",
-  戶: "户",
-  換: "换",
-  損: "损",
-  擇: "择",
-  攔: "拦",
-  敗: "败",
-  數: "数",
-  斷: "断",
-  時: "时",
-  暫: "暂",
-  書: "书",
-  會: "会",
-  機: "机",
-  檔: "档",
-  欄: "栏",
-  權: "权",
-  歡: "欢",
-  沒: "没",
-  測: "测",
-  準: "准",
-  溫: "温",
-  為: "为",
-  無: "无",
-  產: "产",
-  現: "现",
-  環: "环",
-  當: "当",
-  發: "发",
-  確: "确",
-  稱: "称",
-  範: "范",
-  簡: "简",
-  紀: "纪",
-  紅: "红",
-  純: "纯",
-  細: "细",
-  終: "终",
-  組: "组",
-  結: "结",
-  給: "给",
-  統: "统",
-  經: "经",
-  網: "网",
-  綴: "缀",
-  線: "线",
-  編: "编",
-  縮: "缩",
-  總: "总",
-  繼: "继",
-  續: "续",
-  義: "义",
-  與: "与",
-  舊: "旧",
-  蓋: "盖",
-  蘋: "苹",
-  處: "处",
-  製: "制",
-  複: "复",
-  覆: "复",
-  見: "见",
-  規: "规",
-  視: "视",
-  覽: "览",
-  觸: "触",
-  訂: "订",
-  計: "计",
-  訊: "讯",
-  記: "记",
-  設: "设",
-  註: "注",
-  詞: "词",
-  試: "试",
-  話: "话",
-  該: "该",
-  詳: "详",
-  誤: "误",
-  調: "调",
-  請: "请",
-  議: "议",
-  讀: "读",
-  變: "变",
-  貼: "贴",
-  資: "资",
-  載: "载",
-  輪: "轮",
-  輯: "辑",
-  輸: "输",
-  轉: "转",
-  這: "这",
-  連: "连",
-  進: "进",
-  過: "过",
-  達: "达",
-  選: "选",
-  還: "还",
-  鈕: "钮",
-  錄: "录",
-  錯: "错",
-  鍵: "键",
-  鐘: "钟",
-  門: "门",
-  閉: "闭",
-  開: "开",
-  間: "间",
-  頁: "页",
-  項: "项",
-  順: "顺",
-  須: "须",
-  預: "预",
-  題: "题",
-  顯: "显",
-  體: "体",
-  麼: "么",
-  點: "点"
-};
 const TIME_PERIOD_LABELS = {
   morning: "早上",
   noon: "中午",
@@ -668,13 +487,13 @@ const ENV_FIELD_GROUPS = [
         label: "思考模式強度",
         type: "select",
         options: [
-          ["", "使用預設（DeepSeek：高）"],
+          ["", "使用 API 預設"],
           ["none", "關閉（使用溫度）"],
           ["low", "低"],
           ["high", "高"],
           ["max", "最大"]
         ],
-        help: "DeepSeek 留空時使用高強度，也可關閉思考並使用溫度；GLM-5.3 留空時使用 API 預設。其他 provider 不使用此設定。"
+        help: "依供應商與模型能力控制思考；只有支援關閉的模型才可選擇關閉。關閉後會使用溫度，並不附帶使用者自訂補充。"
       },
       {
         key: "CHAT_API_REQUEST_TIMEOUT_MS",
@@ -839,194 +658,50 @@ const ENV_DROPPED_KEYS = new Set([
   "CHARACTER_CARD_CREATION_ASSISTANT_PROMPT",
   "CONTEXT_COMPRESSION_PROMPT"
 ]);
-let uiLanguage = readStoredUiLanguage();
-let uiLanguageObserver = null;
-const uiLanguageTextOriginals = new WeakMap();
-const uiLanguageAttrOriginals = new WeakMap();
+const uiLanguageController = createUiLanguageController({
+  initialLanguage: readStoredUiLanguage()
+});
 let activeChatApiProviderSetting = "deepseek";
 let chatApiProviderDrafts = {};
 
-function normalizeUiLanguage(value = "") {
-  return value === UI_LANGUAGE_SIMPLIFIED ? UI_LANGUAGE_SIMPLIFIED : UI_LANGUAGE_TRADITIONAL;
-}
-
-function readStoredUiLanguage() {
-  try {
-    return normalizeUiLanguage(window.localStorage?.getItem(UI_LANGUAGE_STORAGE_KEY));
-  } catch {
-    return UI_LANGUAGE_TRADITIONAL;
-  }
-}
-
-function saveUiLanguagePreference() {
-  try {
-    window.localStorage?.setItem(UI_LANGUAGE_STORAGE_KEY, uiLanguage);
-  } catch {
-    // The UI language still works for this page even if storage is unavailable.
-  }
-}
-
-function toSimplifiedUiText(value = "") {
-  let output = String(value || "");
-  UI_T2S_PHRASES.forEach(([traditional, simplified]) => {
-    output = output.split(traditional).join(simplified);
-  });
-  return Array.from(output, (char) => UI_T2S_CHARS[char] || char).join("");
-}
-
 function getUiLanguageText(traditionalText = "") {
-  return uiLanguage === UI_LANGUAGE_SIMPLIFIED ? toSimplifiedUiText(traditionalText) : traditionalText;
-}
-
-function shouldSkipUiLanguageTextNode(node) {
-  const parent = node?.parentElement;
-  return !parent || !node.nodeValue.trim() || Boolean(parent.closest(UI_LANGUAGE_SKIP_TEXT_SELECTOR));
-}
-
-function shouldSkipUiLanguageAttributes(element) {
-  return !element || Boolean(element.closest(UI_LANGUAGE_SKIP_ATTR_SELECTOR));
-}
-
-function shouldTranslateUiValueAttribute(element) {
-  if (element?.tagName !== "INPUT") {
-    return false;
-  }
-  return ["button", "submit", "reset"].includes(String(element.type || "").toLowerCase());
-}
-
-function translateUiTextNode(node, options = {}) {
-  if (shouldSkipUiLanguageTextNode(node)) {
-    return;
-  }
-  if (options.captureOriginal || !uiLanguageTextOriginals.has(node)) {
-    uiLanguageTextOriginals.set(node, node.nodeValue);
-  }
-  const original = uiLanguageTextOriginals.get(node) || "";
-  node.nodeValue = uiLanguage === UI_LANGUAGE_SIMPLIFIED ? toSimplifiedUiText(original) : original;
-}
-
-function translateUiElementAttributes(element, options = {}) {
-  if (!(element instanceof Element) || shouldSkipUiLanguageAttributes(element)) {
-    return;
-  }
-  let originals = uiLanguageAttrOriginals.get(element);
-  if (!originals) {
-    originals = {};
-    uiLanguageAttrOriginals.set(element, originals);
-  }
-  UI_LANGUAGE_TEXT_ATTRS.forEach((attr) => {
-    if (!element.hasAttribute(attr)) {
-      return;
-    }
-    if (attr === "value" && !shouldTranslateUiValueAttribute(element)) {
-      return;
-    }
-    if (options.captureOriginal || originals[attr] === undefined) {
-      originals[attr] = element.getAttribute(attr) || "";
-    }
-    const original = originals[attr] || "";
-    element.setAttribute(attr, uiLanguage === UI_LANGUAGE_SIMPLIFIED ? toSimplifiedUiText(original) : original);
-  });
-}
-
-function translateUiLanguageWithin(root, options = {}) {
-  if (!root) {
-    return;
-  }
-  if (root.nodeType === Node.TEXT_NODE) {
-    translateUiTextNode(root, options);
-    return;
-  }
-  if (!(root instanceof Element) && root.nodeType !== Node.DOCUMENT_NODE) {
-    return;
-  }
-
-  const rootElement = root instanceof Element ? root : null;
-  if (rootElement) {
-    translateUiElementAttributes(rootElement, options);
-  }
-
-  const elementWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-  let elementNode = elementWalker.nextNode();
-  while (elementNode) {
-    translateUiElementAttributes(elementNode, options);
-    elementNode = elementWalker.nextNode();
-  }
-
-  const textWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let textNode = textWalker.nextNode();
-  while (textNode) {
-    translateUiTextNode(textNode, options);
-    textNode = textWalker.nextNode();
-  }
-}
-
-function observeUiLanguageMutations() {
-  if (!uiLanguageObserver) {
-    return;
-  }
-  uiLanguageObserver.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-    attributes: true,
-    attributeFilter: UI_LANGUAGE_TEXT_ATTRS
-  });
-}
-
-function withUiLanguageObserverPaused(callback) {
-  uiLanguageObserver?.disconnect();
-  callback();
-  observeUiLanguageMutations();
+  return uiLanguageController.translate(traditionalText);
 }
 
 function updateUiLanguageToggleButton() {
   if (!el.uiLanguageToggleBtn) {
     return;
   }
-  const label = uiLanguage === UI_LANGUAGE_SIMPLIFIED ? "简繁转换：简体" : "簡繁轉換：繁體";
+  const isSimplified = uiLanguageController.isSimplified();
+  const label = isSimplified ? "简繁转换：简体" : "簡繁轉換：繁體";
   el.uiLanguageToggleBtn.textContent = label;
-  el.uiLanguageToggleBtn.setAttribute("aria-pressed", uiLanguage === UI_LANGUAGE_SIMPLIFIED ? "true" : "false");
+  el.uiLanguageToggleBtn.setAttribute("aria-pressed", isSimplified ? "true" : "false");
   el.uiLanguageToggleBtn.setAttribute("title", getUiLanguageText("點擊切換簡體 / 繁體 UI"));
 }
 
 function applyUiLanguage() {
-  document.documentElement.lang = uiLanguage;
-  withUiLanguageObserverPaused(() => {
-    translateUiLanguageWithin(document.documentElement);
-    updateUiLanguageToggleButton();
-  });
-}
-
-function handleUiLanguageMutations(mutations = []) {
-  withUiLanguageObserverPaused(() => {
-    mutations.forEach((mutation) => {
-      if (mutation.type === "characterData") {
-        translateUiTextNode(mutation.target, { captureOriginal: true });
-        return;
-      }
-      if (mutation.type === "attributes") {
-        translateUiElementAttributes(mutation.target, { captureOriginal: true });
-        return;
-      }
-      mutation.addedNodes.forEach((node) => {
-        translateUiLanguageWithin(node, { captureOriginal: true });
-      });
-    });
-    updateUiLanguageToggleButton();
-  });
+  uiLanguageController.apply();
+  updateUiLanguageToggleButton();
 }
 
 function initUiLanguageToggle() {
-  if ("MutationObserver" in window) {
-    uiLanguageObserver = new MutationObserver(handleUiLanguageMutations);
-  }
   if (el.uiLanguageToggleBtn) {
-    el.uiLanguageToggleBtn.addEventListener("click", () => {
-      uiLanguage = uiLanguage === UI_LANGUAGE_SIMPLIFIED ? UI_LANGUAGE_TRADITIONAL : UI_LANGUAGE_SIMPLIFIED;
-      saveUiLanguagePreference();
-      applyUiLanguage();
-      showToast(uiLanguage === UI_LANGUAGE_SIMPLIFIED ? "已切換為簡體 UI" : "已切換為繁體 UI");
+    el.uiLanguageToggleBtn.dataset.uiLanguageSkip = "true";
+    el.uiLanguageToggleBtn.addEventListener("click", async () => {
+      const language = uiLanguageController.isSimplified()
+        ? UI_LANGUAGE_TRADITIONAL
+        : UI_LANGUAGE_SIMPLIFIED;
+      uiLanguageController.setLanguage(language);
+      updateUiLanguageToggleButton();
+      try {
+        await request("/api/ui-language", {
+          method: "PUT",
+          body: JSON.stringify({ language })
+        });
+        showToast(uiLanguageController.translate("已切換網頁與 Discord 系統語言"));
+      } catch (error) {
+        showToast(error.message, "error");
+      }
     });
   }
   applyUiLanguage();
@@ -1635,6 +1310,15 @@ function normalizeRoleCardLorebooks(value) {
     });
 }
 
+function normalizeGlobalLorebook(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    enabled: source.enabled === true,
+    entries: normalizeRoleCardLorebooks(source.entries || source.lorebooks),
+    updatedAt: String(source.updatedAt || "").trim()
+  };
+}
+
 function summarizeRoleCardLorebooks(value) {
   const lorebooks = normalizeRoleCardLorebooks(value);
   if (lorebooks.length === 0) {
@@ -2207,19 +1891,40 @@ function saveCurrentChatApiProviderDraft() {
 function syncChatApiReasoningField() {
   const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
   const input = document.getElementById("envField_CHAT_API_REASONING_EFFORT");
+  const model = document.getElementById("envField_CHAT_API_MODEL")?.value || "";
   if (!input) {
     return;
   }
+  const canDisable = canDisableChatApiReasoning(provider, model);
+  const supportsStrength = provider === "deepseek" ||
+    (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model));
+  const defaultOption = Array.from(input.options || []).find((option) => option.value === "");
+  if (defaultOption) {
+    defaultOption.textContent = provider === "deepseek"
+      ? "使用預設（DeepSeek：高）"
+      : provider === "zhipu"
+        ? "使用 API 預設（GLM）"
+        : "使用 API 預設";
+  }
   const noneOption = Array.from(input.options || []).find((option) => option.value === "none");
   if (noneOption) {
-    const unavailable = provider === "zhipu";
-    noneOption.disabled = unavailable;
-    noneOption.hidden = unavailable;
-    if (unavailable && input.value === "none") {
+    noneOption.disabled = !canDisable;
+    noneOption.hidden = !canDisable;
+    if (!canDisable && input.value === "none") {
       input.value = "";
     }
   }
-  input.disabled = !["deepseek", "zhipu"].includes(provider);
+  Array.from(input.options || []).forEach((option) => {
+    if (!["low", "high", "max"].includes(option.value)) {
+      return;
+    }
+    option.disabled = !supportsStrength;
+    option.hidden = !supportsStrength;
+    if (!supportsStrength && input.value === option.value) {
+      input.value = "";
+    }
+  });
+  input.disabled = !canDisable && !supportsStrength;
 }
 
 function showChatApiProviderDraft(provider) {
@@ -4396,13 +4101,21 @@ function createAssistantPickerTile(assistantCard, state) {
 
   const title = document.createElement("h4");
   const assistantName = getAssistantCardName(assistantCard);
-  title.textContent = state.activeAssistantMode === assistantCard?.id
-    ? `${assistantName}（目前使用）`
-    : assistantName;
+  const assistantNameText = document.createElement("span");
+  assistantNameText.dataset.uiLanguageSkip = "true";
+  assistantNameText.textContent = assistantName;
+  title.appendChild(assistantNameText);
+  if (state.activeAssistantMode === assistantCard?.id) {
+    title.append("（目前使用）");
+  }
 
   const intro = document.createElement("p");
   intro.className = "role-picker-intro";
-  intro.textContent = `簡介：${assistantCard?.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION}`;
+  intro.append("簡介：");
+  const assistantDescription = document.createElement("span");
+  assistantDescription.dataset.uiLanguageSkip = "true";
+  assistantDescription.textContent = assistantCard?.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
+  intro.appendChild(assistantDescription);
 
   const content = document.createElement("p");
   content.className = "role-picker-content";
@@ -4451,17 +4164,29 @@ function createRoleCardPickerTile(card, state) {
   }
 
   const title = document.createElement("h4");
-  title.textContent = state.activeRoleCardId === card.id
-    ? `${card.name || "未命名角色卡"}（目前使用）`
-    : card.name || "未命名角色卡";
+  const roleCardName = document.createElement("span");
+  roleCardName.dataset.uiLanguageSkip = "true";
+  roleCardName.textContent = card.name || getUiLanguageText("未命名角色卡");
+  title.appendChild(roleCardName);
+  if (state.activeRoleCardId === card.id) {
+    title.append("（目前使用）");
+  }
 
   const intro = document.createElement("p");
   intro.className = "role-picker-intro";
-  intro.textContent = `簡介：${truncateText(buildRoleCardIntro(card, state) || "未填簡介", 120)}`;
+  intro.append("簡介：");
+  const roleCardIntro = document.createElement("span");
+  roleCardIntro.dataset.uiLanguageSkip = "true";
+  roleCardIntro.textContent = truncateText(buildRoleCardIntro(card, state) || getUiLanguageText("未填簡介"), 120);
+  intro.appendChild(roleCardIntro);
 
   const content = document.createElement("p");
   content.className = "role-picker-content";
-  content.textContent = `內容：${truncateText(buildRoleCardContent(card, state), 190)}`;
+  content.append("內容：");
+  const roleCardContent = document.createElement("span");
+  roleCardContent.dataset.uiLanguageSkip = "true";
+  roleCardContent.textContent = truncateText(buildRoleCardContent(card, state), 190);
+  content.appendChild(roleCardContent);
 
   const actions = document.createElement("div");
   actions.className = "role-picker-actions";
@@ -4513,6 +4238,7 @@ function renderSessionPreviewPlaceholder(message = "尚未選擇存檔。") {
   selectedSessionPreviewId = "";
   selectedSessionPreview = null;
   if (el.sessionPreviewTitle) {
+    delete el.sessionPreviewTitle.dataset.uiLanguageSkip;
     el.sessionPreviewTitle.textContent = "存檔預覽";
   }
   if (el.sessionPreviewMeta) {
@@ -4595,6 +4321,7 @@ function createSessionBook(session, index) {
 
   const title = document.createElement("strong");
   title.className = "session-book-title";
+  title.dataset.uiLanguageSkip = "true";
   title.textContent = session.name || "未命名存檔";
 
   const meta = document.createElement("span");
@@ -4610,14 +4337,20 @@ function renderSessionPreview(session = {}) {
   selectedSessionPreviewId = session.id || "";
   selectedSessionPreview = session;
   if (el.sessionPreviewTitle) {
+    el.sessionPreviewTitle.dataset.uiLanguageSkip = "true";
     el.sessionPreviewTitle.textContent = session.name || "存檔預覽";
   }
   if (el.sessionPreviewMeta) {
     const updatedText = session.updatedAt
       ? new Date(session.updatedAt).toLocaleString("zh-Hant")
       : "未知時間";
-    el.sessionPreviewMeta.textContent =
-      `${getSessionRoleCardLabel(session)}｜${conversation.length} 則訊息｜${updatedText}`;
+    const roleName = document.createElement("span");
+    roleName.dataset.uiLanguageSkip = "true";
+    roleName.textContent = getSessionRoleCardLabel(session);
+    el.sessionPreviewMeta.replaceChildren(
+      roleName,
+      `｜${conversation.length} 則訊息｜${updatedText}`
+    );
   }
   if (el.sessionPreviewActions) {
     el.sessionPreviewActions.hidden = false;
@@ -4642,7 +4375,15 @@ function renderSessionPreview(session = {}) {
     const header = document.createElement("div");
     header.className = "session-preview-message-header";
     const author = document.createElement("strong");
-    author.textContent = `#${index + 1} ${message.role === "assistant" ? getSessionRoleCardLabel(session) : "使用者"}`;
+    author.append(`#${index + 1} `);
+    if (message.role === "assistant") {
+      const authorName = document.createElement("span");
+      authorName.dataset.uiLanguageSkip = "true";
+      authorName.textContent = getSessionRoleCardLabel(session);
+      author.appendChild(authorName);
+    } else {
+      author.append("使用者");
+    }
     const timestamp = document.createElement("span");
     timestamp.textContent = message.createdAt ? formatMessageTimestamp(message.createdAt) : "";
     header.append(author, timestamp);
@@ -5125,7 +4866,7 @@ function getChatInputPlaceholder(state = appState, display = getWebDisplayConfig
     state?.aiSessionStarted && (state.activeRoleCardId || isAssistantActive(state))
   );
   if (!hasConversationTarget) {
-    return isMobileLayout() ? "請先選擇角色卡" : "請先選擇角色卡或啟用助手";
+    return isMobileLayout() ? "請先選擇卡" : "請先選擇卡或啟用助手";
   }
   return isMobileLayout() ? "輸入訊息" : `傳送訊息給 ${display.aiName || "AI"}`;
 }
@@ -5142,7 +4883,7 @@ function renderChatHeader(state = appState) {
           activeCard?.name ? `角色卡：${activeCard.name}` : isAssistantActive(state) ? getActiveAssistantName(state) : "對話已開始",
           state?.discord?.connected ? "Discord 已連線" : "本地對話"
         ].filter(Boolean).join("｜")
-      : "選擇角色卡後開始對話";
+      : "選擇卡後開始對話";
   }
   if (el.chatHeaderAvatar) {
     el.chatHeaderAvatar.innerHTML = "";
@@ -5196,6 +4937,7 @@ function renderMessages(state, options = {}) {
 
     const name = document.createElement("span");
     name.className = "discord-message-author";
+    name.dataset.uiLanguageSkip = "true";
     name.textContent = author.name;
 
     header.appendChild(name);
@@ -7416,11 +7158,11 @@ function getSelectedRoleCardOpeningDialogue(dialogues = []) {
   return dialogues.find((entry) => entry.id === selectedRoleCardOpeningId)?.content || dialogues[0]?.content || "";
 }
 
-function collectRoleCardLorebookDraftsFromEditor() {
-  if (!el.roleCardLorebookList) {
+function collectLorebookDraftsFromEditor(container) {
+  if (!container) {
     return [];
   }
-  return Array.from(el.roleCardLorebookList.querySelectorAll("[data-lorebook-id]"))
+  return Array.from(container.querySelectorAll("[data-lorebook-id]"))
     .map((item) => ({
       id: item.dataset.lorebookId || "",
       expanded: Boolean(item.open),
@@ -7439,6 +7181,10 @@ function collectRoleCardLorebookDraftsFromEditor() {
     .map((item) => normalizeRoleCardLorebookEntry(item));
 }
 
+function collectRoleCardLorebookDraftsFromEditor() {
+  return collectLorebookDraftsFromEditor(el.roleCardLorebookList);
+}
+
 function collectRoleCardLorebooksFromEditor() {
   return collectRoleCardLorebookDraftsFromEditor()
     .filter((item) => {
@@ -7446,22 +7192,34 @@ function collectRoleCardLorebooksFromEditor() {
     });
 }
 
-function renderRoleCardLorebookEditor(entries = []) {
-  if (!el.roleCardLorebookList) {
+function collectGlobalLorebookEntriesFromEditor() {
+  return collectLorebookDraftsFromEditor(el.globalLorebookList)
+    .filter((item) => {
+      return item.key || item.content || item.keywords.length > 0 || item.secondaryKeywords.length > 0;
+    });
+}
+
+function renderLorebookEditor(container, entries = [], onChange = () => {}) {
+  if (!container) {
     return;
   }
-  roleCardLorebooksDraft = (Array.isArray(entries) ? entries : []).map((entry) => normalizeRoleCardLorebookEntry(entry));
-  el.roleCardLorebookList.innerHTML = "";
+  const drafts = (Array.isArray(entries) ? entries : []).map((entry) => normalizeRoleCardLorebookEntry(entry));
+  onChange(drafts);
+  container.innerHTML = "";
 
-  if (roleCardLorebooksDraft.length === 0) {
+  if (drafts.length === 0) {
     const empty = document.createElement("p");
     empty.className = "form-hint";
     empty.textContent = "尚未建立世界書條目。";
-    el.roleCardLorebookList.appendChild(empty);
+    container.appendChild(empty);
     return;
   }
 
-  roleCardLorebooksDraft.forEach((entry, index) => {
+  const rerender = (nextEntries) => {
+    renderLorebookEditor(container, nextEntries, onChange);
+  };
+
+  drafts.forEach((entry, index) => {
     const item = document.createElement("details");
     item.className = "role-card";
     item.dataset.lorebookId = entry.id;
@@ -7486,10 +7244,10 @@ function renderRoleCardLorebookEditor(entries = []) {
     enabledBtn.textContent = entry.enabled !== false ? "啟用" : "停用";
     enabledBtn.addEventListener("click", (event) => {
       event.preventDefault();
-      roleCardLorebooksDraft = collectRoleCardLorebookDraftsFromEditor().map((item) =>
+      const nextEntries = collectLorebookDraftsFromEditor(container).map((item) =>
         item.id === entry.id ? { ...item, enabled: item.enabled === false } : item
       );
-      renderRoleCardLorebookEditor(roleCardLorebooksDraft);
+      rerender(nextEntries);
     });
 
     const editBtn = document.createElement("button");
@@ -7498,10 +7256,10 @@ function renderRoleCardLorebookEditor(entries = []) {
     editBtn.textContent = entry.expanded ? "收合" : "編輯";
     editBtn.addEventListener("click", (event) => {
       event.preventDefault();
-      roleCardLorebooksDraft = collectRoleCardLorebookDraftsFromEditor().map((item) =>
+      const nextEntries = collectLorebookDraftsFromEditor(container).map((item) =>
         item.id === entry.id ? { ...item, expanded: !item.expanded } : item
       );
-      renderRoleCardLorebookEditor(roleCardLorebooksDraft);
+      rerender(nextEntries);
     });
 
     const deleteBtn = document.createElement("button");
@@ -7510,20 +7268,19 @@ function renderRoleCardLorebookEditor(entries = []) {
     deleteBtn.textContent = "刪除";
     deleteBtn.addEventListener("click", (event) => {
       event.preventDefault();
-      roleCardLorebooksDraft = collectRoleCardLorebookDraftsFromEditor().filter((item) => item.id !== entry.id);
-      renderRoleCardLorebookEditor(roleCardLorebooksDraft);
+      rerender(collectLorebookDraftsFromEditor(container).filter((item) => item.id !== entry.id));
     });
 
     header.append(title, enabledBtn, editBtn, deleteBtn);
 
     const enabledLabel = document.createElement("label");
+    enabledLabel.className = "hidden";
     enabledLabel.textContent = "啟用";
     const enabledInput = document.createElement("input");
     enabledInput.type = "checkbox";
     enabledInput.checked = entry.enabled !== false;
     enabledInput.dataset.field = "enabled";
     enabledLabel.prepend(enabledInput);
-    enabledLabel.hidden = true;
 
     const permanentLabel = document.createElement("label");
     permanentLabel.className = "checkbox-label";
@@ -7593,7 +7350,19 @@ function renderRoleCardLorebookEditor(entries = []) {
     );
 
     item.append(header, editor);
-    el.roleCardLorebookList.appendChild(item);
+    container.appendChild(item);
+  });
+}
+
+function renderRoleCardLorebookEditor(entries = []) {
+  renderLorebookEditor(el.roleCardLorebookList, entries, (drafts) => {
+    roleCardLorebooksDraft = drafts;
+  });
+}
+
+function renderGlobalLorebookEditor(entries = []) {
+  renderLorebookEditor(el.globalLorebookList, entries, (drafts) => {
+    globalLorebookEntriesDraft = drafts;
   });
 }
 
@@ -7711,29 +7480,13 @@ async function startCharacterCardCreationAssistant() {
 }
 
 async function createAssistantCard() {
-  const name = (window.prompt("新助手名稱", "新助手") || "").trim();
-  if (!name) {
-    return;
-  }
-  try {
-    const payload = await request("/api/assistant-cards", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        description: "自訂助手卡。",
-        prompt: appState?.characterCardCreationAssistantPrompt || ""
-      })
-    });
-    appState = payload?.state || appState;
-    renderRoleCards(appState);
-    renderRoleCardPicker(appState);
-    showToast("助手已建立");
-    if (payload?.assistantCard) {
-      openAssistantPromptDialog(payload.assistantCard);
-    }
-  } catch (error) {
-    showToast(error.message, "error");
-  }
+  await openAssistantPromptDialog({
+    id: "",
+    name: "",
+    description: "自訂助手卡。",
+    openingDialogue: "",
+    prompt: ""
+  }, { create: true });
 }
 
 async function removeAssistantCard(assistantCard) {
@@ -7760,6 +7513,8 @@ async function removeAssistantCard(assistantCard) {
 async function refresh() {
   const state = await request("/api/state", { method: "GET" });
   appState = state;
+  uiLanguageController.setLanguage(normalizeUiLanguage(state.uiLanguage));
+  updateUiLanguageToggleButton();
   pendingRoleCardStartId = "";
   applyWebDisplaySettings(state);
 
@@ -7940,14 +7695,54 @@ function normalizeTimeTrackingWordListForEditor(value = "") {
     .filter(Boolean);
 }
 
-function getTimeTrackingDialogPayload() {
+function getTimeTrackingPointFromEditor() {
   return {
-    enabled: Boolean(el.timeTrackingEnabled?.checked),
     currentDayNumber: Math.max(1, Math.floor(Number(el.timeTrackingDayNumber?.value || 1))),
     currentYear: Math.max(1, Math.floor(Number(el.timeTrackingYear?.value || new Date().getFullYear()))),
     currentMonth: Math.max(1, Math.floor(Number(el.timeTrackingMonth?.value || 1))),
     currentDate: Math.max(1, Math.floor(Number(el.timeTrackingDate?.value || 1))),
-    currentPeriod: el.timeTrackingPeriod?.value || "morning",
+    currentPeriod: el.timeTrackingPeriod?.value || "morning"
+  };
+}
+
+function normalizeTimeTrackingStartPointForEditor(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const point = {
+    currentDayNumber: Math.floor(Number(value.currentDayNumber)),
+    currentYear: Math.floor(Number(value.currentYear)),
+    currentMonth: Math.floor(Number(value.currentMonth)),
+    currentDate: Math.floor(Number(value.currentDate)),
+    currentPeriod: TIME_PERIOD_LABELS[value.currentPeriod] ? value.currentPeriod : "morning"
+  };
+  return point.currentDayNumber >= 1 &&
+    point.currentYear >= 1 && point.currentYear <= 9999 &&
+    point.currentMonth >= 1 && point.currentMonth <= 12 &&
+    point.currentDate >= 1 && point.currentDate <= 31
+    ? point
+    : null;
+}
+
+function renderTimeTrackingStartPointDraft() {
+  if (!el.timeTrackingStartPointMeta) {
+    return;
+  }
+  const point = timeTrackingStartPointDraft;
+  el.timeTrackingStartPointMeta.textContent = point
+    ? `全域起點：第${point.currentDayNumber}天${TIME_PERIOD_LABELS[point.currentPeriod]} ${point.currentYear}年${point.currentMonth}月${point.currentDate}日`
+    : "全域起點：未設定，新對話使用系統預設時間";
+  if (el.clearTimeTrackingStartPointBtn) {
+    el.clearTimeTrackingStartPointBtn.disabled = !point;
+  }
+}
+
+function getTimeTrackingDialogPayload() {
+  const currentPoint = getTimeTrackingPointFromEditor();
+  return {
+    enabled: Boolean(el.timeTrackingEnabled?.checked),
+    ...currentPoint,
+    startPoint: timeTrackingStartPointDraft,
     autoPeriod: {
       enabled: Boolean(el.timeTrackingAutoPeriodEnabled?.checked),
       roundsPerPeriod: Math.max(1, Math.floor(Number(el.timeTrackingAutoPeriodRounds?.value || 3)))
@@ -8008,6 +7803,8 @@ function renderTimeTrackingDialog(timeTracking = {}) {
   if (el.timeTrackingAutoPeriodRounds) {
     el.timeTrackingAutoPeriodRounds.value = Math.max(1, Math.floor(Number(autoPeriod.roundsPerPeriod || 3)));
   }
+  timeTrackingStartPointDraft = normalizeTimeTrackingStartPointForEditor(timeTracking.startPoint);
+  renderTimeTrackingStartPointDraft();
   setTextareaWordList(el.timeTrackingPeriodAdvanceWords, config.periodAdvanceWords || []);
   setTextareaWordList(el.timeTrackingNextDayWords, config.nextDayWords || []);
   setTextareaWordList(el.timeTrackingConnectorWords, config.connectorWords || []);
@@ -8027,6 +7824,46 @@ async function openTimeTrackingDialog() {
     el.timeTrackingDialog?.showModal();
   } catch (error) {
     showToast(error.message, "error");
+  }
+}
+
+async function openGlobalLorebookDialog() {
+  try {
+    const payload = await request("/api/global-lorebook", { method: "GET" });
+    const globalLorebook = normalizeGlobalLorebook(payload?.globalLorebook || appState?.globalLorebook);
+    if (appState) {
+      appState.globalLorebook = globalLorebook;
+    }
+    if (el.globalLorebookEnabled) {
+      el.globalLorebookEnabled.checked = globalLorebook.enabled;
+    }
+    renderGlobalLorebookEditor(globalLorebook.entries);
+    el.globalLorebookDialog?.showModal();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function saveGlobalLorebook() {
+  try {
+    const payload = await request("/api/global-lorebook", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: Boolean(el.globalLorebookEnabled?.checked),
+        entries: collectGlobalLorebookEntriesFromEditor()
+      })
+    });
+    const globalLorebook = normalizeGlobalLorebook(payload?.globalLorebook || appState?.globalLorebook);
+    if (appState) {
+      appState.globalLorebook = globalLorebook;
+    }
+    if (el.globalLorebookEnabled) {
+      el.globalLorebookEnabled.checked = globalLorebook.enabled;
+    }
+    renderGlobalLorebookEditor(globalLorebook.entries);
+    showToast(`全局世界書已保存：${globalLorebook.enabled ? "啟用" : "停用"}，${globalLorebook.entries.length} 條`);
+  } catch (error) {
+    showToast(error.message || "全局世界書保存失敗", "error");
   }
 }
 
@@ -8059,17 +7896,23 @@ async function openEnvSettingsDialog() {
   }
 }
 
-async function openAssistantPromptDialog(assistantCardInput = null) {
+async function openAssistantPromptDialog(assistantCardInput = null, options = {}) {
   try {
     const assistantCard = assistantCardInput || getActiveAssistantCard(appState) || getAssistantCardById(appState, CHARACTER_CARD_CREATION_ASSISTANT_MODE);
+    const isCreating = options.create === true;
+    if (el.assistantPromptDialogTitle) {
+      el.assistantPromptDialogTitle.textContent = isCreating ? "建立新助手" : "編輯助手卡";
+    }
     if (el.assistantPromptInput) {
-      el.assistantPromptInput.value = assistantCard?.prompt || appState?.characterCardCreationAssistantPrompt || "";
+      el.assistantPromptInput.value = isCreating
+        ? assistantCard?.prompt || ""
+        : assistantCard?.prompt || appState?.characterCardCreationAssistantPrompt || "";
     }
     if (el.assistantCardId) {
-      el.assistantCardId.value = assistantCard?.id || CHARACTER_CARD_CREATION_ASSISTANT_MODE;
+      el.assistantCardId.value = isCreating ? "" : assistantCard?.id || CHARACTER_CARD_CREATION_ASSISTANT_MODE;
     }
     if (el.assistantCardName) {
-      el.assistantCardName.value = getAssistantCardName(assistantCard);
+      el.assistantCardName.value = isCreating ? assistantCard?.name || "" : getAssistantCardName(assistantCard);
     }
     if (el.assistantCardDescription) {
       el.assistantCardDescription.value = assistantCard?.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
@@ -8084,10 +7927,11 @@ async function openAssistantPromptDialog(assistantCardInput = null) {
 }
 
 async function saveAssistantPrompt() {
-  const assistantId = el.assistantCardId?.value || CHARACTER_CARD_CREATION_ASSISTANT_MODE;
+  const assistantId = el.assistantCardId?.value.trim() || "";
+  const isCreating = !assistantId;
   try {
-    const payload = await request(`/api/assistant-cards/${assistantId}`, {
-      method: "PUT",
+    const payload = await request(isCreating ? "/api/assistant-cards" : `/api/assistant-cards/${assistantId}`, {
+      method: isCreating ? "POST" : "PUT",
       body: JSON.stringify({
         name: el.assistantCardName?.value || DEFAULT_ASSISTANT_CARD_NAME,
         description: el.assistantCardDescription?.value || "",
@@ -8114,7 +7958,10 @@ async function saveAssistantPrompt() {
     }
     renderRoleCards(appState);
     renderRoleCardPicker(appState);
-    showToast("助手卡已保存");
+    if (isCreating) {
+      el.assistantPromptDialog?.close();
+    }
+    showToast(isCreating ? "助手已建立" : "助手卡已保存");
   } catch (error) {
     showToast(error.message, "error");
   }
@@ -8156,57 +8003,57 @@ async function saveModularPromptConfig() {
 }
 
 async function saveDefaults() {
-  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等設定儲存成這台裝置的本機預設嗎？AI 呼叫紀錄、Discord Bot Token、對話 API Key 與目前對話不會保存。")) {
+  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等內容匯出成這台裝置的全局設定嗎？AI 呼叫紀錄、Discord Bot Token、對話 API Key 與目前對話不會保存。")) {
     return;
   }
   try {
     if (el.saveDefaultsBtn) {
       el.saveDefaultsBtn.disabled = true;
-      el.saveDefaultsBtn.textContent = "儲存中...";
+      el.saveDefaultsBtn.textContent = "匯出中...";
     }
     const payload = await request("/api/defaults/save", { method: "POST" });
     appState = payload?.state || appState;
     const defaults = payload?.defaults || {};
-    showToast(`預設已保存：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
+    showToast(`全局設定已匯出：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
   } catch (error) {
-    showToast(error.message || "預設保存失敗", "error");
+    showToast(error.message || "全局設定匯出失敗", "error");
   } finally {
     if (el.saveDefaultsBtn) {
       el.saveDefaultsBtn.disabled = false;
-      el.saveDefaultsBtn.textContent = "儲存預設";
+      el.saveDefaultsBtn.textContent = "匯出當前全局設定";
     }
   }
 }
 
 async function applyDefaults() {
-  if (!window.confirm("要使用本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空。")) {
+  if (!window.confirm("要匯入本機全局設定並覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空。")) {
     return;
   }
   try {
     if (el.useDefaultsBtn) {
       el.useDefaultsBtn.disabled = true;
-      el.useDefaultsBtn.textContent = "套用中...";
+      el.useDefaultsBtn.textContent = "匯入中...";
     }
     const payload = await request("/api/defaults/apply", { method: "POST" });
     appState = payload?.state || appState;
     await refresh();
     const defaults = payload?.defaults || {};
-    showToast(`預設已套用：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
+    showToast(`全局設定已匯入：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
   } catch (error) {
     const message = error.status === 404
-      ? "使用預設 API 尚未載入，請重啟伺服器後再按一次。"
-      : error.message || "預設套用失敗";
+      ? "匯入全局設定 API 尚未載入，請重啟伺服器後再按一次。"
+      : error.message || "全局設定匯入失敗";
     showToast(message, "error");
   } finally {
     if (el.useDefaultsBtn) {
       el.useDefaultsBtn.disabled = false;
-      el.useDefaultsBtn.textContent = "使用預設";
+      el.useDefaultsBtn.textContent = "匯入全局設定";
     }
   }
 }
 
 async function updateDefaults() {
-  if (!window.confirm("要取得目前程式版本隨附的作者預設嗎？這只會替換可供「使用預設」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或目前對話。")) {
+  if (!window.confirm("要取得目前程式版本隨附的作者預設嗎？這只會替換可供「匯入全局設定」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或目前對話。")) {
     return;
   }
   try {
@@ -8470,6 +8317,29 @@ function bindEvents() {
     el.selectRoleCardBtn.addEventListener("click", openRoleCardPicker);
   }
 
+  if (el.globalLorebookBtn) {
+    el.globalLorebookBtn.addEventListener("click", openGlobalLorebookDialog);
+  }
+
+  if (el.globalLorebookForm) {
+    el.globalLorebookForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveGlobalLorebook();
+    });
+  }
+
+  if (el.addGlobalLorebookEntryBtn) {
+    el.addGlobalLorebookEntryBtn.addEventListener("click", () => {
+      globalLorebookEntriesDraft = collectLorebookDraftsFromEditor(el.globalLorebookList);
+      globalLorebookEntriesDraft.push(normalizeRoleCardLorebookEntry({ expanded: true }));
+      renderGlobalLorebookEditor(globalLorebookEntriesDraft);
+    });
+  }
+
+  if (el.closeGlobalLorebookDialog) {
+    el.closeGlobalLorebookDialog.addEventListener("click", () => el.globalLorebookDialog?.close());
+  }
+
   if (el.closeRoleCardPickerBtn) {
     el.closeRoleCardPickerBtn.addEventListener("click", () => el.roleCardPickerDialog.close());
   }
@@ -8527,7 +8397,16 @@ function bindEvents() {
     });
   }
 
-  el.createRoleCardBtn.addEventListener("click", () => openRoleCardDialog(null));
+  if (el.openCreateMenuBtn) {
+    el.openCreateMenuBtn.addEventListener("click", () => el.createMenuDialog?.showModal());
+  }
+  if (el.closeCreateMenuBtn) {
+    el.closeCreateMenuBtn.addEventListener("click", () => el.createMenuDialog?.close());
+  }
+  el.createRoleCardBtn.addEventListener("click", () => {
+    el.createMenuDialog?.close();
+    openRoleCardDialog(null);
+  });
   el.roleCardDialog?.addEventListener("close", () => {
     if (!roleCardDialogReturnToPicker) {
       return;
@@ -8536,10 +8415,16 @@ function bindEvents() {
     openRoleCardPicker();
   });
   if (el.createAssistantCardBtn) {
-    el.createAssistantCardBtn.addEventListener("click", createAssistantCard);
+    el.createAssistantCardBtn.addEventListener("click", () => {
+      el.createMenuDialog?.close();
+      void createAssistantCard();
+    });
   }
   if (el.importRoleCardBtn && el.roleCardImportFile) {
-    el.importRoleCardBtn.addEventListener("click", () => el.roleCardImportFile.click());
+    el.importRoleCardBtn.addEventListener("click", () => {
+      el.createMenuDialog?.close();
+      el.roleCardImportFile.click();
+    });
     el.roleCardImportFile.addEventListener("change", async () => {
       await importRoleCardFromFile(el.roleCardImportFile.files?.[0]);
     });
@@ -8906,7 +8791,6 @@ function bindEvents() {
 
   if (el.openDefaultsMenuBtn) {
     el.openDefaultsMenuBtn.addEventListener("click", () => {
-      el.otherActionsDialog?.close();
       el.defaultsMenuDialog?.showModal();
     });
   }
@@ -8914,7 +8798,6 @@ function bindEvents() {
   if (el.closeDefaultsMenuBtn) {
     el.closeDefaultsMenuBtn.addEventListener("click", () => {
       el.defaultsMenuDialog?.close();
-      el.otherActionsDialog?.showModal();
     });
   }
 
@@ -8990,6 +8873,22 @@ function bindEvents() {
     el.closeTimeTrackingDialog.addEventListener("click", () => el.timeTrackingDialog.close());
   }
 
+  if (el.setTimeTrackingStartPointBtn) {
+    el.setTimeTrackingStartPointBtn.addEventListener("click", () => {
+      timeTrackingStartPointDraft = getTimeTrackingPointFromEditor();
+      renderTimeTrackingStartPointDraft();
+      showToast("已設為全域起點，請保存統計判斷");
+    });
+  }
+
+  if (el.clearTimeTrackingStartPointBtn) {
+    el.clearTimeTrackingStartPointBtn.addEventListener("click", () => {
+      timeTrackingStartPointDraft = null;
+      renderTimeTrackingStartPointDraft();
+      showToast("已清除固定起點，請保存統計判斷");
+    });
+  }
+
   if (el.cancelEnvSettingsDialog) {
     el.cancelEnvSettingsDialog.addEventListener("click", () => el.envSettingsDialog.close());
   }
@@ -9020,7 +8919,11 @@ function bindEvents() {
       await testChatApiConnection();
     });
     el.envSettingsForm.addEventListener("input", (event) => {
-      if (isChatApiEnvField(event.target?.dataset?.envKey || "")) {
+      const key = event.target?.dataset?.envKey || "";
+      if (key === "CHAT_API_MODEL") {
+        syncChatApiReasoningField();
+      }
+      if (isChatApiEnvField(key)) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
       }
     });
@@ -9259,6 +9162,7 @@ function bindEvents() {
     el.contextCompressionDialog,
     el.timeTrackingDialog,
     el.envSettingsDialog,
+    el.globalLorebookDialog,
     el.assistantPromptDialog,
     el.modularPromptDialog
   ].forEach((dialog) => bindDialogBackdropClose(dialog, { confirmOnClose: true }));
@@ -9278,6 +9182,7 @@ function bindEvents() {
   bindDialogBackdropClose(el.otherActionsDialog);
   bindDialogBackdropClose(el.defaultsMenuDialog);
   bindDialogBackdropClose(el.novelAiMenuDialog);
+  bindDialogBackdropClose(el.createMenuDialog);
 
 }
 

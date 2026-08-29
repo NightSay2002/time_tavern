@@ -9,7 +9,7 @@
 - 從 `.env` 讀取 `PORT`，沒有就用 `3234`。
 - 檢查系統 `node` 是否至少為 18 且有 npm；不符合時從 Node.js 官方下載最新 24.x LTS 到 `.runtime/node/`。
 - 下載的專案 Node.js 會比對官方 `SHASUMS256.txt`，不符合時停止啟動；不需要管理員權限，也不修改系統 Node.js。
-- 檢查 `node_modules/discord.js`，不存在時執行 `npm install`。
+- 檢查 `node_modules/discord.js` 與 `node_modules/opencc-js` 等必要執行依賴，缺少時執行 `npm install`。
 - 打開 `http://localhost:<PORT>`。
 - 執行 `npm start`。
 
@@ -17,7 +17,7 @@
 
 - 主功能：會。後端先把 `defaults/app-defaults.json` 複製到 `data/app-defaults.json`；沒有 `data/app-state.json` 時，`createDefaultState()` 會讀取本機預設。
 - NovelAI：會。後端先建立 `data/novelai-defaults.json`；`src/public/novelai.js` 在沒有 localStorage draft 時，會呼叫 `/api/novelai/defaults` 讀取本機預設。
-- 啟動器本身不需要呼叫「使用預設」API；預設由 server 與 NovelAI 頁面自動讀取。
+- 啟動器本身不需要呼叫「匯入全局設定」API；預設由 server 與 NovelAI 頁面自動讀取。
 - 缺少可用 Node.js 時，第一次啟動需要連線至 `nodejs.org`；缺少 npm 套件時也需要連線至 npm registry。之後可重用 `.runtime/node/` 與 `node_modules/`。
 
 ## 環境變數
@@ -33,7 +33,7 @@
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
 | `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定保存各供應商先前使用的 Key、模型與 Base URL；目前選中的值仍同步寫入上述 `CHAT_API_*` 欄位。 |
-| `CHAT_API_REASONING_EFFORT` | `high` | 共用思考強度欄位；DeepSeek 空值使用 `high`，也可設為 `none` 關閉思考並啟用 temperature。GLM-5.3 空值使用 API 預設，不接受 `none`。舊版兩個變數仍可讀取。 |
+| `CHAT_API_REASONING_EFFORT` | `high` | 共用思考欄位。DeepSeek 空值使用 `high`；GLM 4.5+、Gemini 2.5 Flash／Flash-Lite，以及支援 `none` 的 GPT-5.1+ 非 Pro 模型可選 `none`。模型不支援時不送關閉參數。關閉後啟用 temperature，且不附帶使用者自訂補充。舊版 provider 專用變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
 | `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改 `max_completion_tokens`。 |
@@ -74,6 +74,20 @@ Provider 預設 base URL：
 
 舊變數如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY` 與 provider 專用 Base URL 仍會讀取；新設定建議統一用 `CHAT_API_*`。
 
+思考模式：
+
+- DeepSeek 支援關閉及 `low`、`high`、`max`；未指定時維持高強度。
+- GLM 4.5 以上可關閉思考；`reasoning_effort` 強度只在 GLM 5.2 以上送出。
+- Gemini OpenAI-compatible API 目前只為 Gemini 2.5 Flash／Flash-Lite 提供可用的 `none`；Gemini 2.5 Pro 與 Gemini 3 不顯示關閉。
+- OpenAI 只在支援 `reasoning_effort: none` 的 GPT-5.1 以上非 Pro 模型顯示關閉；其他模型與自訂 provider 保留 API 預設。
+- 只要目前請求實際解析為 `none`，網頁與 Discord 都不會把「使用者自訂補充」附加到該次模型輸入；使用者原訊息及已存資料不會刪除。
+
+## 介面語言
+
+主頁「其他」中的簡繁切換會保存為全域 `uiLanguage`，同步套用主頁、NovelAI、Storyboard 與 Discord Bot 的系統文字和 Slash 指令說明。完整轉換使用 OpenCC；繁體為 `zh-Hant`，簡體為 `zh-Hans`。
+
+語言切換只處理程式介面與系統提示，不轉換使用者輸入、角色卡、助手、Prompt、AI 輸出、跑圖 Prompt、存檔對話或其他創作資料。載入對話存檔也不會覆蓋語言設定。
+
 GLM 與圖片輸入：
 
 - `glm-5.3` 是文字模型；`glm-5.3-flash` 原生支援文字與圖片。兩者都使用同一個 `CHAT_API_MODEL` 欄位，程式不會因附件自動切換模型。
@@ -91,7 +105,8 @@ GLM 與圖片輸入：
 - 封面可上傳、裁切、移除。
 - 自定義內容支援任意欄位。
 - 開場對話支援多分頁。
-- 世界書會在關鍵字命中時插入正文 Prompt。
+- 單卡世界書會在關鍵字命中時插入正文 Prompt。
+- 角色卡區的「全局世界書」可建立所有角色卡共用的條目；總開關與每條條目均可獨立啟停，觸發規則沿用單卡世界書，助手模式不套用。
 - 支援 SillyTavern JSON、PNG、JPG/JPEG 匯入。
 - 匯出時有封面輸出帶資料 JPG，沒有封面輸出 JSON。
 
@@ -103,13 +118,17 @@ Prompt 與大模型：
 - 觸發動作包含 call api、複製 user 輸入與並行建立圖片。
 - 「建立圖片（並行運作），同時繼續正文」會在背景跑圖並照常生成正文。
 - 「跑圖不跑正文（完全停止正文）」固定只檢查 user 輸入；命中時仍執行本輪所有大模型與背景跑圖，但不呼叫正文、補寫及 assistant 後觸發。
+- 對話觸發的跑圖只放在目前對話暫存，不會加入 NovelAI 收藏。保存對話時會保存該存檔引用的圖片；切卡、重新開始、啟用助手、載入其他存檔或匯入全局設定後，沒有隨存檔保存的舊對話圖片會清除。
 - 保存環境設定時，只有 `NOVELAI_API_TOKEN` 從有值變空白或從空白變有值，才會自動停用或啟用所有 Prompt 跑圖觸發組合；Token 狀態未變時保留 Prompt 內的手動選擇。
 - 單獨大模型可匯出/匯入；模型內容也可匯出。
 
 時間統計：
 
 - 可自動附加當前天數、日期與早中晚。
+- 可把目前天數、年月日及時間段保存為全域起點；之後從網頁啟用角色卡、以及角色卡模式下使用 Discord `/ai_start` 建立的新對話都從該點開始，既有對話不受影響。
+- 助手模式完全不套用統計判斷：不附加時間、不偵測時間詞、不重設時間進度，也不從助手對話快照或助手存檔還原時間。
 - 支援下一天詞、不改詞、早上詞、中午詞、晚上詞。
+- 所有統計判斷詞會自動以繁簡互通方式比對；每個詞只需輸入繁體或簡體其中一種，保存資料仍保留原本輸入字形。
 - 「時間段更改詞」只檢查 user 輸入；命中後會在生成前立即前進一段，早上→中午→晚上→翌日早上。
 - 支援 `3天後` / `三天後` / `第3天`。
 - 自動切換早中晚時，晚上到早上會自動加 1 天。
@@ -119,10 +138,12 @@ Prompt 與大模型：
 
 - 開始角色卡會清空 runtime 對話、重置模型內容、加入開場。
 - 助手卡可設定開場對白；有值時 API 上下文從 `system → assistant 開場 → user` 開始，空白時維持 `system → user`。
+- 建立新助手時依序填寫名稱、簡介、Prompt 與開場對白；Prompt 不會自動帶入寫卡助手內容。
 - 助手模式把 `{{user}}` 當作普通字面內容，不會替換成使用者或角色名稱；角色卡模式維持原有模板替換。
 - 串流生成會先顯示思考/生成過程，正文出現後替換正式內容。
 - `/stop` 或網頁停止按鈕會取消目前生成。
 - 編輯網頁使用者訊息或 Discord 原始訊息時，會刪除後續分支並重新生成。
+- 編輯較早輸入時會回復該回合前的日期、時間段、切換計數、壓縮內容與目前角色劇情狀態；統計判斷的啟用狀態、時間段更改詞、其他關鍵詞、自動切換設定、正文模型、上下文輪數及其他角色卡狀態均保留目前值。
 - 網頁輸入列可預覽及移除待上傳圖片；Discord 私訊與已啟用頻道會讀取訊息中的支援圖片附件。
 
 ## NovelAI 細節
@@ -215,7 +236,7 @@ Discord Developer Portal 設定：
 
 Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 是隨程式發布的預設。第一次啟動會複製到 `data/`；之後 Git 自動更新不會修改使用者的本機預設。
 
-主頁「儲存預設」會寫入 `data/app-defaults.json`，保存：
+主頁「匯出當前全局設定」會寫入 `data/app-defaults.json`，保存：
 
 - 使用者設定
 - 角色卡
@@ -237,8 +258,8 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 
 三個按鈕的差異：
 
-- 「儲存預設」：把目前設定保存成使用者本機預設。
-- 「使用預設」：以本機預設覆蓋目前使用者設定、角色卡、Prompt 與環境設定。
+- 「匯出當前全局設定」：把目前設定保存成使用者本機設定。
+- 「匯入全局設定」：以本機設定覆蓋目前使用者設定、角色卡、Prompt 與環境設定。
 - 「使用作者預設」：把目前程式版本隨附的作者預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或目前對話。
 
 Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`，所以只取得作者預設不會立即套用。
@@ -259,10 +280,12 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | Method | Path | 說明 |
 | --- | --- | --- |
 | `GET` | `/api/state` | 取得主 UI state。 |
+| `GET` / `PUT` | `/api/ui-language` | 讀取或保存全域介面語言。 |
 | `GET` / `PUT` | `/api/env` | 讀取或保存 `.env`。 |
 | `POST` | `/api/chat-api/test` | 測試對話 API。 |
 | `POST` | `/api/restart` | 排程重啟 server。 |
 | `GET` / `PUT` | `/api/time-tracking` | 讀取或保存時間統計。 |
+| `GET` / `PUT` | `/api/global-lorebook` | 讀取或保存所有角色卡共用的全局世界書。 |
 | `GET` / `PUT` | `/api/context-compression` | 讀取或保存模型內容。 |
 | `POST` | `/api/defaults/save` | 保存主功能預設。 |
 | `POST` | `/api/defaults/apply` | 套用主功能預設。 |
@@ -288,6 +311,8 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `GET` / `POST` | `/api/sessions`、`/api/sessions/save` | 列出或建立網頁對話存檔。 |
 | `GET` / `DELETE` | `/api/sessions/:id` | 預覽或刪除網頁對話存檔。 |
 | `POST` | `/api/sessions/:id/load` | 載入存檔的對話專屬狀態；不覆蓋全域角色卡、助手、Prompt 或設定。 |
+| `GET` | `/api/conversation-images/:file` | 讀取目前對話的暫存跑圖。 |
+| `GET` | `/api/sessions/:id/images/:file` | 讀取對話存檔保存的跑圖。 |
 | `POST` | `/api/modular-prompts/:mode/preview` | 預覽 Prompt 模式。 |
 | `PUT` / `DELETE` | `/api/modular-prompts/:mode` | 保存或刪除 Prompt 模式。 |
 
@@ -299,8 +324,10 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/environment.env` | 根目錄 `.env` 的完整本機備份，包含 Token 與 API Key。 |
-| `data/cardstate.json` | 角色卡與助手的獨立資料檔；內容未變更時不重複寫入。 |
+| `data/cardstate.json` | 角色卡、助手與全局世界書的獨立資料檔；內容未變更時不重複寫入。 |
 | `data/saved-sessions/` | 每個網頁對話存檔各自一份對話專屬快照；只保存對話、回合、時間進度、壓縮內容、該角色 runtime 與 AI logs，不保存角色卡、助手、Prompt 或全域設定。 |
+| `data/conversation-images/` | 目前對話跑圖暫存；未被目前對話引用時自動清除。 |
+| `data/saved-session-images/` | 各對話存檔引用的跑圖；刪除該存檔時一併刪除。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
 | `defaults/app-defaults.json` | 可提交的主功能與 Prompt 發布預設。 |
 | `defaults/novelai-defaults.json` | 可提交的 NovelAI 發布預設。 |

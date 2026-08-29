@@ -1,4 +1,10 @@
 import { strToU8, zipSync } from "./vendor/fflate.module.js";
+import {
+  createUiLanguageController,
+  loadServerUiLanguage
+} from "./ui-language.js";
+
+const uiLanguageController = createUiLanguageController();
 
 const MODEL_OPTIONS = [
   ["nai-diffusion-4-5-full", "NAI Diffusion V4.5 Full"],
@@ -454,7 +460,9 @@ function renderReferences(type, items = getReferenceImages(type)) {
     card.dataset.id = item.id;
     card.innerHTML = `<div class="storyboard-reference-header"><img alt=""><span></span><label class="nai-switch"><input data-field="enabled" type="checkbox"> 啟用</label><button type="button" class="nai-danger-button" data-action="remove-reference" data-type="${type}">刪除</button></div><div class="storyboard-reference-controls"><label>Strength<input data-field="strength" type="number" min="-1" max="1" step="0.01"></label>${type === "vibe" ? '<label>Information<input data-field="informationExtracted" type="number" min="0" max="1" step="0.01"></label>' : '<label>Fidelity<input data-field="fidelity" type="number" min="-1" max="1" step="0.01"></label>'}</div>`;
     card.querySelector("img").src = item.image;
-    card.querySelector("span").textContent = item.name || "Reference";
+    const referenceName = card.querySelector("span");
+    referenceName.dataset.uiLanguageSkip = "true";
+    referenceName.textContent = item.name || "Reference";
     card.querySelector("span").title = item.name || "Reference";
     card.querySelector('[data-field="enabled"]').checked = item.enabled !== false;
     card.querySelector('[data-field="strength"]').value = item.strength ?? (type === "vibe" ? 0.6 : 1);
@@ -498,8 +506,15 @@ function nodeById(nodeId) {
 
 function nodeHtml(node) {
   const typeLabel = node.type === "start" ? "START" : node.type === "character" ? "CHARACTER" : "SCENE";
-  const summary = node.type === "character" ? node.prompt : node.type === "scene" ? `${node.imageCount} 張｜${node.prompt || "未填 Prompt"}` : "Storyboard 起點";
-  return `<div class="storyboard-node-card"><div class="storyboard-node-type">${typeLabel}</div><div class="storyboard-node-title" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</div><div class="storyboard-node-summary">${escapeHtml(summary)}</div></div>`;
+  const prompt = node.prompt
+    ? `<span data-ui-language-skip>${escapeHtml(node.prompt)}</span>`
+    : "未填 Prompt";
+  const summary = node.type === "character"
+    ? prompt
+    : node.type === "scene"
+      ? `${node.imageCount} 張｜${prompt}`
+      : "Storyboard 起點";
+  return `<div class="storyboard-node-card"><div class="storyboard-node-type">${typeLabel}</div><div class="storyboard-node-title" data-ui-language-skip title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</div><div class="storyboard-node-summary">${summary}</div></div>`;
 }
 
 function drawflowNodeClass(node) {
@@ -602,6 +617,7 @@ function getCandidateCharacterIds(sceneId, memo = new Map()) {
 function renderSelectedNode() {
   const node = nodeById(selectedNodeId);
   el.inspector.innerHTML = "";
+  el.selectionLabel.toggleAttribute("data-ui-language-skip", Boolean(node));
   el.selectionLabel.textContent = node ? node.name : "未選擇節點";
   if (!node) {
     el.inspector.innerHTML = '<p class="storyboard-empty">在畫布選擇角色或場景以編輯內容。</p>';
@@ -651,7 +667,7 @@ function renderCharacterSettings(scene) {
     row.className = "storyboard-character-row";
     row.dataset.characterId = characterId;
     const manualPosition = storyboard.globalSettings.characterPositionMode === "manual";
-    row.innerHTML = `<div class="storyboard-character-row-title"><strong title="${escapeHtml(character?.name)}">${escapeHtml(character?.name || "角色")}</strong><label class="nai-switch"><input data-character-field="enabled" type="checkbox"> 使用</label></div><label>動作 Prompt<textarea data-character-field="actionPrompt" rows="3"></textarea></label>${manualPosition ? '<div class="storyboard-character-position"><span></span><div class="storyboard-character-position-grid"></div></div>' : '<p class="storyboard-character-auto-position">AI 自動定位</p>'}`;
+    row.innerHTML = `<div class="storyboard-character-row-title"><strong data-ui-language-skip title="${escapeHtml(character?.name)}">${escapeHtml(character?.name || "角色")}</strong><label class="nai-switch"><input data-character-field="enabled" type="checkbox"> 使用</label></div><label>動作 Prompt<textarea data-character-field="actionPrompt" rows="3"></textarea></label>${manualPosition ? '<div class="storyboard-character-position"><span></span><div class="storyboard-character-position-grid"></div></div>' : '<p class="storyboard-character-auto-position">AI 自動定位</p>'}`;
     row.querySelector('[data-character-field="enabled"]').checked = relation.enabled === true;
     row.querySelector('[data-character-field="actionPrompt"]').value = relation.actionPrompt || "";
     if (manualPosition) {
@@ -699,6 +715,7 @@ function openLoopDialog(edge) {
   selectedLoopEdgeId = edge.id;
   const source = nodeById(edge.source);
   const target = nodeById(edge.target);
+  el.loopDialogText.dataset.uiLanguageSkip = "true";
   el.loopDialogText.textContent = `${source?.name || "場景"} → ${target?.name || "場景"}`;
   el.loopRepeatInput.value = edge.returnCount || 0;
   if (!el.loopDialog.open) el.loopDialog.showModal();
@@ -742,7 +759,7 @@ function renderNextScenes(node) {
     const row = document.createElement("div");
     row.className = "storyboard-next-scene-row";
     row.dataset.edgeId = edge.id;
-    row.innerHTML = `<span title="${escapeHtml(nodeById(edge.target)?.name)}">${escapeHtml(nodeById(edge.target)?.name)}</span><button type="button" class="muted" data-edge-order="up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="muted" data-edge-order="down" ${index === edges.length - 1 ? "disabled" : ""}>↓</button>`;
+    row.innerHTML = `<span data-ui-language-skip title="${escapeHtml(nodeById(edge.target)?.name)}">${escapeHtml(nodeById(edge.target)?.name)}</span><button type="button" class="muted" data-edge-order="up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="muted" data-edge-order="down" ${index === edges.length - 1 ? "disabled" : ""}>↓</button>`;
     list.appendChild(row);
   });
   if (!edges.length) list.innerHTML = '<p class="storyboard-empty">尚未連到後續場景。</p>';
@@ -797,9 +814,11 @@ function removeSelectedNode() {
 }
 
 function renderCurrentStoryboard() {
+  el.currentName.toggleAttribute("data-ui-language-skip", Boolean(storyboard));
+  el.currentDescription.toggleAttribute("data-ui-language-skip", Boolean(storyboard?.description));
   el.currentName.textContent = storyboard?.name || "尚未選擇";
   el.currentDescription.textContent = storyboard?.description || "未填簡介";
-  el.openPicker.title = storyboard ? `目前：${storyboard.name}` : "打開 Storyboard 列表";
+  el.openPicker.title = storyboard ? storyboard.name : "打開 Storyboard 列表";
 }
 
 function renderStoryboardPicker() {
@@ -814,7 +833,7 @@ function renderStoryboardPicker() {
     card.className = `storyboard-picker-card${item.id === storyboard?.id ? " is-active" : ""}`;
     card.dataset.storyboardId = item.id;
     const updatedAt = item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-";
-    card.innerHTML = `<div class="storyboard-picker-preview"><strong>${item.sceneCount || 0}</strong><span>Scenes</span></div><h3 title="${escapeHtml(item.name)}">${escapeHtml(item.name || "未命名 Storyboard")}</h3><p class="storyboard-picker-intro">簡介：${escapeHtml(truncate(item.description || "未填簡介", 180))}</p><p class="storyboard-picker-meta">場景 ${item.sceneCount || 0}｜節點 ${item.nodeCount || 0}<br>更新：${escapeHtml(updatedAt)}</p><div class="storyboard-picker-actions"><button type="button" data-picker-action="open">${item.id === storyboard?.id ? "目前使用" : "打開"}</button><button type="button" class="secondary" data-picker-action="export">匯出</button><button type="button" class="nai-danger-button" data-picker-action="delete">刪除</button></div>`;
+    card.innerHTML = `<div class="storyboard-picker-preview"><strong>${item.sceneCount || 0}</strong><span>Scenes</span></div><h3 data-ui-language-skip title="${escapeHtml(item.name)}">${escapeHtml(item.name || "未命名 Storyboard")}</h3><p class="storyboard-picker-intro">簡介：<span data-ui-language-skip>${escapeHtml(truncate(item.description || "未填簡介", 180))}</span></p><p class="storyboard-picker-meta">場景 ${item.sceneCount || 0}｜節點 ${item.nodeCount || 0}<br>更新：${escapeHtml(updatedAt)}</p><div class="storyboard-picker-actions"><button type="button" data-picker-action="open">${item.id === storyboard?.id ? "目前使用" : "打開"}</button><button type="button" class="secondary" data-picker-action="export">匯出</button><button type="button" class="nai-danger-button" data-picker-action="delete">刪除</button></div>`;
     card.querySelector('[data-picker-action="open"]').disabled = item.id === storyboard?.id;
     el.pickerGrid.appendChild(card);
   });
@@ -983,7 +1002,7 @@ function renderRunDetail() {
     const card = document.createElement("article");
     card.className = "storyboard-run-image";
     const round = item.roundCount > 1 ? `｜第 ${item.roundIndex}/${item.roundCount} 輪` : "";
-    card.innerHTML = `<button type="button" data-image-action="view"><img alt="${escapeHtml(item.sceneName)}"></button><span class="storyboard-run-image-scene" title="${escapeHtml(item.sceneName)}${escapeHtml(round)}">${escapeHtml(item.sceneName)}${escapeHtml(round)}</span><span title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span><button type="button" class="secondary" data-image-action="download">下載</button>`;
+    card.innerHTML = `<button type="button" data-image-action="view"><img data-ui-language-skip alt="${escapeHtml(item.sceneName)}"></button><span class="storyboard-run-image-scene" data-ui-language-skip title="${escapeHtml(item.sceneName)}${escapeHtml(round)}">${escapeHtml(item.sceneName)}${escapeHtml(round)}</span><span data-ui-language-skip title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span><button type="button" class="secondary" data-image-action="download">下載</button>`;
     card.dataset.imageId = item.id;
     card.querySelector("img").src = item.imageUrl;
     images.appendChild(card);
@@ -1393,6 +1412,7 @@ function bindEvents() {
     if (field) {
       node[field] = field === "imageCount" ? Math.floor(clamp(event.target.value, 1, 1, 100)) : event.target.value;
       updateNodeCard(node.id);
+      el.selectionLabel.dataset.uiLanguageSkip = "true";
       el.selectionLabel.textContent = node.name;
       markDirty({ render: false });
       return;
@@ -1478,6 +1498,7 @@ function bindEvents() {
 }
 
 async function init() {
+  await loadServerUiLanguage(uiLanguageController);
   populateSelect(el.model, MODEL_OPTIONS);
   populateSelect(el.sampler, SAMPLER_OPTIONS);
   populateSelect(el.noiseSchedule, NOISE_OPTIONS);

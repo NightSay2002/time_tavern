@@ -1,3 +1,5 @@
+import { normalizeChineseTextForMatch } from "./ui-language.js";
+
 function safeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -11,12 +13,12 @@ export function hasActiveConversationTarget(state = {}) {
 }
 
 export function hasTimePeriodAdvanceWord(text = "", words = []) {
-  const normalizedText = safeText(text).normalize("NFKC").toLowerCase();
+  const normalizedText = normalizeChineseTextForMatch(text);
   if (!normalizedText || !Array.isArray(words)) {
     return false;
   }
   return words.some((word) => {
-    const normalizedWord = safeText(word).normalize("NFKC").toLowerCase();
+    const normalizedWord = normalizeChineseTextForMatch(word);
     return normalizedWord && normalizedText.includes(normalizedWord);
   });
 }

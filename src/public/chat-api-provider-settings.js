@@ -74,6 +74,34 @@ export function normalizeChatApiProviderSetting(value = "") {
   return Object.hasOwn(PROVIDER_FIELDS, normalized) ? normalized : "deepseek";
 }
 
+export function canDisableChatApiReasoning(provider = "", model = "") {
+  const normalizedProvider = normalizeChatApiProviderSetting(provider);
+  const normalizedModel = text(model).toLowerCase();
+  if (normalizedProvider === "deepseek") {
+    return true;
+  }
+  if (normalizedProvider === "zhipu") {
+    const match = normalizedModel.match(/^glm-(\d+)(?:[.]([0-9]+))?/u);
+    if (!match) {
+      return false;
+    }
+    const major = Number(match[1]);
+    const minor = Number(match[2] || 0);
+    return major > 4 || (major === 4 && minor >= 5);
+  }
+  if (normalizedProvider === "gemini") {
+    return /^gemini-2[.]5-(?:flash|flash-lite)(?:-|$)/u.test(normalizedModel);
+  }
+  if (normalizedProvider === "openai") {
+    if (/^gpt-5(?:[.]\d+)?-pro(?:-|$)/u.test(normalizedModel)) {
+      return false;
+    }
+    const match = normalizedModel.match(/^gpt-5[.](\d+)(?:-|$)/u);
+    return Boolean(match && Number(match[1]) >= 1);
+  }
+  return false;
+}
+
 export function createChatApiProviderDrafts(parsedEnv = {}) {
   const source = parsedEnv && typeof parsedEnv === "object" ? parsedEnv : {};
   const activeProvider = normalizeChatApiProviderSetting(

@@ -75,7 +75,8 @@ import {
 import {
   buildChatApiRequestBody,
   normalizeChatApiMaxTokensParamName,
-  resolveChatApiReasoningEffort
+  resolveChatApiReasoningEffort,
+  shouldIncludeUserCustomSupplement
 } from "./chat-api-request.js";
 import {
   buildMultimodalMessageContent,
@@ -93,11 +94,32 @@ import {
   validateStoryboard
 } from "./novelai-storyboard.js";
 import { syncEnvironmentBackup } from "./environment-backup.js";
+import {
+  buildResetTimeTrackingProgress,
+  mergeActiveRoleRuntimeState,
+  mergeTimeTrackingProgress
+} from "./narrative-state.js";
+import {
+  localizeSystemText,
+  normalizeChineseTextForMatch,
+  normalizeUiLanguage,
+  UI_LANGUAGE_SIMPLIFIED,
+  UI_LANGUAGE_TRADITIONAL
+} from "./ui-language.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PUBLIC_DIR = path.join(__dirname, "public");
+const OPENCC_BROWSER_MODULE_FILE = path.join(
+  __dirname,
+  "..",
+  "node_modules",
+  "opencc-js",
+  "dist",
+  "esm",
+  "t2cn.js"
+);
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DEFAULTS_DIR = path.join(__dirname, "..", "defaults");
 const ENV_FILE = path.join(__dirname, "..", ".env");
@@ -106,6 +128,8 @@ const APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
+const CURRENT_CONVERSATION_IMAGES_DIR = path.join(DATA_DIR, "conversation-images");
+const SAVED_SESSION_IMAGES_DIR = path.join(DATA_DIR, "saved-session-images");
 const SAVED_SESSION_STORAGE_VERSION = 4;
 const AI_LOG_CONTENT_REFERENCE_MIN_CHARS = 120;
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
@@ -212,11 +236,11 @@ const CHAT_API_COST_PRICING = [
 const DEFAULT_TIME_TRACKING_CONFIG = {
   periodAdvanceWords: [],
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
-  connectorWords: ["來到", "来到", "已經", "已经", "現在", "现在", "到了", "變成", "变成", "已是"],
-  noChangeWords: ["等到", "等一下", "的時候", "的时候"],
-  morningWords: ["早上", "早晨", "清晨", "早餐", "早飯", "早饭", "上午", "天亮"],
-  noonWords: ["中午", "下午", "午餐", "午飯", "午饭", "正午"],
-  eveningWords: ["晚上", "夜晚", "晚餐", "晚飯", "晚饭", "傍晚", "深夜", "夜裡", "夜里"]
+  connectorWords: ["來到", "已經", "現在", "到了", "變成", "已是"],
+  noChangeWords: ["等到", "等一下", "的時候"],
+  morningWords: ["早上", "早晨", "清晨", "早餐", "早飯", "上午", "天亮"],
+  noonWords: ["中午", "下午", "午餐", "午飯", "正午"],
+  eveningWords: ["晚上", "夜晚", "晚餐", "晚飯", "傍晚", "深夜", "夜裡"]
 };
 
 function envText(key, fallback) {
@@ -923,6 +947,25 @@ const DISCORD_GLOBAL_SLASH_COMMANDS = DISCORD_SLASH_COMMANDS.map((command) => ({
   ]
 }));
 
+function localizeDiscordSlashCommands(commands, language = UI_LANGUAGE_TRADITIONAL) {
+  return commands.map((command) => ({
+    ...command,
+    description: localizeSystemText(command.description, language),
+    options: Array.isArray(command.options)
+      ? command.options.map((option) => ({
+        ...option,
+        description: localizeSystemText(option.description, language),
+        choices: Array.isArray(option.choices)
+          ? option.choices.map((choice) => ({
+            ...choice,
+            name: localizeSystemText(choice.name, language)
+          }))
+          : option.choices
+      }))
+      : command.options
+  }));
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -1015,6 +1058,7 @@ function createDefaultTimeTrackingState() {
     currentYear,
     currentMonth: month,
     currentDate: date,
+    startPoint: null,
     autoPeriod: {
       enabled: false,
       roundsPerPeriod: DEFAULT_AUTO_TIME_PERIOD_ROUNDS,
@@ -1034,6 +1078,7 @@ function loadAppDefaults() {
     userProfile: normalizeUserProfile(parsed.userProfile),
     roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
     assistantCards: normalizeAssistantCards(parsed.assistantCards),
+    globalLorebook: normalizeGlobalLorebook(parsed.globalLorebook),
     roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(parsed.roleCardRuntimeState),
     activeRoleCardId: safeText(parsed.activeRoleCardId) || null,
     activeAssistantMode: normalizeAssistantMode(parsed.activeAssistantMode),
@@ -1059,12 +1104,14 @@ function createDefaultState() {
     Object.entries(appDefaults?.roleCardRuntimeState || {}).filter(([cardId]) => validDefaultRoleCardIds.has(cardId))
   );
   return {
+    uiLanguage: normalizeUiLanguage(appDefaults?.uiLanguage),
     userProfile: appDefaults?.userProfile || {
       identityText: "",
       displayName: ""
     },
     roleCards: defaultRoleCards,
     assistantCards: defaultAssistantCards,
+    globalLorebook: normalizeGlobalLorebook(appDefaults?.globalLorebook),
     roleCardRuntimeState: defaultRoleCardRuntimeState,
     activeRoleCardId: defaultActiveAssistantMode ? null : defaultActiveRoleCardId,
     activeAssistantMode: defaultActiveAssistantMode,
@@ -1114,7 +1161,7 @@ function normalizeTimeTrackingWordList(value, fallback = []) {
     .map((item) => safeText(item))
     .filter(Boolean)
     .filter((item) => {
-      const key = item.normalize("NFKC").toLowerCase();
+      const key = normalizeChineseTextForMatch(item);
       if (seen.has(key)) {
         return false;
       }
@@ -1193,6 +1240,29 @@ function normalizeTimeTrackingAutoPeriodConfig(input = {}) {
   };
 }
 
+function normalizeTimeTrackingStartPoint(input = {}) {
+  const source = input && typeof input === "object" ? input : null;
+  if (!source) {
+    return null;
+  }
+  const currentDayNumber = Math.floor(Number(source.currentDayNumber ?? source.dayNumber));
+  const currentYear = Math.floor(Number(source.currentYear ?? source.year));
+  const currentMonth = Math.floor(Number(source.currentMonth ?? source.month));
+  const currentDate = Math.floor(Number(source.currentDate ?? source.date));
+  if (!Number.isFinite(currentDayNumber) || currentDayNumber < 1 ||
+      !Number.isFinite(currentYear) || currentYear < 1 || currentYear > 9999 ||
+      !isValidMonthDate(currentMonth, currentDate, currentYear)) {
+    return null;
+  }
+  return {
+    currentDayNumber,
+    currentPeriod: normalizeTimePeriod(source.currentPeriod || source.period),
+    currentYear,
+    currentMonth,
+    currentDate
+  };
+}
+
 function normalizePendingTimeTrackingTransition(input = {}, fallback = {}) {
   const source = input && typeof input === "object" ? input : {};
   const transitionSource = safeText(source.source);
@@ -1243,6 +1313,7 @@ function normalizeTimeTrackingState(input = {}) {
     currentYear,
     currentMonth: resolvedMonth,
     currentDate: resolvedDate,
+    startPoint: normalizeTimeTrackingStartPoint(source.startPoint || source.globalStartPoint),
     autoPeriod: normalizeTimeTrackingAutoPeriodConfig(source.autoPeriod || source.autoTime || source.autoSwitch),
     config: normalizeTimeTrackingConfig(source.config || source.rules || source),
     updatedAt: safeText(source.updatedAt) || defaults.updatedAt
@@ -1370,25 +1441,22 @@ function resetTimeTrackingProgress(currentState) {
     return;
   }
   const previous = normalizeTimeTrackingState(currentState.timeTracking);
-  currentState.timeTracking = {
-    ...createDefaultTimeTrackingState(),
-    enabled: previous.enabled,
-    autoPeriod: {
-      ...previous.autoPeriod,
-      turnsSinceChange: 0
-    },
-    config: previous.config,
-    updatedAt: nowIso()
-  };
+  currentState.timeTracking = normalizeTimeTrackingState(buildResetTimeTrackingProgress(
+    createDefaultTimeTrackingState(),
+    previous,
+    nowIso()
+  ));
 }
 
-function resetConversationProgress(currentState) {
+function resetConversationProgress(currentState, options = {}) {
   if (!currentState || typeof currentState !== "object") {
     return;
   }
   currentState.conversation = [];
   currentState.turnState = createDefaultTurnState();
-  resetTimeTrackingProgress(currentState);
+  if (options.resetTimeTracking !== false) {
+    resetTimeTrackingProgress(currentState);
+  }
 }
 
 function resetDiscordPlayerAssignments(currentState, channelId = "") {
@@ -1550,6 +1618,7 @@ function extractCardState(currentState) {
       ? currentState.roleCards.map((card) => normalizeRoleCard(card))
       : [],
     assistantCards: normalizeAssistantCards(currentState?.assistantCards),
+    globalLorebook: normalizeGlobalLorebook(currentState?.globalLorebook),
     updatedAt: nowIso()
   };
 }
@@ -1576,6 +1645,7 @@ function loadCardState() {
   return {
     roleCards: Array.isArray(raw.roleCards) ? raw.roleCards.map((card) => normalizeRoleCard(card)) : [],
     assistantCards: normalizeAssistantCards(raw.assistantCards),
+    globalLorebook: raw.globalLorebook ? normalizeGlobalLorebook(raw.globalLorebook) : null,
     updatedAt: safeText(raw.updatedAt) || nowIso()
   };
 }
@@ -1585,7 +1655,8 @@ function persistCardState(currentState) {
   const payload = extractCardState(currentState);
   const comparableContent = JSON.stringify({
     roleCards: payload.roleCards,
-    assistantCards: payload.assistantCards
+    assistantCards: payload.assistantCards,
+    globalLorebook: payload.globalLorebook
   });
   if (comparableContent === lastPersistedCardStateContent && fs.existsSync(CARD_STATE_FILE)) {
     return;
@@ -1616,6 +1687,7 @@ function saveDefaultAppSettings(currentState) {
     userProfile: normalizeUserProfile(currentState?.userProfile),
     roleCards: normalizedRoleCards,
     assistantCards: normalizeAssistantCards(currentState?.assistantCards),
+    globalLorebook: normalizeGlobalLorebook(currentState?.globalLorebook),
     roleCardRuntimeState,
     activeRoleCardId: activeAssistantMode ? null : activeRoleCardId,
     activeAssistantMode,
@@ -1724,6 +1796,7 @@ function applyDefaultAppSettings(currentState) {
   currentState.userProfile = cloneData(defaultState.userProfile, { identityText: "", displayName: "" });
   currentState.roleCards = cloneData(defaultState.roleCards, []).map((card) => normalizeRoleCard(card));
   currentState.assistantCards = normalizeAssistantCards(defaultState.assistantCards);
+  currentState.globalLorebook = normalizeGlobalLorebook(defaultState.globalLorebook);
   currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(defaultState.roleCardRuntimeState);
   currentState.activeRoleCardId = defaultState.activeRoleCardId || null;
   currentState.activeAssistantMode = normalizeAssistantMode(defaultState.activeAssistantMode);
@@ -1840,12 +1913,14 @@ function loadState() {
     const defaults = createDefaultState();
     const merged = {
       ...defaults,
+      uiLanguage: normalizeUiLanguage(parsed.uiLanguage),
       userProfile: normalizeUserProfile({
         ...defaults.userProfile,
         ...(parsed.userProfile || {})
       }),
       roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
       assistantCards: normalizeAssistantCards(parsed.assistantCards),
+      globalLorebook: normalizeGlobalLorebook(parsed.globalLorebook || defaults.globalLorebook),
       roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(parsed.roleCardRuntimeState),
       activeRoleCardId: safeText(parsed.activeRoleCardId) || null,
       activeAssistantMode: normalizeAssistantMode(parsed.activeAssistantMode),
@@ -1871,6 +1946,9 @@ function loadState() {
         ? persistedCardState.roleCards.map((card) => normalizeRoleCard(card))
         : merged.roleCards;
       merged.assistantCards = normalizeAssistantCards(persistedCardState.assistantCards || merged.assistantCards);
+      if (persistedCardState.globalLorebook) {
+        merged.globalLorebook = normalizeGlobalLorebook(persistedCardState.globalLorebook);
+      }
     }
 
     merged.savedSessions = (Array.isArray(parsed.savedSessions) ? parsed.savedSessions : []).map(
@@ -1897,10 +1975,12 @@ function loadState() {
 }
 
 function saveState(state) {
+  state.uiLanguage = normalizeUiLanguage(state.uiLanguage);
   state.turnState = normalizeTurnState(state.turnState, state);
   state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
   state.timeTracking = normalizeTimeTrackingState(state.timeTracking);
   state.assistantCards = normalizeAssistantCards(state.assistantCards);
+  state.globalLorebook = normalizeGlobalLorebook(state.globalLorebook);
   state.modularPromptConfigs = normalizeModularPromptConfigs(state.modularPromptConfigs);
   if (state.activeAssistantMode && !getAssistantCardById(state, state.activeAssistantMode)) {
     state.activeAssistantMode = null;
@@ -1912,6 +1992,7 @@ function saveState(state) {
   const {
     roleCards: _roleCards,
     assistantCards: _assistantCards,
+    globalLorebook: _globalLorebook,
     aiLogs: _aiLogs,
     aiLogContentStore: _aiLogContentStore,
     ...persistedState
@@ -1921,6 +2002,7 @@ function saveState(state) {
     aiLogs: compactedAiLogs.logs,
     aiLogContentStore: compactedAiLogs.contentStore
   });
+  cleanupCurrentConversationImages(state.conversation);
 }
 
 function sendJson(res, status, payload) {
@@ -2126,6 +2208,7 @@ function captureRuntimeSnapshot(currentState) {
     userProfile: cloneData(currentState.userProfile, createDefaultState().userProfile),
     roleCards: cloneData(currentState.roleCards, []).map((card) => normalizeRoleCard(card)),
     assistantCards: normalizeAssistantCards(currentState.assistantCards),
+    globalLorebook: normalizeGlobalLorebook(currentState.globalLorebook),
     roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState),
     activeRoleCardId: currentState.activeRoleCardId || null,
     activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
@@ -2144,16 +2227,17 @@ function captureRuntimeSnapshot(currentState) {
 
 function captureSavedConversationSnapshot(currentState) {
   const activeRoleCardId = safeText(currentState.activeRoleCardId) || null;
+  const activeAssistantMode = normalizeAssistantMode(currentState.activeAssistantMode);
   const roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState);
   return {
     activeRoleCardId,
-    activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
+    activeAssistantMode,
     aiSessionStarted: Boolean(currentState.aiSessionStarted),
     roleCardRuntimeState: activeRoleCardId && roleCardRuntimeState[activeRoleCardId]
       ? { [activeRoleCardId]: roleCardRuntimeState[activeRoleCardId] }
       : {},
     contextCompression: normalizeContextCompressionState(currentState.contextCompression),
-    timeTracking: normalizeTimeTrackingState(currentState.timeTracking),
+    ...(activeAssistantMode ? {} : { timeTracking: normalizeTimeTrackingState(currentState.timeTracking) }),
     discordPlayers: normalizeDiscordPlayerState(currentState.discordPlayers),
     turnState: normalizeTurnState(currentState.turnState, currentState),
     conversation: cloneData(currentState.conversation, []),
@@ -2162,12 +2246,12 @@ function captureSavedConversationSnapshot(currentState) {
 }
 
 function captureNarrativeCheckpoint(currentState) {
+  const activeAssistantMode = normalizeAssistantMode(currentState.activeAssistantMode);
   return {
     activeRoleCardId: currentState.activeRoleCardId || null,
-    activeAssistantMode: normalizeAssistantMode(currentState.activeAssistantMode),
-    conversationSettings: normalizeConversationSettings(currentState.conversationSettings),
+    activeAssistantMode,
     contextCompression: normalizeContextCompressionState(currentState.contextCompression),
-    timeTracking: normalizeTimeTrackingState(currentState.timeTracking),
+    ...(activeAssistantMode ? {} : { timeTracking: normalizeTimeTrackingState(currentState.timeTracking) }),
     roleCardRuntimeState: normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState),
     turnState: normalizeTurnState(currentState.turnState, currentState)
   };
@@ -2175,16 +2259,29 @@ function captureNarrativeCheckpoint(currentState) {
 
 function applyNarrativeCheckpoint(currentState, checkpoint) {
   const source = checkpoint && typeof checkpoint === "object" ? checkpoint : {};
+  const currentTimeTracking = normalizeTimeTrackingState(currentState.timeTracking);
+  const currentRoleCardRuntimeState = normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState);
   currentState.activeRoleCardId = safeText(source.activeRoleCardId) || null;
   currentState.activeAssistantMode = normalizeAssistantMode(source.activeAssistantMode);
   delete currentState.conversationMode;
-  currentState.conversationSettings = normalizeConversationSettings(source.conversationSettings);
   currentState.contextCompression = normalizeContextCompressionState(source.contextCompression);
-  currentState.timeTracking = normalizeTimeTrackingState(source.timeTracking);
+  if (!currentState.activeAssistantMode) {
+    currentState.timeTracking = normalizeTimeTrackingState(mergeTimeTrackingProgress(
+      currentTimeTracking,
+      source.timeTracking && typeof source.timeTracking === "object"
+        ? normalizeTimeTrackingState(source.timeTracking)
+        : null,
+      nowIso()
+    ));
+  }
   if (currentState.activeAssistantMode) {
     currentState.activeRoleCardId = null;
   }
-  currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(source.roleCardRuntimeState);
+  currentState.roleCardRuntimeState = mergeActiveRoleRuntimeState(
+    currentRoleCardRuntimeState,
+    normalizeRoleCardRuntimeStateMap(source.roleCardRuntimeState),
+    currentState.activeRoleCardId
+  );
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
 }
 
@@ -2237,6 +2334,7 @@ function applyRuntimeSnapshot(currentState, snapshot) {
     ? cloneData(source.roleCards, []).map((card) => normalizeRoleCard(card))
     : [];
   currentState.assistantCards = normalizeAssistantCards(source.assistantCards);
+  currentState.globalLorebook = normalizeGlobalLorebook(source.globalLorebook || defaults.globalLorebook);
   currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(source.roleCardRuntimeState);
   const validRoleCardIds = new Set(currentState.roleCards.map((card) => card.id));
   currentState.roleCardRuntimeState = Object.fromEntries(
@@ -2264,7 +2362,9 @@ function applyRuntimeSnapshot(currentState, snapshot) {
 function applySavedConversationSnapshot(currentState, snapshot) {
   const source = snapshot && typeof snapshot === "object" ? snapshot : {};
   const currentTimeTracking = normalizeTimeTrackingState(currentState.timeTracking);
-  const savedTimeTracking = normalizeTimeTrackingState(source.timeTracking);
+  const savedTimeTracking = source.timeTracking && typeof source.timeTracking === "object"
+    ? normalizeTimeTrackingState(source.timeTracking)
+    : null;
   const activeRoleCardId = safeText(source.activeRoleCardId);
   const activeAssistantMode = normalizeAssistantMode(source.activeAssistantMode);
 
@@ -2289,25 +2389,19 @@ function applySavedConversationSnapshot(currentState, snapshot) {
   };
   const currentRoleCardRuntimeState = normalizeRoleCardRuntimeStateMap(currentState.roleCardRuntimeState);
   const savedRoleCardRuntimeState = normalizeRoleCardRuntimeStateMap(source.roleCardRuntimeState);
-  if (currentState.activeRoleCardId) {
-    if (savedRoleCardRuntimeState[currentState.activeRoleCardId]) {
-      currentRoleCardRuntimeState[currentState.activeRoleCardId] = savedRoleCardRuntimeState[currentState.activeRoleCardId];
-    } else {
-      delete currentRoleCardRuntimeState[currentState.activeRoleCardId];
-    }
-  }
-  currentState.roleCardRuntimeState = currentRoleCardRuntimeState;
+  currentState.roleCardRuntimeState = mergeActiveRoleRuntimeState(
+    currentRoleCardRuntimeState,
+    savedRoleCardRuntimeState,
+    currentState.activeRoleCardId
+  );
   currentState.contextCompression = normalizeContextCompressionState(source.contextCompression);
-  currentState.timeTracking = {
-    ...savedTimeTracking,
-    enabled: currentTimeTracking.enabled,
-    autoPeriod: {
-      ...currentTimeTracking.autoPeriod,
-      turnsSinceChange: savedTimeTracking.autoPeriod.turnsSinceChange
-    },
-    config: currentTimeTracking.config,
-    updatedAt: nowIso()
-  };
+  if (!currentState.activeAssistantMode) {
+    currentState.timeTracking = normalizeTimeTrackingState(mergeTimeTrackingProgress(
+      currentTimeTracking,
+      savedTimeTracking,
+      nowIso()
+    ));
+  }
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
   currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
     .map((entry) => normalizeAiLog(entry));
@@ -2327,6 +2421,159 @@ function getSavedSessionDataFilePath(sessionOrId) {
   const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
   ensureSavedSessionsDir();
   return path.join(SAVED_SESSIONS_DIR, getSavedSessionDataFileName(sessionId));
+}
+
+function normalizeConversationImageFileName(value = "") {
+  const fileName = safeText(value);
+  return /^[a-zA-Z0-9_-]+\.(?:png|webp|jpe?g)$/u.test(fileName) ? fileName : "";
+}
+
+function normalizeSavedSessionImageDirectoryName(value = "") {
+  return safeText(value).replace(/[^a-zA-Z0-9_-]/gu, "_") || "unknown";
+}
+
+function ensureCurrentConversationImagesDir() {
+  fs.mkdirSync(CURRENT_CONVERSATION_IMAGES_DIR, { recursive: true });
+}
+
+function getCurrentConversationImageFilePath(fileName = "") {
+  const normalized = normalizeConversationImageFileName(fileName);
+  return normalized ? path.join(CURRENT_CONVERSATION_IMAGES_DIR, normalized) : "";
+}
+
+function getSavedSessionImagesDir(sessionId = "") {
+  return path.join(SAVED_SESSION_IMAGES_DIR, normalizeSavedSessionImageDirectoryName(sessionId));
+}
+
+function getSavedSessionImageFilePath(sessionId = "", fileName = "") {
+  const normalized = normalizeConversationImageFileName(fileName);
+  return normalized ? path.join(getSavedSessionImagesDir(sessionId), normalized) : "";
+}
+
+function decodeConversationImageUrlSegment(value = "") {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return "";
+  }
+}
+
+function parseConversationImageUrl(value = "") {
+  const imageUrl = safeText(value);
+  let match = imageUrl.match(/^\/api\/conversation-images\/([^/?#]+)$/u);
+  if (match) {
+    const fileName = normalizeConversationImageFileName(decodeConversationImageUrlSegment(match[1]));
+    return fileName
+      ? { type: "current", sessionId: "", fileName, filePath: getCurrentConversationImageFilePath(fileName) }
+      : null;
+  }
+  match = imageUrl.match(/^\/api\/sessions\/([^/?#]+)\/images\/([^/?#]+)$/u);
+  if (!match) {
+    return null;
+  }
+  const sessionId = decodeConversationImageUrlSegment(match[1]);
+  const fileName = normalizeConversationImageFileName(decodeConversationImageUrlSegment(match[2]));
+  return fileName
+    ? { type: "session", sessionId, fileName, filePath: getSavedSessionImageFilePath(sessionId, fileName) }
+    : null;
+}
+
+function rewriteConversationImageUrls(value, rewrite, seen = new WeakSet()) {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item) => rewriteConversationImageUrls(item, rewrite, seen));
+    return value;
+  }
+  if (typeof value.imageUrl === "string") {
+    value.imageUrl = rewrite(value.imageUrl);
+  }
+  Object.values(value).forEach((item) => rewriteConversationImageUrls(item, rewrite, seen));
+  return value;
+}
+
+function saveCurrentConversationImage(image = {}) {
+  const parsed = parseImageDataUrl(image.dataUrl || image.imageDataUrl || "");
+  if (!parsed) {
+    throw new Error("對話圖片格式不正確。");
+  }
+  const id = newId("conversation_img");
+  const storedFileName = id + "." + getImageExtensionFromMime(parsed.mimeType);
+  ensureCurrentConversationImagesDir();
+  fs.writeFileSync(getCurrentConversationImageFilePath(storedFileName), parsed.buffer);
+  return {
+    id,
+    fileName: safeText(image.fileName) || storedFileName,
+    mimeType: parsed.mimeType,
+    imageUrl: "/api/conversation-images/" + encodeURIComponent(storedFileName)
+  };
+}
+
+function archiveConversationImagesForSavedSession(snapshot = {}, sessionId = "") {
+  const archivedSnapshot = cloneData(snapshot, {});
+  const targetDir = getSavedSessionImagesDir(sessionId);
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  try {
+    rewriteConversationImageUrls(archivedSnapshot, (imageUrl) => {
+      const reference = parseConversationImageUrl(imageUrl);
+      if (!reference || !fs.existsSync(reference.filePath)) {
+        return imageUrl;
+      }
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.copyFileSync(reference.filePath, getSavedSessionImageFilePath(sessionId, reference.fileName));
+      return "/api/sessions/" + encodeURIComponent(sessionId) + "/images/" + encodeURIComponent(reference.fileName);
+    });
+    return archivedSnapshot;
+  } catch (error) {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function restoreSavedSessionImagesToCurrentConversation(snapshot = {}) {
+  const runtimeSnapshot = cloneData(snapshot, {});
+  rewriteConversationImageUrls(runtimeSnapshot, (imageUrl) => {
+    const reference = parseConversationImageUrl(imageUrl);
+    if (!reference || reference.type !== "session" || !fs.existsSync(reference.filePath)) {
+      return imageUrl;
+    }
+    ensureCurrentConversationImagesDir();
+    fs.copyFileSync(reference.filePath, getCurrentConversationImageFilePath(reference.fileName));
+    return "/api/conversation-images/" + encodeURIComponent(reference.fileName);
+  });
+  return runtimeSnapshot;
+}
+
+function cleanupCurrentConversationImages(conversation = []) {
+  if (!fs.existsSync(CURRENT_CONVERSATION_IMAGES_DIR)) {
+    return;
+  }
+  const referenced = new Set();
+  rewriteConversationImageUrls(conversation, (imageUrl) => {
+    const reference = parseConversationImageUrl(imageUrl);
+    if (reference?.type === "current") {
+      referenced.add(reference.fileName);
+    }
+    return imageUrl;
+  });
+  try {
+    fs.readdirSync(CURRENT_CONVERSATION_IMAGES_DIR, { withFileTypes: true }).forEach((entry) => {
+      if (entry.isFile() && normalizeConversationImageFileName(entry.name) && !referenced.has(entry.name)) {
+        fs.unlinkSync(path.join(CURRENT_CONVERSATION_IMAGES_DIR, entry.name));
+      }
+    });
+  } catch (error) {
+    console.warn("清理未保存的對話圖片失敗：" + (safeText(error?.message) || "未知錯誤"));
+  }
+}
+
+function deleteSavedSessionImages(sessionId = "") {
+  fs.rmSync(getSavedSessionImagesDir(sessionId), { recursive: true, force: true });
 }
 
 function readSavedSessionExternalData(session) {
@@ -2505,7 +2752,10 @@ function getSavedSessionById(currentState, sessionId) {
 function createSavedSessionFromCurrentState(currentState, nameInput = "") {
   const now = nowIso();
   const sessionId = newId("session");
-  const snapshotSource = captureSavedConversationSnapshot(currentState);
+  const snapshotSource = archiveConversationImagesForSavedSession(
+    captureSavedConversationSnapshot(currentState),
+    sessionId
+  );
   const activeRoleCard = currentState.roleCards.find((card) => card.id === currentState.activeRoleCardId);
   const activeAssistant = getAssistantCardById(currentState, currentState.activeAssistantMode);
   const sessionSource = {
@@ -2517,7 +2767,12 @@ function createSavedSessionFromCurrentState(currentState, nameInput = "") {
     updatedAt: now
   };
   const session = createSavedSessionMetadata(sessionSource, snapshotSource, currentState.savedSessions.length);
-  writeSavedSessionExternalData(sessionId, snapshotSource);
+  try {
+    writeSavedSessionExternalData(sessionId, snapshotSource);
+  } catch (error) {
+    deleteSavedSessionImages(sessionId);
+    throw error;
+  }
   currentState.savedSessions.push(session);
   currentState.activeSavedSessionId = null;
   return session;
@@ -2528,7 +2783,10 @@ function loadSavedSessionIntoRuntime(currentState, sessionId) {
   if (!session) {
     return null;
   }
-  applySavedConversationSnapshot(currentState, materializeSavedSessionSnapshot(session));
+  const snapshot = restoreSavedSessionImagesToCurrentConversation(
+    materializeSavedSessionSnapshot(session)
+  );
+  applySavedConversationSnapshot(currentState, snapshot);
   sanitizeImageGenerationCompressionState(currentState);
   currentState.activeSavedSessionId = null;
   return session;
@@ -2548,6 +2806,7 @@ function deleteSavedSession(currentState, sessionId) {
   } catch (error) {
     console.warn(`刪除存檔對話分離檔失敗：${safeText(error?.message) || "未知錯誤"}`);
   }
+  deleteSavedSessionImages(deleted.id);
   currentState.activeSavedSessionId = null;
   return deleted;
 }
@@ -2585,7 +2844,7 @@ function startAssistantCard(currentState, assistantId) {
   currentState.pendingOpeningBroadcast = false;
   currentState.lastDiscordChannelId = "";
   resetDiscordPlayerAssignments(currentState, "");
-  resetConversationProgress(currentState);
+  resetConversationProgress(currentState, { resetTimeTracking: false });
   currentState.roleCardRuntimeState = {};
   resetGeneratedBackendContextPreservingManual(currentState);
   return assistant;
@@ -2626,7 +2885,7 @@ function deleteAssistantCard(currentState, assistantId) {
     currentState.aiSessionStarted = false;
     currentState.pendingOpeningBroadcast = false;
     currentState.lastDiscordChannelId = "";
-    resetConversationProgress(currentState);
+    resetConversationProgress(currentState, { resetTimeTracking: false });
     resetGeneratedBackendContextPreservingManual(currentState);
   }
   return deleted;
@@ -4023,6 +4282,12 @@ function getContentType(filePath) {
   if (filePath.endsWith(".png")) {
     return "image/png";
   }
+  if (filePath.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
   if (filePath.endsWith(".gif")) {
     return "image/gif";
   }
@@ -4319,6 +4584,15 @@ function normalizeRoleCardLorebooks(input) {
     .filter((item) => {
       return item.key && item.content && (item.permanent || item.keywords.length > 0);
     });
+}
+
+function normalizeGlobalLorebook(input) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  return {
+    enabled: source.enabled === true,
+    entries: normalizeRoleCardLorebooks(source.entries || source.lorebooks),
+    updatedAt: safeText(source.updatedAt) || nowIso()
+  };
 }
 
 function normalizeRoleCardCustomSection(input) {
@@ -5198,6 +5472,30 @@ function renderRoleCardWithUser(card, userDisplayName) {
   };
 }
 
+function getRenderedRoleCardLorebookEntries(currentState, activeRoleCard, userDisplayName = "") {
+  const roleCard = renderRoleCardWithUser(activeRoleCard, userDisplayName);
+  const roleCardName = resolveRoleCardDisplayName(activeRoleCard);
+  const globalLorebook = normalizeGlobalLorebook(currentState?.globalLorebook);
+  const globalEntries = globalLorebook.enabled
+    ? globalLorebook.entries.map((entry) => ({
+      ...entry,
+      id: `global:${getLorebookEntryIdentity(entry)}`,
+      key: injectUserPlaceholder(entry.key, userDisplayName, roleCardName),
+      keywords: splitLorebookKeywords(
+        entry.keywords.map((keyword) => injectUserPlaceholder(keyword, userDisplayName, roleCardName))
+      ),
+      secondaryKeywords: splitLorebookKeywords(
+        entry.secondaryKeywords.map((keyword) => injectUserPlaceholder(keyword, userDisplayName, roleCardName))
+      ),
+      content: injectUserPlaceholder(entry.content, userDisplayName, roleCardName)
+    }))
+    : [];
+  return [
+    ...normalizeRoleCardLorebooks(roleCard?.lorebooks),
+    ...globalEntries
+  ];
+}
+
 function getLorebookContextSource(state, runtimeUserName = "", purpose = "reasoner") {
   const latestUser = getLatestUserMessage(state);
   const previousAssistant = getPreviousAssistantMessage(state, latestUser?.id || "");
@@ -5323,8 +5621,7 @@ function resolveTriggeredLorebookEntries(state, activeRoleCard, runtimeUserName 
     return [];
   }
   const resolvedUserName = resolveUserDisplayName(state?.userProfile, runtimeUserName);
-  const roleCard = renderRoleCardWithUser(activeCard, resolvedUserName);
-  const lorebooks = normalizeRoleCardLorebooks(roleCard?.lorebooks);
+  const lorebooks = getRenderedRoleCardLorebookEntries(state, activeCard, resolvedUserName);
   if (lorebooks.length === 0) {
     return [];
   }
@@ -5361,8 +5658,7 @@ function getPermanentRoleCardLorebookEntries(state, activeRoleCard, runtimeUserN
     return [];
   }
   const resolvedUserName = resolveUserDisplayName(state?.userProfile, runtimeUserName);
-  const roleCard = renderRoleCardWithUser(activeCard, resolvedUserName);
-  return normalizeRoleCardLorebooks(roleCard?.lorebooks)
+  return getRenderedRoleCardLorebookEntries(state, activeCard, resolvedUserName)
     .filter((entry) =>
       entry.enabled !== false &&
       isPermanentLorebookEntry(entry) &&
@@ -5467,7 +5763,7 @@ function formatNoRoleAvailableCharacters(roleCard) {
 }
 
 function normalizeTimeMatchText(text = "") {
-  return safeText(text).normalize("NFKC").toLowerCase();
+  return normalizeChineseTextForMatch(text);
 }
 
 function findTimeTrackingWordOccurrences(normalizedText = "", word = "") {
@@ -6176,6 +6472,9 @@ function formatTimeTrackingPromptBlock(currentState = state, options = {}) {
 
 function appendUserIdentityTextToContent(content = "", currentState = state, runtimeUserName = "") {
   const base = safeText(content);
+  if (!shouldIncludeUserCustomSupplement(getChatApiReasoningEffort())) {
+    return base;
+  }
   const identityText = injectTemplatePlaceholders(
     currentState?.userProfile?.identityText,
     createTemplateVariables(currentState, runtimeUserName)
@@ -6272,11 +6571,14 @@ function getUserBaseModelContent(message) {
 
 function getCurrentUserModelContent(message, currentState = state, runtimeUserName = "") {
   const storedModelContent = safeText(message?.modelContent || message?.extra?.modelContent);
+  const includeCustomSupplement = shouldIncludeUserCustomSupplement(
+    getChatApiReasoningEffort()
+  );
   if (message?.preparedModelContent === true && storedModelContent) {
-    return storedModelContent;
+    return includeCustomSupplement ? storedModelContent : stripUserIdentityTextFromContent(storedModelContent);
   }
   if (storedModelContent.includes("【觸發世界書 Lorebooks】") || storedModelContent.includes("【使用者自訂補充】")) {
-    return storedModelContent;
+    return includeCustomSupplement ? storedModelContent : stripUserIdentityTextFromContent(storedModelContent);
   }
   return appendUserIdentityTextToContent(
     appendTriggeredLorebooksToUserContent(
@@ -7425,10 +7727,9 @@ async function sendDiscordModelImageMessage(turnExtra = {}, imageMessage = null,
 
 function saveGeneratedNovelAiImagesForMessage(generatedImages = [], prompt = "") {
   return (Array.isArray(generatedImages) ? generatedImages : []).map((image, index) => {
-    const item = saveNovelAiAlbumItem({
-      imageDataUrl: image.dataUrl,
-      fileName: image.fileName || `model-image-${index + 1}.png`,
-      metadata: image.metadata || {}
+    const item = saveCurrentConversationImage({
+      dataUrl: image.dataUrl,
+      fileName: image.fileName || `model-image-${index + 1}.png`
     });
     return {
       id: item.id,
@@ -7466,20 +7767,27 @@ async function buildModelImageGenerationResult({
     prompt: basePrompt
   };
   const generated = await generateNovelAiImages({ settings });
-  const images = saveGeneratedNovelAiImagesForMessage(generated.images, basePrompt);
   return {
     prompt: basePrompt,
-    images,
     generatedImages: generated.images
   };
 }
 
 async function appendModelImageGenerationMessage(result = {}, context = {}) {
+  if (
+    context.sourceUserMessageId &&
+    !state.conversation.some((message) => message?.id === context.sourceUserMessageId)
+  ) {
+    return null;
+  }
+  const images = result.status === "error"
+    ? []
+    : saveGeneratedNovelAiImagesForMessage(result.generatedImages, result.prompt);
   const message = createModelImageMessage({
     profile: context.profile,
     triggerAction: context.triggerAction,
     turnExtra: context.turnExtra,
-    images: result.images || [],
+    images,
     prompt: result.prompt || "",
     status: result.status || "success",
     detail: result.detail || ""
@@ -7996,6 +8304,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
           runtimeUserName,
           profile,
           triggerAction,
+          sourceUserMessageId: latestUser.id,
           triggeredBy,
           includeLatestAssistant,
           messagesToCompress,
@@ -8466,10 +8775,18 @@ function getChatApiReasoningEffort(envSource = process.env, provider = getChatAp
   const normalizedProvider = normalizeChatApiProvider(provider);
   const settingKeys = normalizedProvider === "zhipu"
     ? ["CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"]
-    : ["CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"];
+    : normalizedProvider === "deepseek"
+      ? ["CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"]
+      : ["CHAT_API_REASONING_EFFORT"];
+  const model = envObjectFirstText(
+    envSource,
+    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(normalizedProvider)],
+    DEFAULT_CHAT_API_MODEL
+  );
   return resolveChatApiReasoningEffort(
     normalizedProvider,
-    envObjectFirstText(envSource, settingKeys)
+    envObjectFirstText(envSource, settingKeys),
+    model
   );
 }
 
@@ -10135,6 +10452,7 @@ function statePayload(state) {
 }
 
 let state = loadState();
+cleanupCurrentConversationImages(state.conversation);
 const imageGenerationCompressionStateSanitized = sanitizeImageGenerationCompressionState(state);
 if (savedSessionStorageMigrated || imageGenerationCompressionStateSanitized) {
   saveState(state);
@@ -10149,6 +10467,14 @@ const DISCORD_ARCHIVE_REPLAY_TTL_MS = 30 * 60 * 1000;
 let restartScheduled = false;
 let stateWriteQueue = Promise.resolve();
 const novelAiVibeEncodeCache = new Map();
+
+function getUiLanguage() {
+  return normalizeUiLanguage(state?.uiLanguage || UI_LANGUAGE_TRADITIONAL);
+}
+
+function discordSystemText(value = "") {
+  return localizeSystemText(value, getUiLanguage());
+}
 
 function clearDiscordLoginRetryTimer() {
   if (!discordLoginRetryTimer) {
@@ -10829,6 +11155,30 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/ui-language" && method === "GET") {
+      sendJson(res, 200, { language: getUiLanguage() });
+      return;
+    }
+
+    if (pathname === "/api/ui-language" && method === "PUT") {
+      const body = await readBody(req);
+      const requestedLanguage = safeText(body?.language);
+      if (![UI_LANGUAGE_TRADITIONAL, UI_LANGUAGE_SIMPLIFIED].includes(requestedLanguage)) {
+        sendJson(res, 400, { error: "language 只接受 zh-Hant 或 zh-Hans。" });
+        return;
+      }
+      const language = normalizeUiLanguage(requestedLanguage);
+      await withStateLock(async () => {
+        state.uiLanguage = language;
+        saveState(state);
+      });
+      sendJson(res, 200, { language });
+      if (activeDiscordClient?.isReady?.()) {
+        void registerSlashCommands(activeDiscordClient);
+      }
+      return;
+    }
+
     if (pathname === "/api/env" && method === "GET") {
       sendJson(res, 200, {
         content: readEnvFileContentForEditor(),
@@ -11155,6 +11505,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/global-lorebook" && method === "GET") {
+      sendJson(res, 200, {
+        globalLorebook: normalizeGlobalLorebook(state.globalLorebook)
+      });
+      return;
+    }
+
+    if (pathname === "/api/global-lorebook" && method === "PUT") {
+      const body = await readBody(req);
+      state.globalLorebook = normalizeGlobalLorebook({
+        enabled: body?.enabled === true,
+        entries: body?.entries,
+        updatedAt: nowIso()
+      });
+      saveState(state);
+      sendJson(res, 200, {
+        globalLorebook: state.globalLorebook
+      });
+      return;
+    }
+
     if (pathname === "/api/character-card-creation-assistant-prompt" && method === "GET") {
       sendJson(res, 200, {
         prompt: getCharacterCardCreationAssistantPrompt(),
@@ -11222,6 +11593,48 @@ const server = http.createServer(async (req, res) => {
         mode: result.mode,
         state: statePayload(state)
       });
+      return;
+    }
+
+    const currentConversationImageMatch = pathname.match(/^\/api\/conversation-images\/([^/]+)$/u);
+    if (currentConversationImageMatch && method === "GET") {
+      const fileName = normalizeConversationImageFileName(
+        decodeConversationImageUrlSegment(currentConversationImageMatch[1])
+      );
+      const filePath = getCurrentConversationImageFilePath(fileName);
+      if (!filePath || !fs.existsSync(filePath)) {
+        sendJson(res, 404, { error: "對話圖片不存在。" });
+        return;
+      }
+      const stat = fs.statSync(filePath);
+      res.writeHead(200, {
+        "Content-Type": getContentType(filePath),
+        "Content-Length": stat.size,
+        "Cache-Control": "no-store"
+      });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    const savedSessionImageMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/images\/([^/]+)$/u);
+    if (savedSessionImageMatch && method === "GET") {
+      const sessionId = decodeConversationImageUrlSegment(savedSessionImageMatch[1]);
+      const fileName = normalizeConversationImageFileName(
+        decodeConversationImageUrlSegment(savedSessionImageMatch[2])
+      );
+      const session = getSavedSessionById(state, sessionId);
+      const filePath = session ? getSavedSessionImageFilePath(sessionId, fileName) : "";
+      if (!filePath || !fs.existsSync(filePath)) {
+        sendJson(res, 404, { error: "存檔對話圖片不存在。" });
+        return;
+      }
+      const stat = fs.statSync(filePath);
+      res.writeHead(200, {
+        "Content-Type": getContentType(filePath),
+        "Content-Length": stat.size,
+        "Cache-Control": "no-store"
+      });
+      fs.createReadStream(filePath).pipe(res);
       return;
     }
 
@@ -11865,6 +12278,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "GET") {
+      if (pathname === "/vendor/opencc-t2cn.js") {
+        if (!fs.existsSync(OPENCC_BROWSER_MODULE_FILE)) {
+          sendJson(res, 404, { error: "OpenCC browser module is unavailable." });
+          return;
+        }
+        const stat = fs.statSync(OPENCC_BROWSER_MODULE_FILE);
+        const headers = getStaticHeaders(OPENCC_BROWSER_MODULE_FILE, stat);
+        headers["Content-Length"] = String(stat.size);
+        res.writeHead(200, headers);
+        fs.createReadStream(OPENCC_BROWSER_MODULE_FILE).pipe(res);
+        return;
+      }
       const relativePath = pathname === "/"
         ? "index.html"
         : pathname === "/NAI_storyboard" || pathname === "/NAI_storyboard/"
@@ -12422,7 +12847,9 @@ async function startSessionFromDiscord(channelId, userInfo, requestedRoleCardNum
     state.lastDiscordChannelId = channelId;
     resetDiscordPlayerAssignments(state, channelId);
     state.activeSavedSessionId = null;
-    resetConversationProgress(state);
+    resetConversationProgress(state, {
+      resetTimeTracking: !hasActiveAssistantTarget(state)
+    });
     state.roleCardRuntimeState = {};
     resetGeneratedBackendContextPreservingManual(state);
     if (hasActiveAssistantTarget(state)) {
@@ -12477,22 +12904,22 @@ function buildDiscordStatusText() {
   const playerLines = Object.entries(playerState.assignments)
     .map(([userId, slot]) => `${slot}: <@${userId}>`);
   const lines = [
-    `Discord連線: ${discordConnected ? "已連線" : "未連線"}`,
-    "主對話: /ai_start 後，該頻道可直接輸入對話",
-    "玩家座位: /player_set number:2",
-    `AI狀態: ${state.aiSessionStarted ? "已開始" : "未開始"}`,
-    `生成狀態: ${isActiveGenerationRunning() ? "生成中，可用 /stop 停止" : "閒置"}`,
-    `自動對話頻道: ${state.lastDiscordChannelId ? `<#${state.lastDiscordChannelId}>` : "未指定"}`,
-    `對話設定: 正式模式（API輸出模型=${getChatApiModel("reasoner_history_chat")}｜目前模式上下文=${normalizeDialogueContextRounds(activeConfig?.dialogueContextRounds)} 輪｜模型內容=${isContextCompressionEnabled(state) ? "啟用" : "停用"}）`,
-    `目前模式: ${getCurrentConversationTargetLabel(state)}`,
-    `待播開場: ${state.pendingOpeningBroadcast ? "是" : "否"}`,
-    `玩家分配: ${playerLines.length > 0 ? playerLines.join("｜") : "尚未分配"}`
+    `${discordSystemText("Discord連線: ")}${discordSystemText(discordConnected ? "已連線" : "未連線")}`,
+    discordSystemText("主對話: /ai_start 後，該頻道可直接輸入對話"),
+    discordSystemText("玩家座位: /player_set number:2"),
+    `${discordSystemText("AI狀態: ")}${discordSystemText(state.aiSessionStarted ? "已開始" : "未開始")}`,
+    `${discordSystemText("生成狀態: ")}${discordSystemText(isActiveGenerationRunning() ? "生成中，可用 /stop 停止" : "閒置")}`,
+    `${discordSystemText("自動對話頻道: ")}${state.lastDiscordChannelId ? `<#${state.lastDiscordChannelId}>` : discordSystemText("未指定")}`,
+    `${discordSystemText("對話設定: 正式模式（API輸出模型=")}${getChatApiModel("reasoner_history_chat")}${discordSystemText("｜目前模式上下文=")}${normalizeDialogueContextRounds(activeConfig?.dialogueContextRounds)}${discordSystemText(" 輪｜模型內容=")}${discordSystemText(isContextCompressionEnabled(state) ? "啟用" : "停用")}${discordSystemText("）")}`,
+    `${discordSystemText("目前模式: ")}${getCurrentConversationTargetLabel(state)}`,
+    `${discordSystemText("待播開場: ")}${discordSystemText(state.pendingOpeningBroadcast ? "是" : "否")}`,
+    `${discordSystemText("玩家分配: ")}${playerLines.length > 0 ? playerLines.join("｜") : discordSystemText("尚未分配")}`
   ];
   return lines.join("\n");
 }
 
 async function sendDiscordRoleCardBrowser(interaction) {
-  const payload = buildDiscordRoleCardBrowserPayload(state, getInitialDiscordRoleCardNumber(state));
+  const payload = buildDiscordRoleCardBrowserPayload(state, getInitialDiscordRoleCardNumber(state), getUiLanguage());
   await interaction.reply({
     ...payload,
     flags: MessageFlags.Ephemeral
@@ -12504,14 +12931,14 @@ async function handleDiscordRoleCardBrowserButton(interaction) {
   if (roleCardNumber === null) {
     return false;
   }
-  await interaction.update(buildDiscordRoleCardBrowserPayload(state, roleCardNumber));
+  await interaction.update(buildDiscordRoleCardBrowserPayload(state, roleCardNumber, getUiLanguage()));
   return true;
 }
 
 function getDiscordArchiveBrowserPayload(sessionId = "") {
   const ordered = getDiscordArchiveSessionsNewestFirst(state.savedSessions);
   if (!ordered.length) {
-    return buildDiscordArchiveBrowserPayload({ sessions: [] });
+    return buildDiscordArchiveBrowserPayload({ sessions: [], language: getUiLanguage() });
   }
   const requestedId = safeText(sessionId);
   const session = ordered.find((item) => safeText(item?.id) === requestedId) || ordered[0];
@@ -12519,7 +12946,8 @@ function getDiscordArchiveBrowserPayload(sessionId = "") {
   return buildDiscordArchiveBrowserPayload({
     sessions: state.savedSessions,
     sessionId: session.id,
-    conversation: detail.conversation
+    conversation: detail.conversation,
+    language: getUiLanguage()
   });
 }
 
@@ -12530,7 +12958,7 @@ async function handleDiscordArchiveBrowserButton(interaction) {
   }
   if (!getSavedSessionById(state, sessionId)) {
     await interaction.update({ components: [] });
-    await safeSendInteractionText(interaction, "這個對話存檔已不存在。", { ephemeral: true });
+    await safeSendInteractionText(interaction, discordSystemText("這個對話存檔已不存在。"), { ephemeral: true });
     return true;
   }
   await interaction.update(getDiscordArchiveBrowserPayload(sessionId));
@@ -12628,11 +13056,13 @@ function loadDiscordArchiveIntoCurrentChannel(sessionId, archiveNumber, channelI
 
 function buildDiscordArchiveLoadedHeader(result, mode) {
   const lines = [
-    `**已載入對話存檔 ${result.number}：${safeText(result.session?.name) || "未命名存檔"}**`,
-    mode === 0 ? "以下從開場開始回放；實際對話狀態已位於存檔末端。" : "以下是存檔最後五回合，可以直接繼續對話。"
+    `**${discordSystemText("已載入對話存檔")} ${result.number}：${safeText(result.session?.name) || discordSystemText("未命名存檔")}**`,
+    discordSystemText(mode === 0
+      ? "以下從開場開始回放；實際對話狀態已位於存檔末端。"
+      : "以下是存檔最後五回合，可以直接繼續對話。")
   ];
   if (!result.canContinue) {
-    lines.push("原角色卡或助手已不存在；目前只能回放，請先在網頁重新選擇角色或使用 `/ai_start`。");
+    lines.push(discordSystemText("原角色卡或助手已不存在；目前只能回放，請先在網頁重新選擇角色或使用 `/ai_start`。"));
   }
   return lines.join("\n").trim();
 }
@@ -12651,7 +13081,7 @@ async function handleDiscordArchiveReplayButton(interaction) {
   ) {
     activeDiscordArchiveReplays.delete(token);
     await interaction.update({ components: [] });
-    await safeSendInteractionText(interaction, "這次存檔回放已結束，請重新使用 `/archive_return`。", { ephemeral: true });
+    await safeSendInteractionText(interaction, discordSystemText("這次存檔回放已結束，請重新使用 `/archive_return`。"), { ephemeral: true });
     return true;
   }
 
@@ -12659,18 +13089,18 @@ async function handleDiscordArchiveReplayButton(interaction) {
   if (!session) {
     activeDiscordArchiveReplays.delete(token);
     await interaction.update({ components: [] });
-    await safeSendInteractionText(interaction, "這個對話存檔已不存在。", { ephemeral: true });
+    await safeSendInteractionText(interaction, discordSystemText("這個對話存檔已不存在。"), { ephemeral: true });
     return true;
   }
   const detail = buildSavedSessionDetail(session);
-  const page = buildDiscordArchiveReplayPage(detail.conversation, replay.nextOffset);
-  const components = page.hasMore ? buildDiscordArchiveContinueComponents(token) : [];
+  const page = buildDiscordArchiveReplayPage(detail.conversation, replay.nextOffset, getUiLanguage());
+  const components = page.hasMore ? buildDiscordArchiveContinueComponents(token, getUiLanguage()) : [];
   if (page.hasMore) {
     replay.nextOffset = page.nextOffset;
   } else {
     activeDiscordArchiveReplays.delete(token);
   }
-  const text = page.hasMore ? page.text : `${page.text}\n\n**已到存檔末端。**`;
+  const text = page.hasMore ? page.text : `${page.text}\n\n**${discordSystemText("已到存檔末端。")}**`;
   await sendDiscordArchivePublicChunks(interaction, text, components, { fromButton: true });
   return true;
 }
@@ -12830,12 +13260,12 @@ async function processDiscordChatTurn({
 
 async function handleDiscordChat(message, userContent) {
   if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-    await message.reply("尚未開始。請先在網頁選擇角色卡或啟用助手，再使用對話。");
+    await message.reply(discordSystemText("尚未開始。請先在網頁選擇角色卡或啟用助手，再使用對話。"));
     return;
   }
   const chatInput = await buildDiscordChatInput(userContent, message.attachments);
   if (!chatInput.content) {
-    await message.reply("請輸入對話內容，或附加 .txt／圖片檔。支援 PNG、JPEG、WebP 與 GIF。");
+    await message.reply(discordSystemText("請輸入對話內容，或附加 .txt／圖片檔。支援 PNG、JPEG、WebP 與 GIF。"));
     return;
   }
 
@@ -12867,8 +13297,12 @@ async function registerSlashCommands(discordClient) {
     return;
   }
 
+  const language = getUiLanguage();
+  const globalCommands = localizeDiscordSlashCommands(DISCORD_GLOBAL_SLASH_COMMANDS, language);
+  const guildCommands = localizeDiscordSlashCommands(DISCORD_SLASH_COMMANDS, language);
+
   try {
-    await app.commands.set(DISCORD_GLOBAL_SLASH_COMMANDS);
+    await app.commands.set(globalCommands);
     console.log("Slash 指令已註冊到全域應用程式");
   } catch (error) {
     console.error("全域 Slash 指令註冊失敗：", error);
@@ -12891,7 +13325,7 @@ async function registerSlashCommands(discordClient) {
   for (const guildId of guildIds) {
     try {
       const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId);
-      await guild.commands.set(DISCORD_SLASH_COMMANDS);
+      await guild.commands.set(guildCommands);
       registeredGuilds += 1;
     } catch (error) {
       if (error?.code === 10004) {
@@ -12954,7 +13388,7 @@ async function sendDiscordUserInstallWelcome(authorization) {
   }
   await discordBotApiRequest(`/channels/${dmChannel.id}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content: DISCORD_USER_INSTALL_WELCOME_MESSAGE })
+    body: JSON.stringify({ content: discordSystemText(DISCORD_USER_INSTALL_WELCOME_MESSAGE) })
   });
 }
 
@@ -12987,7 +13421,7 @@ async function findDiscordGuildWelcomeChannel(guild) {
 
 async function welcomeNewDiscordGuild(guild) {
   try {
-    await guild.commands.set(DISCORD_SLASH_COMMANDS);
+    await guild.commands.set(localizeDiscordSlashCommands(DISCORD_SLASH_COMMANDS, getUiLanguage()));
   } catch (error) {
     console.warn(`新 Discord 伺服器 Slash 指令同步失敗（${guild.id}）：${error.message || error}`);
   }
@@ -12997,7 +13431,7 @@ async function welcomeNewDiscordGuild(guild) {
     console.warn(`Discord Bot 已加入伺服器 ${guild.id}，但找不到可發送歡迎訊息的文字頻道。`);
     return;
   }
-  await channel.send(buildDiscordGuildWelcomeMessage(getDiscordClientId()));
+  await channel.send(buildDiscordGuildWelcomeMessage(getDiscordClientId(), getUiLanguage()));
 }
 
 async function handleSlashCommand(interaction) {
@@ -13006,20 +13440,20 @@ async function handleSlashCommand(interaction) {
   if (name === "archive") {
     const action = interaction.options.getInteger("action");
     if (action !== 0 && action !== 1) {
-      await safeSendInteractionText(interaction, "請選擇 0 保存目前對話，或選擇 1 瀏覽存檔。", { ephemeral: true });
+      await safeSendInteractionText(interaction, discordSystemText("請選擇 0 保存目前對話，或選擇 1 瀏覽存檔。"), { ephemeral: true });
       return;
     }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     if (action === 0) {
       const inputName = safeText(interaction.options.getString("name"));
-      const defaultName = `對話存檔 ${new Date().toLocaleString("zh-Hant")}`;
+      const defaultName = `${discordSystemText("對話存檔")} ${new Date().toLocaleString(getUiLanguage() === "zh-Hans" ? "zh-CN" : "zh-Hant")}`;
       const created = await withStateLock(() => {
         const session = createSavedSessionFromCurrentState(state, inputName || defaultName);
         saveState(state);
         return buildSavedSessionSummary(session);
       });
       await interaction.editReply({
-        content: `已保存對話存檔：${created.name}`,
+        content: `${discordSystemText("已保存對話存檔：")}${created.name}`,
         allowedMentions: { parse: [] }
       });
       return;
@@ -13032,7 +13466,7 @@ async function handleSlashCommand(interaction) {
     const mode = interaction.options.getInteger("mode");
     const archiveNumber = interaction.options.getInteger("num");
     if (mode !== 0 && mode !== 1) {
-      await safeSendInteractionText(interaction, "mode 只接受 0 從頭回放，或 1 從最後對話繼續。", { ephemeral: true });
+      await safeSendInteractionText(interaction, discordSystemText("mode 只接受 0 從頭回放，或 1 從最後對話繼續。"), { ephemeral: true });
       return;
     }
     const resolved = getDiscordArchiveByNumber(state.savedSessions, archiveNumber);
@@ -13041,7 +13475,7 @@ async function handleSlashCommand(interaction) {
       const error = total > 0
         ? `找不到存檔 ${archiveNumber}，目前可用編號為 1 至 ${total}。`
         : "目前沒有對話存檔。";
-      await safeSendInteractionText(interaction, error, { ephemeral: true });
+      await safeSendInteractionText(interaction, discordSystemText(error), { ephemeral: true });
       return;
     }
 
@@ -13053,17 +13487,17 @@ async function handleSlashCommand(interaction) {
       interaction.channelId
     ));
     if (!result) {
-      await interaction.editReply("這個對話存檔已不存在。");
+      await interaction.editReply(discordSystemText("這個對話存檔已不存在。"));
       return;
     }
     const header = buildDiscordArchiveLoadedHeader(result, mode);
     if (mode === 1) {
-      const latestPage = buildDiscordArchiveLatestPage(result.conversation);
+      const latestPage = buildDiscordArchiveLatestPage(result.conversation, getUiLanguage());
       await sendDiscordArchivePublicChunks(interaction, `${header}\n\n${latestPage.text}`);
       return;
     }
 
-    const firstPage = buildDiscordArchiveReplayPage(result.conversation, 0);
+    const firstPage = buildDiscordArchiveReplayPage(result.conversation, 0, getUiLanguage());
     const token = firstPage.hasMore
       ? createDiscordArchiveReplay({
         sessionId: result.session.id,
@@ -13072,8 +13506,8 @@ async function handleSlashCommand(interaction) {
         channelId: interaction.channelId
       })
       : "";
-    const components = token ? buildDiscordArchiveContinueComponents(token) : [];
-    const endText = firstPage.hasMore ? "" : "\n\n**已到存檔末端。**";
+    const components = token ? buildDiscordArchiveContinueComponents(token, getUiLanguage()) : [];
+    const endText = firstPage.hasMore ? "" : `\n\n**${discordSystemText("已到存檔末端。")}**`;
     await sendDiscordArchivePublicChunks(
       interaction,
       `${header}\n\n${firstPage.text}${endText}`,
@@ -13089,7 +13523,7 @@ async function handleSlashCommand(interaction) {
       return;
     }
     if (option !== 1) {
-      await safeSendInteractionText(interaction, "請選擇 1 查看狀態，或選擇 2 瀏覽角色卡。", { ephemeral: true });
+      await safeSendInteractionText(interaction, discordSystemText("請選擇 1 查看狀態，或選擇 2 瀏覽角色卡。"), { ephemeral: true });
       return;
     }
     await safeSendInteractionText(interaction, buildDiscordStatusText(), { ephemeral: true });
@@ -13100,7 +13534,7 @@ async function handleSlashCommand(interaction) {
     const stopped = requestStopActiveGeneration();
     await safeSendInteractionText(
       interaction,
-      stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。",
+      discordSystemText(stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"),
       { ephemeral: true }
     );
     return;
@@ -13116,7 +13550,7 @@ async function handleSlashCommand(interaction) {
     });
     await safeSendInteractionText(
       interaction,
-      result.ok ? `已把你設定為 ${result.playerSlot}` : result.error,
+      discordSystemText(result.ok ? `已把你設定為 ${result.playerSlot}` : result.error),
       { ephemeral: true }
     );
     return;
@@ -13128,7 +13562,7 @@ async function handleSlashCommand(interaction) {
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
       await safeSendInteractionText(
         interaction,
-        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
+        discordSystemText("尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。"),
         { ephemeral: true }
       );
       return;
@@ -13167,13 +13601,13 @@ async function handleSlashCommand(interaction) {
     const message = interaction.options.getString("message") || "";
     const built = buildQuickSendContent(templateId, inside, message);
     if (!built.ok) {
-      await safeSendInteractionText(interaction, built.error, { ephemeral: true });
+      await safeSendInteractionText(interaction, discordSystemText(built.error), { ephemeral: true });
       return;
     }
     if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
       await safeSendInteractionText(
         interaction,
-        "尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。",
+        discordSystemText("尚未開始。請先在網頁選擇角色卡或啟用助手，或使用 /ai_start。"),
         { ephemeral: true }
       );
       return;
@@ -13211,7 +13645,7 @@ async function handleSlashCommand(interaction) {
       userName: interaction.user.username
     }, roleCardNumber);
     if (!result.ok) {
-      await interaction.editReply(result.error);
+      await interaction.editReply(discordSystemText(result.error));
       return;
     }
     await sendInteractionLongReply(interaction, result.openingDialogue);
@@ -13361,7 +13795,7 @@ function setupDiscordBot() {
     }
 
     if (isLegacyDiscordTextCommand(message.content)) {
-      await message.reply(LEGACY_DISCORD_TEXT_COMMAND_NOTICE);
+      await message.reply(discordSystemText(LEGACY_DISCORD_TEXT_COMMAND_NOTICE));
       return;
     }
 
@@ -13374,10 +13808,10 @@ function setupDiscordBot() {
       await handleDiscordChat(message, extractedInput);
     } catch (error) {
       if (isGenerationStoppedError(error)) {
-        await message.reply(GENERATION_STOPPED_MESSAGE);
+        await message.reply(discordSystemText(GENERATION_STOPPED_MESSAGE));
         return;
       }
-      await message.reply(`處理失敗：${error.message || "未知錯誤"}`);
+      await message.reply(discordSystemText(`處理失敗：${error.message || "未知錯誤"}`));
     }
   });
 
@@ -13432,7 +13866,7 @@ function setupDiscordBot() {
           [
             [
               "```",
-              "已依照你編輯後的訊息，從該則對話重新開始。",
+              discordSystemText("已依照你編輯後的訊息，從該則對話重新開始。"),
               "```"
             ].filter(Boolean).join("\n"),
             formatAssistantMessageForUserDisplay(result.assistantMessage)
@@ -13444,10 +13878,10 @@ function setupDiscordBot() {
       }
     } catch (error) {
       if (isGenerationStoppedError(error)) {
-        await message.reply(GENERATION_STOPPED_MESSAGE);
+        await message.reply(discordSystemText(GENERATION_STOPPED_MESSAGE));
         return;
       }
-      await message.reply(`編輯後重算失敗：${error.message || "未知錯誤"}`);
+      await message.reply(discordSystemText(`編輯後重算失敗：${error.message || "未知錯誤"}`));
     }
   });
 
@@ -13489,7 +13923,7 @@ function setupDiscordBot() {
       return;
     }
     if (!isAllowedDiscordUser(interaction.user?.id, DISCORD_ALLOWED_USER_ID)) {
-      await safeSendInteractionText(interaction, "你沒有權限使用此 Bot。", { ephemeral: true });
+      await safeSendInteractionText(interaction, discordSystemText("你沒有權限使用此 Bot。"), { ephemeral: true });
       return;
     }
 
@@ -13516,11 +13950,11 @@ function setupDiscordBot() {
         return;
       }
       if (isGenerationStoppedError(error)) {
-        await safeSendInteractionError(interaction, GENERATION_STOPPED_MESSAGE);
+        await safeSendInteractionError(interaction, discordSystemText(GENERATION_STOPPED_MESSAGE));
         return;
       }
       const content = `處理失敗：${error.message || "未知錯誤"}`;
-      await safeSendInteractionError(interaction, content);
+      await safeSendInteractionError(interaction, discordSystemText(content));
     }
   });
 

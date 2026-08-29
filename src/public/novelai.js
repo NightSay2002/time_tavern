@@ -1,4 +1,10 @@
 import { gunzipSync } from "./vendor/fflate.module.js";
+import {
+  createUiLanguageController,
+  loadServerUiLanguage
+} from "./ui-language.js";
+
+const uiLanguageController = createUiLanguageController();
 
 const el = {
   novelAiForm: document.getElementById("novelAiForm"),
@@ -1163,7 +1169,9 @@ function renderFixedPromptSnippets(snippets = novelAiFixedPromptSnippets) {
       <label>名字<input type="text" data-fixed-prompt-field="name" /></label>
       <label>Prompt<textarea rows="3" data-fixed-prompt-field="prompt" placeholder="black dress, white ribbon"></textarea></label>
     `;
-    card.querySelector('[data-fixed-prompt-action="insert"]').textContent = snippet.name || `固定片段 ${index + 1}`;
+    const insertButton = card.querySelector('[data-fixed-prompt-action="insert"]');
+    insertButton.dataset.uiLanguageSkip = "true";
+    insertButton.textContent = snippet.name || uiLanguageController.translate(`固定片段 ${index + 1}`);
     card.querySelector('[data-fixed-prompt-field="name"]').value = snippet.name || "";
     card.querySelector('[data-fixed-prompt-field="prompt"]').value = snippet.prompt || "";
     el.novelAiFixedPromptList.appendChild(card);
@@ -1274,7 +1282,9 @@ function renderRandomPromptSnippets(snippets = novelAiRandomPromptSnippets) {
         <label class="nai-random-bias-row">數值權重偏向 <b data-random-prompt-bias-value>0.0</b><input type="range" min="0" max="5" step="0.1" data-random-prompt-field="weightBias" /></label>
       </div>
     `;
-    card.querySelector('[data-random-prompt-action="insert"]').textContent = snippet.name || `片段 ${index + 1}`;
+    const insertButton = card.querySelector('[data-random-prompt-action="insert"]');
+    insertButton.dataset.uiLanguageSkip = "true";
+    insertButton.textContent = snippet.name || uiLanguageController.translate(`片段 ${index + 1}`);
     card.querySelector('[data-random-prompt-field="name"]').value = snippet.name || "";
     card.querySelector('[data-random-prompt-field="randomText"]').value = snippet.randomText || "";
     card.querySelector('[data-random-prompt-field="min"]').value = snippet.min;
@@ -2612,10 +2622,12 @@ function openImageViewerDialog(item = {}) {
   }
   novelAiImageViewerObjectUrl = imageSource.objectUrl;
   const title = itemPrompt(item) || item.fileName || "NovelAI Image";
+  el.novelAiImageViewerImage.dataset.uiLanguageSkip = "true";
   el.novelAiImageViewerImage.src = imageSrc;
   el.novelAiImageViewerImage.alt = title;
   resetImageViewerTransform();
   if (el.novelAiImageViewerTitle) {
+    el.novelAiImageViewerTitle.dataset.uiLanguageSkip = "true";
     el.novelAiImageViewerTitle.textContent = truncateText(title, 80);
   }
   if (typeof el.novelAiImageViewerDialog.showModal === "function") {
@@ -2655,6 +2667,7 @@ function renderMainImage(item = null) {
   const imageSource = createItemImageSource(item);
   novelAiMainImageObjectUrl = imageSource.objectUrl;
   img.src = imageSource.src;
+  img.dataset.uiLanguageSkip = "true";
   img.alt = itemPrompt(item) || item.fileName || "NovelAI image";
   img.decoding = "async";
   preview.appendChild(img);
@@ -2664,9 +2677,14 @@ function renderMainImage(item = null) {
   const meta = document.createElement("div");
   meta.className = "novelai-image-meta";
   meta.innerHTML = `
-    <strong>${truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 120)}</strong>
-    <span>${[settings.model || "", settings.seed !== undefined ? `Seed ${settings.seed}` : ""].filter(Boolean).join("｜")}</span>
+    <strong data-ui-language-skip></strong>
+    <span></span>
   `;
+  meta.querySelector("strong").textContent = truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 120);
+  meta.querySelector("span").textContent = [
+    settings.model || "",
+    settings.seed !== undefined ? `Seed ${settings.seed}` : ""
+  ].filter(Boolean).join("｜");
   const actions = document.createElement("div");
   actions.className = "novelai-image-actions";
   const favoriteAction = makeActionButton(
@@ -2786,7 +2804,9 @@ function renderHistoryList(items = []) {
     image.loading = "lazy";
     image.decoding = "async";
     image.fetchPriority = "low";
-    card.querySelector("strong").textContent = truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 36);
+    const historyTitle = card.querySelector("strong");
+    historyTitle.dataset.uiLanguageSkip = "true";
+    historyTitle.textContent = truncateText(itemPrompt(item) || item.fileName || "NovelAI Image", 36);
     card.querySelector("span").textContent = item.createdAt ? new Date(item.createdAt).toLocaleString("zh-Hant") : "";
     card.querySelector('[data-history-action="select"]').addEventListener("click", () => selectHistoryItem(item, { scroll: true }));
     const removeButton = card.querySelector('[data-history-action="remove"]');
@@ -4373,6 +4393,7 @@ function bindEvents() {
 }
 
 async function boot() {
+  await loadServerUiLanguage(uiLanguageController);
   fillSelect(el.novelAiModel, NOVELAI_MODEL_OPTIONS, "nai-diffusion-4-5-full");
   fillSelect(el.novelAiSampler, NOVELAI_SAMPLER_OPTIONS, "k_euler_ancestral");
   fillSelect(el.novelAiNoiseSchedule, NOVELAI_NOISE_SCHEDULE_OPTIONS, "karras");

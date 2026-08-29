@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260827-chat-images" />
+    <link rel="stylesheet" href="/styles.css?v=20260829-neon-border-card" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -55,10 +55,9 @@
 
         <div class="actions-block">
           <h2>角色卡</h2>
-          <button id="selectRoleCardBtn" type="button" class="secondary desktop-role-picker-btn">選擇角色卡</button>
-          <button id="createRoleCardBtn" type="button">建立角色卡</button>
-          <button id="createAssistantCardBtn" type="button" class="secondary">建立新助手</button>
-          <button id="importRoleCardBtn" type="button" class="secondary">匯入角色卡</button>
+          <button id="selectRoleCardBtn" type="button" class="secondary desktop-role-picker-btn">選擇</button>
+          <button id="openCreateMenuBtn" type="button">建立</button>
+          <button id="globalLorebookBtn" type="button" class="secondary">全局世界書</button>
           <input id="roleCardImportFile" type="file" class="hidden" accept=".json,.png,.jpg,.jpeg,application/json,image/png,image/jpeg" />
           <div id="roleCardList" class="card-list role-card-inline-list"></div>
         </div>
@@ -74,11 +73,14 @@
           <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
           <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
           <button id="timeTrackingSettingsBtn" type="button" class="secondary">統計判斷編輯</button>
-          <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
         </div>
 
         <div class="actions-block">
-          <button id="otherActionsBtn" type="button" class="secondary">其他</button>
+          <h2>設定及其他雜項</h2>
+          <button id="envSettingsBtn" type="button" class="secondary">環境設定</button>
+          <button id="openDefaultsMenuBtn" type="button" class="secondary">全局設定</button>
+          <button id="uiLanguageToggleBtn" type="button" class="secondary" aria-pressed="false">簡繁轉換：繁體</button>
+          <button id="otherActionsBtn" type="button" class="secondary">亂七八糟</button>
         </div>
       </section>
 
@@ -89,7 +91,7 @@
               <div id="chatHeaderAvatar" class="chat-header-avatar" aria-hidden="true"></div>
               <div class="chat-header-text">
                 <h2 id="chatHeaderTitle">時分居酒屋</h2>
-                <p id="chatHeaderSubtitle">選擇角色卡後開始對話</p>
+                <p id="chatHeaderSubtitle">選擇卡後開始對話</p>
               </div>
             </div>
             <div class="discord-chat-tools" aria-label="對話工具">
@@ -125,12 +127,10 @@
     <dialog id="otherActionsDialog" class="dialog compact-action-dialog">
       <form method="dialog" class="stack compact-action-shell">
         <div class="role-picker-header">
-          <h3>其他</h3>
+          <h3>亂七八糟</h3>
           <button type="submit" class="muted">關閉</button>
         </div>
         <div class="compact-action-list">
-          <button id="openDefaultsMenuBtn" type="button" class="secondary">預設</button>
-          <button id="uiLanguageToggleBtn" type="button" class="secondary" aria-pressed="false">簡繁轉換：繁體</button>
           <a id="feedbackLink" class="button-link secondary" href="https://discord.gg/gYBBUgvEn6" target="_blank" rel="noopener noreferrer">問題反映</a>
           <button id="openNovelAiMenuBtn" type="button" class="secondary">NovelAI</button>
         </div>
@@ -140,12 +140,12 @@
     <dialog id="defaultsMenuDialog" class="dialog compact-action-dialog">
       <form method="dialog" class="stack compact-action-shell">
         <div class="role-picker-header">
-          <h3>預設</h3>
-          <button id="closeDefaultsMenuBtn" type="button" class="muted">返回</button>
+          <h3>全局設定</h3>
+          <button id="closeDefaultsMenuBtn" type="button" class="muted">關閉</button>
         </div>
         <div class="compact-action-list">
-          <button id="useDefaultsBtn" type="button" class="secondary">使用預設</button>
-          <button id="saveDefaultsBtn" type="button" class="secondary">儲存預設</button>
+          <button id="useDefaultsBtn" type="button" class="secondary">匯入全局設定</button>
+          <button id="saveDefaultsBtn" type="button" class="secondary">匯出當前全局設定</button>
           <button id="updateDefaultsBtn" type="button" class="secondary">使用作者預設</button>
         </div>
       </form>
@@ -160,6 +160,37 @@
         <div class="compact-action-list">
           <button id="novelAiImageBtn" type="button" class="secondary">NovelAI 跑圖</button>
           <button id="novelAiStoryboardBtn" type="button" class="secondary">Storyboard</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="createMenuDialog" class="dialog compact-action-dialog">
+      <form method="dialog" class="stack compact-action-shell">
+        <div class="role-picker-header">
+          <h3>建立</h3>
+          <button id="closeCreateMenuBtn" type="button" class="muted">關閉</button>
+        </div>
+        <div class="compact-action-list">
+          <button id="createRoleCardBtn" type="button">建立角色卡</button>
+          <button id="createAssistantCardBtn" type="button" class="secondary">建立新助手</button>
+          <button id="importRoleCardBtn" type="button" class="secondary">匯入角色卡</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="globalLorebookDialog" class="dialog prompt-viewer-dialog">
+      <form id="globalLorebookForm" method="dialog" class="stack">
+        <h3>全局世界書</h3>
+        <p class="form-hint">套用於所有角色卡；條目沿用角色卡世界書的關鍵字、永久啟用與機率規則。助手模式不會套用。</p>
+        <label class="checkbox-label global-lorebook-toggle">
+          <input id="globalLorebookEnabled" type="checkbox" />
+          啟用全局世界書
+        </label>
+        <div id="globalLorebookList"></div>
+        <button id="addGlobalLorebookEntryBtn" type="button" class="secondary">＋ 新增世界書條目</button>
+        <div class="dialog-actions">
+          <button type="submit">保存全局世界書</button>
+          <button id="closeGlobalLorebookDialog" type="button">關閉</button>
         </div>
       </form>
     </dialog>
@@ -249,7 +280,7 @@
     <dialog id="roleCardPickerDialog" class="dialog role-picker-dialog">
       <section class="stack role-picker-shell">
         <div class="role-picker-header">
-          <h3>選擇角色卡</h3>
+          <h3>選擇卡</h3>
           <button id="closeRoleCardPickerBtn" type="button" class="muted">關閉</button>
         </div>
         <div id="roleCardPickerGrid" class="role-picker-grid"></div>
@@ -383,6 +414,13 @@
               <input id="timeTrackingDate" type="number" min="1" max="31" step="1" />
             </label>
           </div>
+          <div class="time-tracking-start-point">
+            <p id="timeTrackingStartPointMeta" class="form-hint">全域起點：未設定</p>
+            <div class="inline-actions">
+              <button id="setTimeTrackingStartPointBtn" type="button" class="secondary">設為目前時間</button>
+              <button id="clearTimeTrackingStartPointBtn" type="button" class="secondary">清除固定起點</button>
+            </div>
+          </div>
           <label>
             +1天關鍵字
             <textarea id="timeTrackingNextDayWords" rows="4" placeholder="下一天&#10;第二天&#10;隔天"></textarea>
@@ -470,7 +508,7 @@
 
     <dialog id="assistantPromptDialog" class="dialog prompt-viewer-dialog">
       <form id="assistantPromptForm" method="dialog" class="stack">
-        <h3>編輯助手卡</h3>
+        <h3 id="assistantPromptDialogTitle">編輯助手卡</h3>
         <p class="form-hint">保存後立即生效；助手卡不會混入使用者設定。</p>
         <input id="assistantCardId" type="hidden" />
         <label>
@@ -482,12 +520,12 @@
           <textarea id="assistantCardDescription" rows="3"></textarea>
         </label>
         <label>
-          開場對白
-          <textarea id="assistantCardOpeningDialogue" rows="5" placeholder="選填；啟用助手時顯示，並作為第一則 assistant 訊息。"></textarea>
-        </label>
-        <label>
           Prompt
           <textarea id="assistantPromptInput" rows="18" required></textarea>
+        </label>
+        <label>
+          開場對白
+          <textarea id="assistantCardOpeningDialogue" rows="5" placeholder="選填；啟用助手時顯示，並作為第一則 assistant 訊息。"></textarea>
         </label>
         <div class="dialog-actions">
           <button type="submit">保存助手卡</button>
@@ -611,6 +649,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20260827-glm-images"></script>
+    <script type="module" src="/app.js?v=20260829-global-settings-menu"></script>
   </body>
 </html>

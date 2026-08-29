@@ -45,11 +45,37 @@ test("loading a saved session preserves global cards, prompts, and settings", ()
   assert.doesNotMatch(loaderSource, /currentState\.userProfile\s*=/);
   assert.doesNotMatch(loaderSource, /currentState\.conversationSettings\s*=/);
   assert.doesNotMatch(loaderSource, /currentState\.modularPromptConfigs\s*=/);
-  assert.match(loaderSource, /enabled: currentTimeTracking\.enabled/);
-  assert.match(loaderSource, /config: currentTimeTracking\.config/);
-  assert.match(loaderSource, /\.\.\.currentTimeTracking\.autoPeriod/);
+  assert.match(loaderSource, /mergeTimeTrackingProgress/);
   assert.match(loaderSource, /const currentRoleCardRuntimeState/);
-  assert.match(loaderSource, /currentRoleCardRuntimeState\[currentState\.activeRoleCardId\]/);
+  assert.match(loaderSource, /mergeActiveRoleRuntimeState/);
+});
+
+test("conversation-generated images stay temporary unless the conversation is archived", () => {
+  const imageSaverSource = functionSource(
+    "saveGeneratedNovelAiImagesForMessage",
+    "normalizeKeywordSearchText"
+  );
+  const sessionCreatorSource = functionSource(
+    "createSavedSessionFromCurrentState",
+    "loadSavedSessionIntoRuntime"
+  );
+  const sessionLoaderSource = functionSource(
+    "loadSavedSessionIntoRuntime",
+    "deleteSavedSession"
+  );
+  const sessionDeleteSource = functionSource("deleteSavedSession", "deleteRoleCard");
+  const saveStateSource = functionSource("saveState", "sendJson");
+  assert.match(imageSaverSource, /saveCurrentConversationImage/);
+  assert.doesNotMatch(imageSaverSource, /saveNovelAiAlbumItem/);
+  assert.match(imageSaverSource, /context\.sourceUserMessageId/);
+  assert.match(imageSaverSource, /state\.conversation\.some/);
+  assert.match(sessionCreatorSource, /archiveConversationImagesForSavedSession/);
+  assert.match(sessionLoaderSource, /restoreSavedSessionImagesToCurrentConversation/);
+  assert.match(sessionDeleteSource, /deleteSavedSessionImages/);
+  assert.match(saveStateSource, /cleanupCurrentConversationImages\(state\.conversation\)/);
+  assert.match(serverSource, /\/api\/conversation-images\//u);
+  assert.match(serverSource, /\/api\/sessions\/" \+ encodeURIComponent\(sessionId\) \+ "\/images\//u);
+  assert.match(serverSource, /sourceUserMessageId: latestUser\.id/u);
 });
 
 test("full runtime snapshots still restore complete state for rollback and migration", () => {

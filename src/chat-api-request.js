@@ -1,5 +1,5 @@
 const DEEPSEEK_REASONING_EFFORTS = new Set(["none", "low", "high", "max"]);
-const GLM_REASONING_EFFORTS = new Set(["low", "high", "max"]);
+const GLM_REASONING_EFFORTS = new Set(["none", "low", "high", "max"]);
 
 export function normalizeChatApiMaxTokensParamName(value = "") {
   return value === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens";
@@ -15,15 +15,72 @@ export function normalizeGlmReasoningEffort(value = "") {
   return GLM_REASONING_EFFORTS.has(normalized) ? normalized : "";
 }
 
-export function resolveChatApiReasoningEffort(provider = "", value = "") {
+export function canDisableChatApiReasoning(provider = "", model = "") {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  const normalizedModel = String(model || "").trim().toLowerCase();
+  if (normalizedProvider === "deepseek") {
+    return true;
+  }
+  if (normalizedProvider === "zhipu") {
+    const match = normalizedModel.match(/^glm-(\d+)(?:[.]([0-9]+))?/u);
+    if (!match) {
+      return false;
+    }
+    const major = Number(match[1]);
+    const minor = Number(match[2] || 0);
+    return major > 4 || (major === 4 && minor >= 5);
+  }
+  if (normalizedProvider === "gemini") {
+    return /^gemini-2[.]5-(?:flash|flash-lite)(?:-|$)/u.test(normalizedModel);
+  }
+  if (normalizedProvider === "openai") {
+    if (/^gpt-5(?:[.]\d+)?-pro(?:-|$)/u.test(normalizedModel)) {
+      return false;
+    }
+    const match = normalizedModel.match(/^gpt-5[.](\d+)(?:-|$)/u);
+    return Boolean(match && Number(match[1]) >= 1);
+  }
+  return false;
+}
+
+export function canSetChatApiReasoningStrength(provider = "", model = "") {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (normalizedProvider === "deepseek") {
+    return true;
+  }
+  if (normalizedProvider !== "zhipu") {
+    return false;
+  }
+  const match = String(model || "").trim().toLowerCase().match(/^glm-(\d+)(?:[.]([0-9]+))?/u);
+  if (!match) {
+    return false;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2] || 0);
+  return major > 5 || (major === 5 && minor >= 2);
+}
+
+export function resolveChatApiReasoningEffort(provider = "", value = "", model = "") {
   const normalizedProvider = String(provider || "").trim().toLowerCase();
   if (normalizedProvider === "deepseek") {
     return normalizeDeepSeekReasoningEffort(value) || "high";
   }
   if (normalizedProvider === "zhipu") {
-    return normalizeGlmReasoningEffort(value);
+    const normalized = normalizeGlmReasoningEffort(value);
+    if (normalized === "none") {
+      return canDisableChatApiReasoning(normalizedProvider, model) ? normalized : "";
+    }
+    return canSetChatApiReasoningStrength(normalizedProvider, model) ? normalized : "";
+  }
+  if (["gemini", "openai"].includes(normalizedProvider)) {
+    const normalized = String(value || "").trim().toLowerCase();
+    return normalized === "none" && canDisableChatApiReasoning(normalizedProvider, model) ? "none" : "";
   }
   return "";
+}
+
+export function shouldIncludeUserCustomSupplement(reasoningEffort = "") {
+  return String(reasoningEffort || "").trim().toLowerCase() !== "none";
 }
 
 export function buildChatApiRequestBody({
@@ -41,7 +98,8 @@ export function buildChatApiRequestBody({
   const normalizedDeepSeekEffort = normalizeDeepSeekReasoningEffort(reasoningEffort);
   const normalizedGlmEffort = normalizeGlmReasoningEffort(reasoningEffort);
   const explicitDeepSeekThinking = normalizedProvider === "deepseek" && normalizedDeepSeekEffort;
-  const isGlm53 = normalizedProvider === "zhipu" && /^glm-5\.3(?:-|$)/iu.test(String(model || "").trim());
+  const supportsThinkingToggle = canDisableChatApiReasoning(normalizedProvider, model);
+  const supportsReasoningStrength = canSetChatApiReasoningStrength(normalizedProvider, model);
   const requestBody = {
     model,
     messages
@@ -60,14 +118,18 @@ export function buildChatApiRequestBody({
     }
   }
 
-  if (isGlm53) {
+  if (normalizedProvider === "zhipu" && supportsThinkingToggle && normalizedGlmEffort) {
     requestBody.thinking = {
-      type: "enabled",
-      clear_thinking: false
+      type: normalizedGlmEffort === "none" ? "disabled" : "enabled",
+      ...(normalizedGlmEffort === "none" ? {} : { clear_thinking: false })
     };
-    if (normalizedGlmEffort) {
+    if (normalizedGlmEffort && normalizedGlmEffort !== "none" && supportsReasoningStrength) {
       requestBody.reasoning_effort = normalizedGlmEffort;
     }
+  }
+
+  if (["gemini", "openai"].includes(normalizedProvider) && reasoningEffort === "none" && supportsThinkingToggle) {
+    requestBody.reasoning_effort = "none";
   }
 
   requestBody[normalizeChatApiMaxTokensParamName(maxTokensParamName)] = maxTokens;

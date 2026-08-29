@@ -76,6 +76,8 @@ test("custom assistants count as active conversation targets", () => {
 
 test("time period advance words match normalized user text", () => {
   assert.equal(hasTimePeriodAdvanceWord("現在時間流逝了", ["時間流逝"]), true);
+  assert.equal(hasTimePeriodAdvanceWord("现在时间流逝了", ["時間流逝"]), true);
+  assert.equal(hasTimePeriodAdvanceWord("現在時間流逝了", ["时间流逝"]), true);
   assert.equal(hasTimePeriodAdvanceWord("ＴＩＭＥ ＳＫＩＰ", ["time skip"]), true);
   assert.equal(hasTimePeriodAdvanceWord("繼續對話", ["時間流逝"]), false);
   assert.equal(hasTimePeriodAdvanceWord("任意內容", []), false);

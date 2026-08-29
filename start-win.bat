@@ -41,7 +41,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules\discord.js" (
+if not exist "node_modules\discord.js" goto install_dependencies
+if not exist "node_modules\opencc-js" goto install_dependencies
+goto dependencies_ready
+
+:install_dependencies
   echo Installing dependencies...
   call npm install
   if errorlevel 1 (
@@ -49,7 +53,8 @@ if not exist "node_modules\discord.js" (
     pause
     exit /b 1
   )
-)
+
+:dependencies_ready
 
 start "" powershell -NoProfile -WindowStyle Hidden -Command "$url='http://localhost:%PORT_VALUE%'; for($i=0; $i -lt 90; $i++){ try { Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 1 | Out-Null; Start-Process $url; exit } catch {}; Start-Sleep -Seconds 1 }; Start-Process $url"
 call npm start

@@ -59,7 +59,7 @@ test("legacy !ai text commands are rejected without matching similar chat text",
   assert.match(LEGACY_DISCORD_TEXT_COMMAND_NOTICE, /文字指令已移除/u);
   assert.match(
     serverSource,
-    /if \(isLegacyDiscordTextCommand\(message\.content\)\) \{\s+await message\.reply\(LEGACY_DISCORD_TEXT_COMMAND_NOTICE\);/u
+    /if \(isLegacyDiscordTextCommand\(message\.content\)\) \{\s+await message\.reply\(discordSystemText\(LEGACY_DISCORD_TEXT_COMMAND_NOTICE\)\);/u
   );
   assert.match(serverSource, /await handleDiscordChat\(message, extractedInput\);/u);
 });

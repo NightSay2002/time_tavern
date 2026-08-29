@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { localizeSystemText } from "./ui-language.js";
 
 export const DISCORD_GUILD_WELCOME_LINES = [
   "點我頭像>傳送訊息>開始私人聊天>我會對你說的任何話作出反應",
@@ -15,8 +16,11 @@ export function buildDiscordInstallUrl(clientId = "") {
     : "";
 }
 
-export function buildDiscordGuildWelcomeMessage(clientId = "") {
-  return [...DISCORD_GUILD_WELCOME_LINES, buildDiscordInstallUrl(clientId)]
+export function buildDiscordGuildWelcomeMessage(clientId = "", language) {
+  return [
+    ...DISCORD_GUILD_WELCOME_LINES.map((line) => localizeSystemText(line, language)),
+    buildDiscordInstallUrl(clientId)
+  ]
     .filter(Boolean)
     .join("\n");
 }

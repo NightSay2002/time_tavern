@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle
 } from "discord.js";
+import { localizeSystemText } from "./ui-language.js";
 
 const ROLE_CARD_BROWSER_PREFIX = "role_card_browser:";
 const ROLE_CARD_PREVIEW_LIMIT = 1100;
@@ -11,18 +12,18 @@ function safeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function formatRoleCardMode(mode) {
+function formatRoleCardMode(mode, language) {
   const normalized = safeText(mode).toLowerCase();
   if (normalized === "multi" || normalized === "multi_role") {
-    return "多角色";
+    return localizeSystemText("多角色", language);
   }
   if (normalized === "no_role" || normalized === "norole" || normalized === "none") {
-    return "無角色";
+    return localizeSystemText("無角色", language);
   }
   if (normalized && normalized !== "single" && normalized !== "single_role") {
-    return "自訂模式";
+    return localizeSystemText("自訂模式", language);
   }
-  return "單角色";
+  return localizeSystemText("單角色", language);
 }
 
 function truncateRoleCardPreview(value) {
@@ -60,11 +61,12 @@ export function parseDiscordRoleCardBrowserCustomId(customId = "") {
   return match ? normalizeDiscordRoleCardNumber(match[1]) : null;
 }
 
-export function buildDiscordRoleCardBrowserPayload(currentState = {}, requestedNumber = 1) {
+export function buildDiscordRoleCardBrowserPayload(currentState = {}, requestedNumber = 1, language) {
+  const text = (value) => localizeSystemText(value, language);
   const cards = Array.isArray(currentState.roleCards) ? currentState.roleCards : [];
   if (!cards.length) {
     return {
-      content: "目前沒有可瀏覽的角色卡。",
+      content: text("目前沒有可瀏覽的角色卡。"),
       components: [],
       allowedMentions: { parse: [] }
     };
@@ -78,24 +80,24 @@ export function buildDiscordRoleCardBrowserPayload(currentState = {}, requestedN
     card?.description || card?.personality || card?.scene || card?.openingDialogue
   );
   const content = [
-    `**角色卡 ${number} / ${cards.length}${isActive ? "（目前使用）" : ""}**`,
-    `編號：${number}`,
-    `名稱：${safeText(card?.name) || "未命名角色卡"}`,
-    `模式：${formatRoleCardMode(card?.mode)}`,
+    `**${text("角色卡")} ${number} / ${cards.length}${isActive ? text("（目前使用）") : ""}**`,
+    `${text("編號：")}${number}`,
+    `${text("名稱：")}${safeText(card?.name) || text("未命名角色卡")}`,
+    `${text("模式：")}${formatRoleCardMode(card?.mode, language)}`,
     "",
-    preview ? `**預覽**\n${preview}` : "尚無可顯示的預覽內容。",
+    preview ? `**${text("預覽")}**\n${preview}` : text("尚無可顯示的預覽內容。"),
     "",
-    `使用 \`/ai_start num:${number}\` 開始這張角色卡。`
+    `${text("使用")} \`/ai_start num:${number}\` ${text("開始這張角色卡。")}`
   ].join("\n");
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.max(1, number - 1)}`)
-      .setLabel("上一張")
+      .setLabel(text("上一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number <= 1),
     new ButtonBuilder()
       .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.min(cards.length, number + 1)}`)
-      .setLabel("下一張")
+      .setLabel(text("下一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number >= cards.length)
   );

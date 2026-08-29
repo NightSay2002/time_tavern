@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 import {
+  canDisableChatApiReasoning,
   createChatApiProviderDrafts,
   getChatApiProviderEnvEntries,
   normalizeChatApiProviderSetting,
@@ -102,4 +103,17 @@ test("one reasoning field migrates the old provider-specific values", () => {
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT"/u);
   assert.match(serverSource, /getChatApiProviderKeyAliases\(provider\)/u);
+});
+
+test("web reasoning controls use the same provider and model capability matrix", () => {
+  assert.equal(canDisableChatApiReasoning("deepseek", "deepseek-v4-pro"), true);
+  assert.equal(canDisableChatApiReasoning("zhipu", "glm-5.3-flash"), true);
+  assert.equal(canDisableChatApiReasoning("zhipu", "glm-4-air"), false);
+  assert.equal(canDisableChatApiReasoning("gemini", "gemini-2.5-flash"), true);
+  assert.equal(canDisableChatApiReasoning("gemini", "gemini-2.5-pro"), false);
+  assert.equal(canDisableChatApiReasoning("openai", "gpt-5.1"), true);
+  assert.equal(canDisableChatApiReasoning("openai", "gpt-5-pro"), false);
+  assert.equal(canDisableChatApiReasoning("custom", "gpt-5.4"), false);
+  assert.match(webSource, /canDisableChatApiReasoning\(provider, model\)/u);
+  assert.match(webSource, /option\.value === "none"/u);
 });
