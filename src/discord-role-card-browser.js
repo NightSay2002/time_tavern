@@ -56,12 +56,45 @@ export function getInitialDiscordRoleCardNumber(currentState = {}) {
   return activeIndex >= 0 ? activeIndex + 1 : 1;
 }
 
-export function parseDiscordRoleCardBrowserCustomId(customId = "") {
-  const match = safeText(customId).match(/^role_card_browser:(\d+)$/u);
-  return match ? normalizeDiscordRoleCardNumber(match[1]) : null;
+function getRoleCardOpenings(card = {}) {
+  const entries = (Array.isArray(card?.openingDialogues) ? card.openingDialogues : [])
+    .map((entry, index) => ({
+      id: safeText(entry?.id) || `opening_${index + 1}`,
+      content: safeText(entry?.content || entry?.text)
+    }))
+    .filter((entry) => entry.content);
+  const fallback = safeText(card?.openingDialogue);
+  if (fallback && !entries.some((entry) => entry.content === fallback)) {
+    entries.unshift({ id: "opening_primary", content: fallback });
+  }
+  return entries;
 }
 
-export function buildDiscordRoleCardBrowserPayload(currentState = {}, requestedNumber = 1, language) {
+export function getInitialDiscordOpeningNumber(currentState = {}, roleCardNumber = 1) {
+  const card = getDiscordRoleCardByNumber(currentState.roleCards, roleCardNumber);
+  const openings = getRoleCardOpenings(card);
+  const selectedId = safeText(currentState.selectedOpeningDialogueId);
+  const selectedIndex = openings.findIndex((entry) => entry.id === selectedId);
+  return selectedIndex >= 0 ? selectedIndex + 1 : 1;
+}
+
+export function parseDiscordRoleCardBrowserCustomId(customId = "") {
+  const match = safeText(customId).match(/^role_card_browser:(\d+):(\d+)$/u);
+  const cardNumber = match ? normalizeDiscordRoleCardNumber(match[1]) : null;
+  const openingNumber = match ? normalizeDiscordRoleCardNumber(match[2]) : null;
+  return cardNumber && openingNumber ? { cardNumber, openingNumber } : null;
+}
+
+export function buildDiscordRoleCardBrowserPayload(
+  currentState = {},
+  requestedNumber = 1,
+  requestedOpeningNumber = 1,
+  language
+) {
+  if (typeof requestedOpeningNumber === "string" && language === undefined) {
+    language = requestedOpeningNumber;
+    requestedOpeningNumber = 1;
+  }
   const text = (value) => localizeSystemText(value, language);
   const cards = Array.isArray(currentState.roleCards) ? currentState.roleCards : [];
   if (!cards.length) {
@@ -76,27 +109,45 @@ export function buildDiscordRoleCardBrowserPayload(currentState = {}, requestedN
   const number = Math.min(requested, cards.length);
   const card = cards[number - 1];
   const isActive = safeText(card?.id) === safeText(currentState.activeRoleCardId);
-  const preview = truncateRoleCardPreview(
-    card?.description || card?.personality || card?.scene || card?.openingDialogue
-  );
+  const openings = getRoleCardOpenings(card);
+  const requestedOpening = normalizeDiscordRoleCardNumber(requestedOpeningNumber) || 1;
+  const openingNumber = openings.length > 0 ? Math.min(requestedOpening, openings.length) : 1;
+  const preview = openings.length > 0
+    ? truncateRoleCardPreview(openings[openingNumber - 1]?.content)
+    : "";
+  const startCommand = openingNumber > 1
+    ? `/ai_start num:${number} opening:${openingNumber}`
+    : `/ai_start num:${number}`;
   const content = [
     `**${text("角色卡")} ${number} / ${cards.length}${isActive ? text("（目前使用）") : ""}**`,
     `${text("編號：")}${number}`,
     `${text("名稱：")}${safeText(card?.name) || text("未命名角色卡")}`,
     `${text("模式：")}${formatRoleCardMode(card?.mode, language)}`,
     "",
-    preview ? `**${text("預覽")}**\n${preview}` : text("尚無可顯示的預覽內容。"),
+    preview
+      ? `**${text("預覽")}（${openingNumber}/${openings.length}）：**${preview}`
+      : `**${text("預覽")}（0/0）：**${text("尚無開場內容。")}`,
     "",
-    `${text("使用")} \`/ai_start num:${number}\` ${text("開始這張角色卡。")}`
+    `${text("使用")} \`${startCommand}\` ${text("開始這張角色卡。")}`
   ].join("\n");
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.max(1, number - 1)}`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.max(1, number - 1)}:1`)
       .setLabel(text("上一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number <= 1),
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.min(cards.length, number + 1)}`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${number}:${Math.max(1, openingNumber - 1)}`)
+      .setLabel(text("上一個開場"))
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(openings.length <= 1 || openingNumber <= 1),
+    new ButtonBuilder()
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${number}:${Math.min(Math.max(1, openings.length), openingNumber + 1)}`)
+      .setLabel(text("下一個開場"))
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(openings.length <= 1 || openingNumber >= openings.length),
+    new ButtonBuilder()
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.min(cards.length, number + 1)}:1`)
       .setLabel(text("下一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number >= cards.length)

@@ -20,11 +20,20 @@ test("saved-session summaries use metadata without opening full snapshots", () =
 
 test("app state stores cards separately and saved sessions contain conversation state only", () => {
   const saveStateSource = functionSource("saveState", "sendJson");
+  const contextWriterSource = functionSource(
+    "writeConversationContextSnapshot",
+    "rememberConversationContextMetadata"
+  );
   const sessionCaptureSource = functionSource("captureSavedConversationSnapshot", "captureNarrativeCheckpoint");
   const sessionWriterSource = functionSource("writeSavedSessionExternalData", "materializeSavedSessionSnapshot");
   assert.match(saveStateSource, /roleCards: _roleCards/);
   assert.match(saveStateSource, /assistantCards: _assistantCards/);
   assert.match(saveStateSource, /persistCardState\(state\)/);
+  assert.match(saveStateSource, /conversation: _conversation/);
+  assert.match(saveStateSource, /aiLogs: _aiLogs/);
+  assert.match(saveStateSource, /writeConversationContextSnapshot/);
+  assert.match(contextWriterSource, /captureConversationContextSnapshot/);
+  assert.match(contextWriterSource, /compactAiLogsForStorage/);
   assert.match(sessionCaptureSource, /conversation: cloneData/);
   assert.match(sessionCaptureSource, /contextCompression: normalizeContextCompressionState/);
   assert.match(sessionCaptureSource, /timeTracking: normalizeTimeTrackingState/);
@@ -72,7 +81,8 @@ test("conversation-generated images stay temporary unless the conversation is ar
   assert.match(sessionCreatorSource, /archiveConversationImagesForSavedSession/);
   assert.match(sessionLoaderSource, /restoreSavedSessionImagesToCurrentConversation/);
   assert.match(sessionDeleteSource, /deleteSavedSessionImages/);
-  assert.match(saveStateSource, /cleanupCurrentConversationImages\(state\.conversation\)/);
+  assert.match(saveStateSource, /cleanupCurrentConversationImagesAcrossContexts\(state\)/);
+  assert.match(serverSource, /parsed\?\.snapshot\?\.conversation/u);
   assert.match(serverSource, /\/api\/conversation-images\//u);
   assert.match(serverSource, /\/api\/sessions\/" \+ encodeURIComponent\(sessionId\) \+ "\/images\//u);
   assert.match(serverSource, /sourceUserMessageId: latestUser\.id/u);
@@ -88,10 +98,13 @@ test("full runtime snapshots still restore complete state for rollback and migra
 });
 
 test("AI logs use shared content references in storage and expand for display", () => {
-  const saveStateSource = functionSource("saveState", "sendJson");
+  const contextWriterSource = functionSource(
+    "writeConversationContextSnapshot",
+    "rememberConversationContextMetadata"
+  );
   const statePayloadSource = functionSource("statePayload", "clearDiscordLoginRetryTimer");
   const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
-  assert.match(saveStateSource, /compactAiLogsForStorage\(state\.aiLogs\)/);
+  assert.match(contextWriterSource, /compactAiLogsForStorage\(snapshot\.aiLogs\)/);
   assert.match(statePayloadSource, /aiLogContentStore: compactedAiLogs\.contentStore/);
   assert.match(webSource, /resolveAiLogStoredText/);
   assert.match(webSource, /wrapper\.addEventListener\("toggle"/);

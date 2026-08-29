@@ -201,8 +201,8 @@ Slash 指令：
 
 | 指令 | 參數 | 說明 |
 | --- | --- | --- |
-| `/ai_start` | `num` | `0` 使用目前角色卡或助手；`1...N` 切換到角色卡瀏覽器中的編號並開始，同時重置玩家座位。 |
-| `/ai_status` | `num` | 只接受數字 `1` 或 `2`：`1` 查看 Bot、模型、對話與玩家狀態；`2` 以左右按鈕逐張瀏覽角色卡及其正確模式。 |
+| `/ai_start` | `num`、選填 `opening` | `0` 使用該頻道目前角色卡或助手；`1...N` 使用角色卡編號。`opening` 從 `1` 開始，未填固定使用開場 1。 |
+| `/ai_status` | `num` | 只接受數字 `1` 或 `2`：`1` 查看目前頻道狀態；`2` 使用四個按鈕分別切換角色卡及其開場預覽。 |
 | `/stop` | 無 | 停止目前生成。 |
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
 | `/reload` | `num`、`comment` | 直接改寫倒數第 `num` 次使用者輸入並重新生成；`1` 代表最近一次。 |
@@ -215,8 +215,12 @@ Discord 行為：
 - Bot 每次上線都會立即同步 Slash 指令到所有已加入的 Discord 伺服器，並同步全域指令。
 - Bot 新加入伺服器時，會優先在系統頻道、否則在第一個有權發言的文字頻道送出私人聊天與 `/ai_start` 使用說明。
 - 應用程式安裝到使用者帳號時，`APPLICATION_AUTHORIZED` Webhook 會觸發 Bot 私訊使用說明。
-- `/ai_start num:0` 或指定角色卡編號後，會把該伺服器的對話固定在目前頻道。
+- 每個伺服器頻道與 Bot 私訊各自保存角色、對話、回合、時間、壓縮內容、模型狀態及玩家分配；在不同頻道使用 `/ai_start` 或 `/archive_return` 不會覆蓋其他頻道故事。
+- `/ai_start num:22` 固定使用第 22 張角色卡的開場 1；`/ai_start num:22 opening:2` 使用開場 2。開場選擇只屬於目前頻道，不修改角色卡的全域預設。
+- `/ai_status num:2` 顯示 `預覽（目前開場/開場總數）`；上一張／下一張會回到該卡開場 1，另外兩個按鈕只切換目前角色卡的開場。
+- 網頁聊天標題列可手動選擇「本地對話」或已使用過的 Discord 頻道／私訊；查看、發言、編輯、重算、停止、保存及載入均作用於目前選擇的故事，Discord 新活動不會自動切換網頁。
 - `/archive action:1` 每次私密顯示一份存檔的名稱、角色與最後對話，使用左右按鈕翻頁；完整存檔只在顯示時讀取。
+- 存檔瀏覽會分行顯示完整的 `/archive_return mode:0 num:N` 與 `/archive_return mode:1 num:N`，中文說明不屬於指令內容。
 - `/archive_return mode:0` 會先把 runtime 載入到存檔末端，再公開顯示開場白與最初五回合；每按一次「繼續」追加五回合。新對話會終止尚未完成的回放，並直接從存檔末端繼續。
 - 存檔回放以一組 user 與下一則可見 assistant 為一回合，不顯示 `model_image` 等模型不可見訊息。載入仍保留目前全域角色卡、助手、Prompt 與設定。
 - 已啟用的頻道與 Bot 私訊可以直接輸入對話，不需要文字指令前綴。
@@ -320,12 +324,13 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 
 | 檔案或目錄 | 說明 |
 | --- | --- |
-| `data/app-state.json` | runtime state、目前對話、目前 Prompt、模型內容、去重 AI logs 與對話存檔摘要；不重複保存角色卡或完整存檔。 |
+| `data/app-state.json` | 全域 runtime 設定、目前網頁故事 ID、Discord 頻道輕量索引、目前 Prompt 與對話存檔摘要；不保存完整對話、AI logs、角色卡或完整存檔。 |
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/environment.env` | 根目錄 `.env` 的完整本機備份，包含 Token 與 API Key。 |
 | `data/cardstate.json` | 角色卡、助手與全局世界書的獨立資料檔；內容未變更時不重複寫入。 |
 | `data/saved-sessions/` | 每個網頁對話存檔各自一份對話專屬快照；只保存對話、回合、時間進度、壓縮內容、該角色 runtime 與 AI logs，不保存角色卡、助手、Prompt 或全域設定。 |
+| `data/conversation-contexts/` | 本地故事及每個 Discord 頻道／私訊各自一份 runtime；保存對話、回合、時間進度、壓縮內容、角色 runtime、玩家分配及去重 AI logs。舊共享對話首次升級時會移入原 `lastDiscordChannelId`。 |
 | `data/conversation-images/` | 目前對話跑圖暫存；未被目前對話引用時自動清除。 |
 | `data/saved-session-images/` | 各對話存檔引用的跑圖；刪除該存檔時一併刪除。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |

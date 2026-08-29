@@ -211,7 +211,8 @@ export function buildDiscordArchiveBrowserPayload({
     `**${text("最後的對話")}**`,
     lastDialogue,
     "",
-    `${text("使用")} \`/archive_return mode:0 num:${number}\` ${text("從頭回放，或使用")} \`mode:1\` ${text("從末端繼續。")}`
+    `${text("從頭回放：")}\`/archive_return mode:0 num:${number}\``,
+    `${text("從最後對話繼續：")}\`/archive_return mode:1 num:${number}\``
   ].join("\n");
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()

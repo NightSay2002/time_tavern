@@ -101,6 +101,8 @@ test("archive browser uses stable session ids for private pagination payloads", 
   assert.match(payload.content, /對話存檔 1 \/ 2/u);
   assert.match(payload.content, /名稱：新存檔/u);
   assert.match(payload.content, /AI 1/u);
+  assert.match(payload.content, /從頭回放：`\/archive_return mode:0 num:1`/u);
+  assert.match(payload.content, /從最後對話繼續：`\/archive_return mode:1 num:1`/u);
   assert.deepEqual(payload.allowedMentions, { parse: [] });
 
   const buttons = payload.components[0].toJSON().components;

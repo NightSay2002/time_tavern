@@ -115,7 +115,7 @@ NovelAI：
 Discord：
 
 - 八個 Slash 指令：`/ai_start`、`/ai_status`、`/stop`、`/player_set`、`/reload`、`/quick_send`、`/archive`、`/archive_return`。
-- 支援頻道與私訊直接對話、文字／圖片附件、角色卡與存檔瀏覽、多玩家座位、訊息重算與反應回饋。
+- 每個頻道與私訊可獨立遊玩不同故事；支援文字／圖片附件、多開場角色卡、存檔瀏覽、多玩家座位、訊息重算與反應回饋，網頁可手動切換管理各故事。
 
 ## 預覽
 

@@ -54,7 +54,11 @@ test("all time judgment word lists use script-independent matching", () => {
 
 test("Discord role-card browser converts labels but preserves card content", () => {
   const payload = buildDiscordRoleCardBrowserPayload({
-    roleCards: [{ id: "card-1", name: "雲端與滑鼠", description: "儲存她的祕密" }],
+    roleCards: [{
+      id: "card-1",
+      name: "雲端與滑鼠",
+      openingDialogues: [{ id: "opening-1", content: "儲存她的祕密" }]
+    }],
     activeRoleCardId: "card-1"
   }, 1, UI_LANGUAGE_SIMPLIFIED);
 

@@ -1427,6 +1427,35 @@ dialog.session-picker-dialog {
   gap: 8px;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.conversation-context-picker select {
+  width: clamp(150px, 22vw, 260px);
+  min-height: 38px;
+  padding: 7px 30px 7px 10px;
+  border: 1px solid rgba(139, 203, 255, 0.4);
+  border-radius: 6px;
+  background-color: rgba(15, 18, 35, 0.96);
+  color: #ebe8ff;
+  font-size: 14px;
+  text-overflow: ellipsis;
+}
+
+.conversation-context-picker select:focus-visible {
+  outline: 2px solid #ff4bc1;
+  outline-offset: 2px;
+}
+
 .icon-button {
   width: 42px;
   height: 42px;
@@ -4024,6 +4053,13 @@ body.novelai-studio-body .novelai-small-preview {
   .discord-chat-tools {
     flex: 0 0 auto;
     gap: 2px;
+  }
+
+  .conversation-context-picker select {
+    width: min(34vw, 150px);
+    min-height: 34px;
+    padding: 6px 24px 6px 8px;
+    font-size: 12px;
   }
 
   .icon-button {

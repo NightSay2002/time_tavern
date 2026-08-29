@@ -68,6 +68,7 @@ const el = {
   chatHeaderAvatar: document.getElementById("chatHeaderAvatar"),
   chatHeaderTitle: document.getElementById("chatHeaderTitle"),
   chatHeaderSubtitle: document.getElementById("chatHeaderSubtitle"),
+  conversationContextSelect: document.getElementById("conversationContextSelect"),
   aiLogs: document.getElementById("aiLogs"),
   chatForm: document.getElementById("chatForm"),
   chatCommandMenu: document.getElementById("chatCommandMenu"),
@@ -5299,6 +5300,9 @@ function renderStatus(state) {
   el.chatInput.placeholder = getChatInputPlaceholder(state, display);
   el.sendBtn.disabled = Boolean(pendingRoleCardStartId) || !hasConversationTarget || isChatStreaming;
   el.sendBtn.textContent = isChatStreaming ? "生成中..." : pendingRoleCardStartId ? "切換中..." : "送出";
+  if (el.conversationContextSelect) {
+    el.conversationContextSelect.disabled = Boolean(pendingRoleCardStartId) || isChatStreaming;
+  }
 
   if (el.discordBotLinkBtn) {
     el.discordBotLinkBtn.disabled = !discordAuthorizeUrl;
@@ -5309,6 +5313,49 @@ function renderStatus(state) {
 
   const canEditAiOutput = state.conversation.some((msg) => msg.role === "assistant" && !isImageOnlyMessage(msg));
   el.editAiOutputBtn.disabled = !canEditAiOutput;
+}
+
+function renderConversationContextPicker(state = appState) {
+  if (!el.conversationContextSelect) {
+    return;
+  }
+  const contexts = Array.isArray(state?.conversationContexts?.items)
+    ? state.conversationContexts.items
+    : [];
+  const selectedContextId = String(
+    state?.conversationContexts?.selectedContextId || state?.selectedConversationContextId || "local"
+  );
+  const options = contexts.map((context) => {
+    const option = document.createElement("option");
+    option.value = String(context.id || "");
+    option.textContent = String(context.label || context.id || "未命名故事");
+    option.selected = option.value === selectedContextId;
+    return option;
+  });
+  el.conversationContextSelect.replaceChildren(...options);
+  el.conversationContextSelect.value = selectedContextId;
+  el.conversationContextSelect.disabled = isChatStreaming;
+}
+
+async function switchConversationContext(contextId = "") {
+  const previousContextId = String(appState?.selectedConversationContextId || "local");
+  if (!contextId || contextId === previousContextId) {
+    return;
+  }
+  el.conversationContextSelect.disabled = true;
+  try {
+    const payload = await request("/api/conversation-context", {
+      method: "PUT",
+      body: JSON.stringify({ contextId })
+    });
+    appState = payload?.state || appState;
+    await refresh();
+  } catch (error) {
+    el.conversationContextSelect.value = previousContextId;
+    showToast(error.message, "error");
+  } finally {
+    el.conversationContextSelect.disabled = isChatStreaming;
+  }
 }
 
 function createClientMessageId(prefix = "msg") {
@@ -7523,6 +7570,7 @@ async function refresh() {
   renderAllPromptModeSelects(getActivePromptMode(state));
   renderRoleCards(state);
   renderSessionPicker(state);
+  renderConversationContextPicker(state);
   renderMessages(state);
   renderAiLogs(state);
   renderStatus(state);
@@ -8169,6 +8217,11 @@ async function removeRoleCard(card) {
 }
 
 function bindEvents() {
+  if (el.conversationContextSelect) {
+    el.conversationContextSelect.addEventListener("change", () => {
+      void switchConversationContext(el.conversationContextSelect.value);
+    });
+  }
   if (el.mobilePageChatBtn) {
     el.mobilePageChatBtn.addEventListener("click", () => setMobilePage("chat"));
   }

@@ -47,3 +47,16 @@ test("legacy sequential image settings migrate to parallel mode", () => {
     );
   }
 });
+
+test("parallel image completion writes logs and images back to its source context", () => {
+  assert.match(serverSource, /aiLogTargetState: currentState/u);
+  assert.match(serverSource, /aiLogs: currentState\.aiLogs\.slice\(startingAiLogCount\)/u);
+  assert.match(
+    serverSource,
+    /withStateLock\([\s\S]*?appendModelImageGenerationMessage\(result, context\)[\s\S]*?contextOptions/u
+  );
+  assert.match(
+    serverSource,
+    /contextId: normalizeConversationContextId\(activeConversationExecutionContextId\)/u
+  );
+});
