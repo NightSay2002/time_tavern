@@ -29,12 +29,20 @@ test("chat API provider drafts preserve each provider key, model, and base URL",
 
   assert.equal(activeProvider, "deepseek");
   assert.deepEqual(drafts.deepseek, {
+    keyGroups: [{
+      key: "current-deepseek-key",
+      processingKeys: ["current-deepseek-processing-2", "current-deepseek-processing-3"]
+    }],
     key: "current-deepseek-key",
     processingKeys: ["current-deepseek-processing-2", "current-deepseek-processing-3"],
     model: "deepseek-v4-pro",
     baseUrl: "https://api.deepseek.com"
   });
   assert.deepEqual(drafts.zhipu, {
+    keyGroups: [{
+      key: "saved-zhipu-key",
+      processingKeys: ["saved-zhipu-processing-2"]
+    }],
     key: "saved-zhipu-key",
     processingKeys: ["saved-zhipu-processing-2"],
     model: "glm-5.3-flash",
@@ -64,6 +72,7 @@ test("provider aliases and custom provider settings normalize without crossing p
   });
   assert.equal(activeProvider, "custom");
   assert.equal(drafts.custom.key, "active-custom-key");
+  assert.deepEqual(drafts.custom.keyGroups, [{ key: "active-custom-key", processingKeys: [] }]);
   assert.deepEqual(drafts.custom.processingKeys, []);
   assert.equal(drafts.custom.model, "custom-model");
   assert.equal(drafts.custom.baseUrl, "https://example.test/v1");
@@ -98,11 +107,28 @@ test("one reasoning field migrates the old provider-specific values", () => {
   assert.equal((webSource.match(/label:\s*"思考模式強度"/gu) || []).length, 1);
   assert.match(webSource, /saveCurrentChatApiProviderDraft\(\);\s+showChatApiProviderDraft\(event\.target\.value\);/u);
   assert.match(webSource, /processingKeys:\s*collectChatApiProcessingKeyValues\(\)/u);
-  assert.match(webSource, /renderChatApiProcessingKeyRows\(draft\.processingKeys\)/u);
+  assert.match(webSource, /renderChatApiKeyGroupControls\(\)/u);
   assert.match(webSource, /getChatApiProviderEnvEntries\(chatApiProviderDrafts\)/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT"/u);
   assert.match(serverSource, /getChatApiProviderKeyAliases\(provider\)/u);
+});
+
+test("provider drafts preserve multiple general-purpose key groups", () => {
+  const { drafts } = createChatApiProviderDrafts({
+    CHAT_API_PROVIDER: "deepseek",
+    CHAT_API_KEY: "story-key-1",
+    CHAT_API_KEY2: "model-key-1",
+    CHAT_API_KEY_GROUP2: "story-key-2",
+    CHAT_API_KEY_GROUP2_2: "model-key-2"
+  });
+  assert.deepEqual(drafts.deepseek.keyGroups, [
+    { key: "story-key-1", processingKeys: ["model-key-1"] },
+    { key: "story-key-2", processingKeys: ["model-key-2"] }
+  ]);
+  const entries = Object.fromEntries(getChatApiProviderEnvEntries(drafts));
+  assert.equal(entries.DEEPSEEK_API_KEY_GROUP2, "story-key-2");
+  assert.equal(entries.DEEPSEEK_API_KEY_GROUP2_2, "model-key-2");
 });
 
 test("web reasoning controls use the same provider and model capability matrix", () => {

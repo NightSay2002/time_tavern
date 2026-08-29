@@ -5,6 +5,7 @@ import test from "node:test";
 const publishedDefaults = JSON.parse(
   fs.readFileSync(new URL("../defaults/app-defaults.json", import.meta.url), "utf8")
 );
+const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
 test("published defaults exclude Discord credentials and identifiers", () => {
   const environmentValues = publishedDefaults?.environment?.values || {};
@@ -16,4 +17,18 @@ test("published defaults exclude Discord credentials and identifiers", () => {
     Object.keys(environmentValues).filter((key) => /(?:^|_)API_KEY$/u.test(key)),
     []
   );
+  assert.deepEqual(
+    Object.keys(environmentValues).filter((key) => /API_KEY_GROUP/iu.test(key)),
+    []
+  );
+});
+
+test("global settings files exclude secrets and preserve local credentials on import", () => {
+  const exportBlock = serverSource.match(/function createGlobalSettingsExport[\s\S]*?\n\}\n\nfunction sanitizeNovelAiDefaultSettings/u)?.[0] || "";
+  const importEnvironmentBlock = serverSource.match(/function buildImportedEnvironmentContent[\s\S]*?\n\}\n\nfunction readEnvFileContentForEditor/u)?.[0] || "";
+
+  assert.match(exportBlock, /createDefaultEnvironmentPayload\(readEnvFileContent\(\)\)/u);
+  assert.doesNotMatch(exportBlock, /(?:^|\n)\s*(?:savedSessions|conversation|aiLogs):/u);
+  assert.match(importEnvironmentBlock, /isDefaultEnvSecretKey\(key\)/u);
+  assert.match(importEnvironmentBlock, /\.\.\.preservedSecrets/u);
 });

@@ -59,6 +59,7 @@ const el = {
   useDefaultsBtn: document.getElementById("useDefaultsBtn"),
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
   updateDefaultsBtn: document.getElementById("updateDefaultsBtn"),
+  globalSettingsFileInput: document.getElementById("globalSettingsFileInput"),
   uiLanguageToggleBtn: document.getElementById("uiLanguageToggleBtn"),
   feedbackLink: document.getElementById("feedbackLink"),
   mobilePageChatBtn: document.getElementById("mobilePageChatBtn"),
@@ -69,6 +70,7 @@ const el = {
   chatHeaderTitle: document.getElementById("chatHeaderTitle"),
   chatHeaderSubtitle: document.getElementById("chatHeaderSubtitle"),
   conversationContextSelect: document.getElementById("conversationContextSelect"),
+  deleteConversationContextBtn: document.getElementById("deleteConversationContextBtn"),
   aiLogs: document.getElementById("aiLogs"),
   chatForm: document.getElementById("chatForm"),
   chatCommandMenu: document.getElementById("chatCommandMenu"),
@@ -463,13 +465,6 @@ const ENV_FIELD_GROUPS = [
         help: "決定預設 Base URL；custom 供應商必須另外填 CHAT_API_BASE_URL。"
       },
       {
-        key: "CHAT_API_KEY",
-        label: "對話 API Key",
-        type: "password",
-        autocomplete: "off",
-        help: "可填 DeepSeek、OpenAI、Gemini 或智譜 API key；舊版 provider 專用 key 會自動帶入。"
-      },
-      {
         key: "CHAT_API_BASE_URL",
         label: "對話 API Base URL",
         type: "text",
@@ -664,6 +659,7 @@ const uiLanguageController = createUiLanguageController({
 });
 let activeChatApiProviderSetting = "deepseek";
 let chatApiProviderDrafts = {};
+let activeChatApiKeyGroupIndex = 0;
 
 function getUiLanguageText(traditionalText = "") {
   return uiLanguageController.translate(traditionalText);
@@ -714,7 +710,7 @@ function isChatApiProcessingKeyName(key = "") {
 }
 
 function isProviderChatApiProcessingKeyName(key = "") {
-  return /^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|CUSTOM_API_KEY)[2-9]\d*$/u
+  return /^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|CUSTOM_API_KEY)(?:[2-9]\d*|_GROUP[2-9]\d*(?:_[2-9]\d*)?)$/u
     .test(String(key || "").trim());
 }
 
@@ -1879,11 +1875,36 @@ function getEnvFieldValue(parsedEnv, key) {
   return "";
 }
 
-function saveCurrentChatApiProviderDraft() {
+function normalizeChatApiKeyGroupDrafts(groups = []) {
+  const source = Array.isArray(groups) && groups.length > 0 ? groups : [{}];
+  return source.map((group) => ({
+    key: String(group?.key || ""),
+    processingKeys: Array.isArray(group?.processingKeys)
+      ? group.processingKeys.map((value) => String(value || ""))
+      : []
+  }));
+}
+
+function saveCurrentChatApiKeyGroupDraft() {
   const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
+  const draft = chatApiProviderDrafts[provider] || {};
+  const groups = normalizeChatApiKeyGroupDrafts(draft.keyGroups);
+  groups[activeChatApiKeyGroupIndex] = {
+    key: document.getElementById("chatApiPrimaryKeyInput")?.value || "",
+    processingKeys: collectChatApiProcessingKeyValues()
+  };
+  draft.keyGroups = groups;
+  draft.key = groups[0]?.key || "";
+  draft.processingKeys = groups[0]?.processingKeys || [];
+  chatApiProviderDrafts[provider] = draft;
+}
+
+function saveCurrentChatApiProviderDraft() {
+  saveCurrentChatApiKeyGroupDraft();
+  const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
+  const currentDraft = chatApiProviderDrafts[provider] || {};
   chatApiProviderDrafts[provider] = {
-    key: document.getElementById("envField_CHAT_API_KEY")?.value || "",
-    processingKeys: collectChatApiProcessingKeyValues(),
+    ...currentDraft,
     model: document.getElementById("envField_CHAT_API_MODEL")?.value || "",
     baseUrl: document.getElementById("envField_CHAT_API_BASE_URL")?.value || ""
   };
@@ -1931,19 +1952,16 @@ function syncChatApiReasoningField() {
 function showChatApiProviderDraft(provider) {
   activeChatApiProviderSetting = normalizeChatApiProviderSetting(provider);
   const draft = chatApiProviderDrafts[activeChatApiProviderSetting] || {};
-  const keyInput = document.getElementById("envField_CHAT_API_KEY");
   const modelInput = document.getElementById("envField_CHAT_API_MODEL");
   const baseUrlInput = document.getElementById("envField_CHAT_API_BASE_URL");
-  if (keyInput) {
-    keyInput.value = draft.key || "";
-  }
   if (modelInput) {
     modelInput.value = draft.model || "";
   }
   if (baseUrlInput) {
     baseUrlInput.value = draft.baseUrl || "";
   }
-  renderChatApiProcessingKeyRows(draft.processingKeys);
+  activeChatApiKeyGroupIndex = 0;
+  renderChatApiKeyGroupControls();
   syncChatApiReasoningField();
 }
 
@@ -2175,7 +2193,7 @@ function renderEnvExtraRows(entries = []) {
 }
 
 function renumberChatApiProcessingKeyRows() {
-  const rows = Array.from(document.querySelectorAll("[data-chat-api-processing-key-row]"));
+  const rows = Array.from(document.querySelectorAll("#chatApiProcessingKeyList [data-chat-api-processing-key-row]"));
   rows.forEach((row, index) => {
     const key = `CHAT_API_KEY${index + 2}`;
     const label = row.querySelector("[data-chat-api-processing-key-label]");
@@ -2188,13 +2206,14 @@ function renumberChatApiProcessingKeyRows() {
       input.name = key;
       input.id = `envField_${key}`;
       input.placeholder = key;
+      input.setAttribute("aria-label", `大模型處理 Key ${key}`);
     }
   });
 }
 
 function createChatApiProcessingKeyRow(value = "", keyIndex = 2) {
   const row = document.createElement("div");
-  row.className = "env-extra-row chat-api-processing-key-row";
+  row.className = "chat-api-key-field chat-api-processing-key-row";
   row.dataset.chatApiProcessingKeyRow = "true";
   const key = `CHAT_API_KEY${Math.max(2, Number(keyIndex) || 2)}`;
 
@@ -2202,6 +2221,10 @@ function createChatApiProcessingKeyRow(value = "", keyIndex = 2) {
   keyLabel.className = "env-field-key";
   keyLabel.dataset.chatApiProcessingKeyLabel = "true";
   keyLabel.textContent = key;
+
+  const title = document.createElement("span");
+  title.className = "env-field-title";
+  title.textContent = keyIndex === 2 ? "大模型處理 Key" : `大模型處理 Key ${keyIndex - 1}`;
 
   const input = document.createElement("input");
   input.type = "password";
@@ -2212,6 +2235,7 @@ function createChatApiProcessingKeyRow(value = "", keyIndex = 2) {
   input.name = key;
   input.id = `envField_${key}`;
   input.placeholder = key;
+  input.setAttribute("aria-label", `大模型處理 Key ${key}`);
   input.spellcheck = false;
 
   const removeBtn = document.createElement("button");
@@ -2224,7 +2248,10 @@ function createChatApiProcessingKeyRow(value = "", keyIndex = 2) {
     setChatApiTestStatus("", "設定已變更，尚未重新測試");
   });
 
-  row.append(keyLabel, input, removeBtn);
+  const heading = document.createElement("span");
+  heading.className = "chat-api-key-field-heading";
+  heading.append(title, keyLabel);
+  row.append(heading, input, removeBtn);
   return row;
 }
 
@@ -2236,32 +2263,130 @@ function renderChatApiProcessingKeyRows(values = [], list = document.getElementB
   list.replaceChildren(...processingKeys.map((value, index) => createChatApiProcessingKeyRow(value, index + 2)));
 }
 
-function createChatApiProcessingKeyControls(processingKeys = []) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "chat-api-processing-keys";
+function createChatApiPrimaryKeyField(value = "") {
+  const field = document.createElement("label");
+  field.className = "chat-api-key-field chat-api-primary-key-field";
+  const heading = document.createElement("span");
+  heading.className = "chat-api-key-field-heading";
+  const title = document.createElement("span");
+  title.className = "env-field-title";
+  title.textContent = "對話 API Key";
+  const keyLabel = document.createElement("code");
+  keyLabel.className = "env-field-key";
+  keyLabel.textContent = "CHAT_API_KEY";
+  const input = document.createElement("input");
+  input.id = "chatApiPrimaryKeyInput";
+  input.type = "password";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.value = value;
+  input.dataset.envKey = "CHAT_API_KEY";
+  heading.append(title, keyLabel);
+  field.append(heading, input);
+  return field;
+}
 
-  const hint = document.createElement("p");
-  hint.className = "form-hint";
-  hint.textContent = "大模型處理用對話 API Key 會依目前啟用的大模型順序使用；Key 不足時沿用最後一把。這組 Key 會跟隨對話 API 供應商切換。";
+function renderChatApiKeyGroupControls() {
+  const wrapper = document.getElementById("chatApiKeyGroups");
+  if (!wrapper) {
+    return;
+  }
+  const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
+  const draft = chatApiProviderDrafts[provider] || {};
+  const groups = normalizeChatApiKeyGroupDrafts(draft.keyGroups);
+  draft.keyGroups = groups;
+  activeChatApiKeyGroupIndex = Math.min(Math.max(0, activeChatApiKeyGroupIndex), groups.length - 1);
+  const activeGroup = groups[activeChatApiKeyGroupIndex];
 
-  const list = document.createElement("div");
-  list.id = "chatApiProcessingKeyList";
-  list.className = "env-extra-list chat-api-processing-key-list";
-  renderChatApiProcessingKeyRows(processingKeys, list);
-
+  const tabs = document.createElement("div");
+  tabs.className = "opening-dialogue-tabs chat-api-key-tabs";
+  tabs.setAttribute("aria-label", "對話 API Key 組切換");
+  groups.forEach((group, index) => {
+    const tab = document.createElement("div");
+    tab.className = `opening-dialogue-tab${index === activeChatApiKeyGroupIndex ? " active" : ""}`;
+    const switchBtn = document.createElement("button");
+    switchBtn.type = "button";
+    switchBtn.className = "opening-dialogue-tab-label";
+    switchBtn.textContent = `Key ${index + 1}`;
+    switchBtn.addEventListener("click", () => {
+      if (index === activeChatApiKeyGroupIndex) {
+        return;
+      }
+      saveCurrentChatApiKeyGroupDraft();
+      activeChatApiKeyGroupIndex = index;
+      renderChatApiKeyGroupControls();
+    });
+    tab.appendChild(switchBtn);
+    if (groups.length > 1) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "opening-dialogue-tab-close";
+      deleteBtn.textContent = "×";
+      deleteBtn.title = `刪除 Key ${index + 1}`;
+      deleteBtn.addEventListener("click", () => {
+        saveCurrentChatApiKeyGroupDraft();
+        const nextGroups = normalizeChatApiKeyGroupDrafts(draft.keyGroups);
+        nextGroups.splice(index, 1);
+        draft.keyGroups = nextGroups;
+        activeChatApiKeyGroupIndex = Math.min(activeChatApiKeyGroupIndex, nextGroups.length - 1);
+        renderChatApiKeyGroupControls();
+        setChatApiTestStatus("", "設定已變更，尚未重新測試");
+      });
+      tab.appendChild(deleteBtn);
+    }
+    tabs.appendChild(tab);
+  });
   const addBtn = document.createElement("button");
   addBtn.type = "button";
-  addBtn.id = "addChatApiProcessingKeyBtn";
-  addBtn.className = "secondary";
-  addBtn.textContent = "＋ 新增大模型處理 Key";
+  addBtn.className = "chat-api-key-tab-add secondary";
+  addBtn.textContent = "＋";
+  addBtn.title = "新增 Key 組";
   addBtn.addEventListener("click", () => {
+    saveCurrentChatApiKeyGroupDraft();
+    draft.keyGroups = normalizeChatApiKeyGroupDrafts(draft.keyGroups);
+    draft.keyGroups.push({ key: "", processingKeys: [""] });
+    activeChatApiKeyGroupIndex = draft.keyGroups.length - 1;
+    renderChatApiKeyGroupControls();
+    setChatApiTestStatus("", "設定已變更，尚未重新測試");
+  });
+  tabs.appendChild(addBtn);
+
+  const keyGrid = document.createElement("div");
+  keyGrid.className = "chat-api-key-grid";
+  keyGrid.appendChild(createChatApiPrimaryKeyField(activeGroup.key));
+  const list = document.createElement("div");
+  list.id = "chatApiProcessingKeyList";
+  list.className = "chat-api-processing-key-list";
+  renderChatApiProcessingKeyRows(activeGroup.processingKeys, list);
+  keyGrid.appendChild(list);
+
+  const addProcessingBtn = document.createElement("button");
+  addProcessingBtn.type = "button";
+  addProcessingBtn.id = "addChatApiProcessingKeyBtn";
+  addProcessingBtn.className = "secondary chat-api-processing-key-add";
+  addProcessingBtn.textContent = "＋ 新增大模型處理 Key";
+  addProcessingBtn.addEventListener("click", () => {
     const nextIndex = list.querySelectorAll("[data-chat-api-processing-key-row]").length + 2;
     list.appendChild(createChatApiProcessingKeyRow("", nextIndex));
     renumberChatApiProcessingKeyRows();
     setChatApiTestStatus("", "設定已變更，尚未重新測試");
   });
 
-  wrapper.append(hint, list, addBtn);
+  const hint = document.createElement("p");
+  hint.className = "form-hint";
+  hint.textContent = "每個故事會固定租用一組 Key；24 小時沒有 AI 活動後，該組才會供新故事使用。組內額外 Key 依啟用的大模型順序使用。";
+  wrapper.replaceChildren(tabs, keyGrid, addProcessingBtn, hint);
+}
+
+function createChatApiProcessingKeyControls(keyGroups = []) {
+  const wrapper = document.createElement("div");
+  wrapper.id = "chatApiKeyGroups";
+  wrapper.className = "chat-api-key-groups";
+  const provider = normalizeChatApiProviderSetting(activeChatApiProviderSetting);
+  const draft = chatApiProviderDrafts[provider] || {};
+  draft.keyGroups = normalizeChatApiKeyGroupDrafts(keyGroups);
+  chatApiProviderDrafts[provider] = draft;
+  queueMicrotask(renderChatApiKeyGroupControls);
   return wrapper;
 }
 
@@ -2293,11 +2418,11 @@ function renderEnvSettingsForm(content = "") {
   const providerState = createChatApiProviderDrafts(parsed);
   activeChatApiProviderSetting = providerState.activeProvider;
   chatApiProviderDrafts = providerState.drafts;
+  activeChatApiKeyGroupIndex = 0;
   const activeDraft = chatApiProviderDrafts[activeChatApiProviderSetting] || {};
   const formEnv = {
     ...parsed,
     CHAT_API_PROVIDER: activeChatApiProviderSetting,
-    CHAT_API_KEY: activeDraft.key || "",
     CHAT_API_MODEL: activeDraft.model || "",
     CHAT_API_BASE_URL: activeDraft.baseUrl || "",
     CHAT_API_REASONING_EFFORT: resolveChatApiReasoningEffort(parsed, activeChatApiProviderSetting)
@@ -2324,7 +2449,7 @@ function renderEnvSettingsForm(content = "") {
     group.fields.forEach((field) => grid.appendChild(createEnvField(field, formEnv)));
     section.appendChild(grid);
     if (group.title === "對話API") {
-      section.appendChild(createChatApiProcessingKeyControls(activeDraft.processingKeys));
+      section.appendChild(createChatApiProcessingKeyControls(activeDraft.keyGroups));
       section.appendChild(createChatApiTestControls());
     }
     el.envSettingsFields.appendChild(section);
@@ -2383,13 +2508,18 @@ function buildEnvContentFromForm() {
       getChatApiProviderEnvEntries(chatApiProviderDrafts).forEach(([key, value]) => {
         lines.push(`${key}=${formatEnvValue(value)}`);
       });
-      const processingKeys = collectChatApiProcessingKeyValues();
-      if (processingKeys.length > 0) {
-        lines.push("# 大模型處理用對話 API Key。依啟用的大模型順序使用；Key 不足時沿用最後一把，並隨對話 API 供應商切換。");
-        processingKeys.forEach((value, index) => {
-          lines.push(`CHAT_API_KEY${index + 2}=${formatEnvValue(value)}`);
+      const activeDraft = chatApiProviderDrafts[activeChatApiProviderSetting] || {};
+      const keyGroups = normalizeChatApiKeyGroupDrafts(activeDraft.keyGroups);
+      lines.push("# 每個故事固定使用一組 Key；Key 1 沿用舊變數，其他組使用 CHAT_API_KEY_GROUPn。");
+      keyGroups.forEach((group, groupIndex) => {
+        const groupNumber = groupIndex + 1;
+        const primaryKey = groupNumber === 1 ? "CHAT_API_KEY" : `CHAT_API_KEY_GROUP${groupNumber}`;
+        const processingPrefix = groupNumber === 1 ? "CHAT_API_KEY" : `CHAT_API_KEY_GROUP${groupNumber}_`;
+        lines.push(`${primaryKey}=${formatEnvValue(group.key)}`);
+        group.processingKeys.forEach((value, index) => {
+          lines.push(`${processingPrefix}${index + 2}=${formatEnvValue(value)}`);
         });
-      }
+      });
     }
   });
 
@@ -2426,7 +2556,10 @@ async function testChatApiConnection() {
     setChatApiTestStatus("testing", "測試中...");
     const payload = await request("/api/chat-api/test", {
       method: "POST",
-      body: JSON.stringify({ content: buildEnvContentFromForm() })
+      body: JSON.stringify({
+        content: buildEnvContentFromForm(),
+        keyGroup: activeChatApiKeyGroupIndex + 1
+      })
     });
     const detail = [
       payload?.model ? `模型：${payload.model}` : "",
@@ -5303,6 +5436,14 @@ function renderStatus(state) {
   if (el.conversationContextSelect) {
     el.conversationContextSelect.disabled = Boolean(pendingRoleCardStartId) || isChatStreaming;
   }
+  if (el.deleteConversationContextBtn) {
+    const selectedContextId = String(
+      state?.conversationContexts?.selectedContextId || state?.selectedConversationContextId || "local"
+    );
+    el.deleteConversationContextBtn.disabled = selectedContextId === "local" ||
+      Boolean(pendingRoleCardStartId) ||
+      isChatStreaming;
+  }
 
   if (el.discordBotLinkBtn) {
     el.discordBotLinkBtn.disabled = !discordAuthorizeUrl;
@@ -5328,13 +5469,17 @@ function renderConversationContextPicker(state = appState) {
   const options = contexts.map((context) => {
     const option = document.createElement("option");
     option.value = String(context.id || "");
-    option.textContent = String(context.label || context.id || "未命名故事");
+    const keyGroupLabel = Number(context.keyGroup) > 0 ? ` · Key ${Number(context.keyGroup)}` : "";
+    option.textContent = `${String(context.label || context.id || "未命名故事")}${keyGroupLabel}`;
     option.selected = option.value === selectedContextId;
     return option;
   });
   el.conversationContextSelect.replaceChildren(...options);
   el.conversationContextSelect.value = selectedContextId;
   el.conversationContextSelect.disabled = isChatStreaming;
+  if (el.deleteConversationContextBtn) {
+    el.deleteConversationContextBtn.disabled = selectedContextId === "local" || isChatStreaming;
+  }
 }
 
 async function switchConversationContext(contextId = "") {
@@ -5355,6 +5500,42 @@ async function switchConversationContext(contextId = "") {
     showToast(error.message, "error");
   } finally {
     el.conversationContextSelect.disabled = isChatStreaming;
+  }
+}
+
+async function deleteSelectedConversationContext() {
+  const contextId = String(
+    appState?.conversationContexts?.selectedContextId || appState?.selectedConversationContextId || "local"
+  );
+  if (!contextId || contextId === "local") {
+    return;
+  }
+  const contextLabel = el.conversationContextSelect?.selectedOptions?.[0]?.textContent || contextId;
+  const confirmed = window.confirm(getUiLanguageText(
+    `確定刪除「${contextLabel}」的目前故事嗎？\n已建立的對話存檔不受影響。`
+  ));
+  if (!confirmed) {
+    return;
+  }
+  if (el.deleteConversationContextBtn) {
+    el.deleteConversationContextBtn.disabled = true;
+  }
+  if (el.conversationContextSelect) {
+    el.conversationContextSelect.disabled = true;
+  }
+  try {
+    const payload = await request("/api/conversation-context", {
+      method: "DELETE",
+      body: JSON.stringify({ contextId })
+    });
+    appState = payload?.state || appState;
+    await refresh();
+    showToast(getUiLanguageText("Discord 頻道故事已刪除；對話存檔仍然保留。"));
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    renderConversationContextPicker(appState);
+    renderStatus(appState);
   }
 }
 
@@ -8050,20 +8231,60 @@ async function saveModularPromptConfig() {
   }
 }
 
+function createGlobalSettingsFileName() {
+  const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  return `time-tavern-global-settings-${timestamp}.json`;
+}
+
+async function fetchGlobalSettingsExport() {
+  const payload = await request("/api/defaults/export");
+  return payload?.defaults || {};
+}
+
+function downloadGlobalSettingsFile(content, fileName) {
+  const blob = new Blob([content], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function saveDefaults() {
-  if (!window.confirm("要把目前的使用者設定、角色卡、Prompt 與環境顯示等內容匯出成這台裝置的全局設定嗎？AI 呼叫紀錄、Discord Bot Token、對話 API Key 與目前對話不會保存。")) {
-    return;
-  }
+  const fileName = createGlobalSettingsFileName();
+  let fileHandle = null;
   try {
     if (el.saveDefaultsBtn) {
       el.saveDefaultsBtn.disabled = true;
       el.saveDefaultsBtn.textContent = "匯出中...";
     }
-    const payload = await request("/api/defaults/save", { method: "POST" });
-    appState = payload?.state || appState;
-    const defaults = payload?.defaults || {};
-    showToast(`全局設定已匯出：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
+    if (typeof window.showSaveFilePicker === "function") {
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{
+          description: "全局設定 JSON",
+          accept: { "application/json": [".json"] }
+        }]
+      });
+    }
+    const defaults = await fetchGlobalSettingsExport();
+    const content = `${JSON.stringify(defaults, null, 2)}\n`;
+    if (fileHandle) {
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+    } else {
+      downloadGlobalSettingsFile(content, fileName);
+    }
+    showToast(`全局設定已匯出：角色卡 ${(defaults.roleCards || []).length} 張，Prompt ${Object.keys(defaults.modularPromptConfigs || {}).length} 個`);
   } catch (error) {
+    if (error?.name === "AbortError") {
+      return;
+    }
     showToast(error.message || "全局設定匯出失敗", "error");
   } finally {
     if (el.saveDefaultsBtn) {
@@ -8073,8 +8294,8 @@ async function saveDefaults() {
   }
 }
 
-async function applyDefaults() {
-  if (!window.confirm("要匯入本機全局設定並覆蓋目前使用者設定、角色卡、Prompt 與環境設定嗎？原本環境設定、目前對話與 AI 呼叫紀錄會清空。")) {
+async function applyDefaults(file) {
+  if (!file) {
     return;
   }
   try {
@@ -8082,17 +8303,33 @@ async function applyDefaults() {
       el.useDefaultsBtn.disabled = true;
       el.useDefaultsBtn.textContent = "匯入中...";
     }
-    const payload = await request("/api/defaults/apply", { method: "POST" });
+    if (file.size > 128 * 1024 * 1024) {
+      throw new Error("全局設定檔不可超過 128 MB。");
+    }
+    let importedDefaults;
+    try {
+      const parsed = JSON.parse(await file.text());
+      importedDefaults = parsed?.defaults && typeof parsed.defaults === "object" ? parsed.defaults : parsed;
+    } catch {
+      throw new Error("選擇的檔案不是有效 JSON。");
+    }
+    if (!window.confirm(`要匯入「${file.name}」並覆蓋目前全局設定嗎？目前對話與 AI 呼叫紀錄會清空；本機 Token、API Key 與對話存檔會保留。`)) {
+      return;
+    }
+    const payload = await request("/api/defaults/import", {
+      method: "POST",
+      body: JSON.stringify({ defaults: importedDefaults })
+    });
     appState = payload?.state || appState;
     await refresh();
-    const defaults = payload?.defaults || {};
-    showToast(`全局設定已匯入：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個，環境設定 ${defaults.environmentCount || 0} 項`);
+    const summary = payload?.defaults || {};
+    showToast(`全局設定已匯入：角色卡 ${summary.roleCardCount || 0} 張，Prompt ${summary.modularPromptCount || 0} 個，環境設定 ${summary.environmentCount || 0} 項`);
   } catch (error) {
-    const message = error.status === 404
-      ? "匯入全局設定 API 尚未載入，請重啟伺服器後再按一次。"
-      : error.message || "全局設定匯入失敗";
-    showToast(message, "error");
+    showToast(error.message || "全局設定匯入失敗", "error");
   } finally {
+    if (el.globalSettingsFileInput) {
+      el.globalSettingsFileInput.value = "";
+    }
     if (el.useDefaultsBtn) {
       el.useDefaultsBtn.disabled = false;
       el.useDefaultsBtn.textContent = "匯入全局設定";
@@ -8101,20 +8338,21 @@ async function applyDefaults() {
 }
 
 async function updateDefaults() {
-  if (!window.confirm("要取得目前程式版本隨附的作者預設嗎？這只會替換可供「匯入全局設定」套用的內容，不會立即改動目前角色卡、使用者設定、Prompt 或目前對話。")) {
+  if (!window.confirm("要直接套用目前程式版本隨附的作者預設嗎？目前對話與 AI 呼叫紀錄會清空；本機 Token、API Key 與對話存檔會保留。")) {
     return;
   }
   try {
     if (el.updateDefaultsBtn) {
       el.updateDefaultsBtn.disabled = true;
-      el.updateDefaultsBtn.textContent = "取得中...";
+      el.updateDefaultsBtn.textContent = "套用中...";
     }
-    const payload = await request("/api/defaults/update", { method: "POST" });
+    const payload = await request("/api/defaults/author", { method: "POST" });
     appState = payload?.state || appState;
+    await refresh();
     const defaults = payload?.defaults || {};
-    showToast(`作者預設已取得：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個；目前使用中的資料沒有改動`);
+    showToast(`作者預設已套用：角色卡 ${defaults.roleCardCount || 0} 張，Prompt ${defaults.modularPromptCount || 0} 個`);
   } catch (error) {
-    showToast(error.message || "作者預設取得失敗", "error");
+    showToast(error.message || "作者預設套用失敗", "error");
   } finally {
     if (el.updateDefaultsBtn) {
       el.updateDefaultsBtn.disabled = false;
@@ -8220,6 +8458,11 @@ function bindEvents() {
   if (el.conversationContextSelect) {
     el.conversationContextSelect.addEventListener("change", () => {
       void switchConversationContext(el.conversationContextSelect.value);
+    });
+  }
+  if (el.deleteConversationContextBtn) {
+    el.deleteConversationContextBtn.addEventListener("click", () => {
+      void deleteSelectedConversationContext();
     });
   }
   if (el.mobilePageChatBtn) {
@@ -8901,7 +9144,18 @@ function bindEvents() {
   }
 
   if (el.useDefaultsBtn) {
-    el.useDefaultsBtn.addEventListener("click", applyDefaults);
+    el.useDefaultsBtn.addEventListener("click", () => {
+      if (el.globalSettingsFileInput) {
+        el.globalSettingsFileInput.value = "";
+        el.globalSettingsFileInput.click();
+      }
+    });
+  }
+
+  if (el.globalSettingsFileInput) {
+    el.globalSettingsFileInput.addEventListener("change", () => {
+      applyDefaults(el.globalSettingsFileInput.files?.[0]);
+    });
   }
 
   if (el.updateDefaultsBtn) {

@@ -17,11 +17,12 @@ function getTopLevelNames(source, declaration) {
   return Array.from(block.matchAll(/^ {4}name:\s*"([^"]+)"/gmu), (match) => match[1]);
 }
 
-test("Discord exposes exactly the eight supported Slash commands", () => {
+test("Discord exposes exactly the nine supported Slash commands", () => {
   assert.deepEqual(getTopLevelNames(serverSource, "DISCORD_SLASH_COMMANDS"), [
     "ai_start",
     "ai_status",
     "stop",
+    "close",
     "player_set",
     "reload",
     "quick_send",
@@ -39,6 +40,7 @@ test("Discord exposes exactly the eight supported Slash commands", () => {
   assert.match(serverSource, /handleDiscordRoleCardBrowserButton\(interaction\)/u);
   assert.match(serverSource, /name:\s*"archive",[\s\S]*?name:\s*"action"/u);
   assert.match(serverSource, /name:\s*"archive_return",[\s\S]*?name:\s*"mode",[\s\S]*?name:\s*"num"/u);
+  assert.match(serverSource, /if \(name === "close"\)[\s\S]*?deleteConversationContext\(state, contextId\)/u);
   assert.match(serverSource, /handleDiscordArchiveBrowserButton\(interaction\)/u);
   assert.match(serverSource, /handleDiscordArchiveReplayButton\(interaction\)/u);
 });

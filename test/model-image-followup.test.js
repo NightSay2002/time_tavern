@@ -57,6 +57,6 @@ test("parallel image completion writes logs and images back to its source contex
   );
   assert.match(
     serverSource,
-    /contextId: normalizeConversationContextId\(activeConversationExecutionContextId\)/u
+    /const imageContextId = normalizeConversationContextId\(activeConversationExecutionContextId\)/u
   );
 });

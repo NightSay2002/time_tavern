@@ -29,7 +29,7 @@
 | `PORT` | `3234` | 本地 HTTP server port。 |
 | `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`custom`。 |
-| `CHAT_API_KEY` | 空 | 目前供應商的主聊天、補寫、角色卡助手與大模型處理 Key。 |
+| `CHAT_API_KEY` | 空 | Key 1 的主聊天、補寫及角色卡助手 Key。舊設定直接沿用，不需遷移。 |
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
 | `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定保存各供應商先前使用的 Key、模型與 Base URL；目前選中的值仍同步寫入上述 `CHAT_API_*` 欄位。 |
@@ -40,7 +40,9 @@
 | `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature，可設定 `0–2` 並支援小數；DeepSeek 思考模式開啟時不生效。 |
 | `CHAT_IMAGE_ATTACHMENT_MAX_COUNT` | `4` | 網頁與 Discord 每次最多附加圖片數。 |
 | `CHAT_IMAGE_ATTACHMENT_MAX_BYTES` | `5242880` | 每張聊天圖片大小上限，單位 bytes。 |
-| `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | 大模型內容處理按啟用順序使用，Key 不足時沿用最後一把；網頁切換對話 API 供應商時會連同整組處理 Key 一起切換。 |
+| `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | Key 1 組內的大模型內容處理 Key，按啟用的大模型順序使用；不足時沿用該組最後一把。 |
+| `CHAT_API_KEY_GROUP2` | 空 | Key 2 的主對話 Key；更多分頁依序使用 `CHAT_API_KEY_GROUP3...`。 |
+| `CHAT_API_KEY_GROUP2_2` / `CHAT_API_KEY_GROUP2_3` | 空 | Key 2 組內的大模型內容處理 Key；其他分頁使用相同命名規則。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
@@ -204,6 +206,7 @@ Slash 指令：
 | `/ai_start` | `num`、選填 `opening` | `0` 使用該頻道目前角色卡或助手；`1...N` 使用角色卡編號。`opening` 從 `1` 開始，未填固定使用開場 1。 |
 | `/ai_status` | `num` | 只接受數字 `1` 或 `2`：`1` 查看目前頻道狀態；`2` 使用四個按鈕分別切換角色卡及其開場預覽。 |
 | `/stop` | 無 | 停止目前生成。 |
+| `/close` | 無 | 關閉並刪除目前 Discord 頻道或私訊的故事；已建立的對話存檔不受影響。 |
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
 | `/reload` | `num`、`comment` | 直接改寫倒數第 `num` 次使用者輸入並重新生成；`1` 代表最近一次。 |
 | `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；所有模板都可在括號內補充並另起一行追加內容。 |
@@ -216,9 +219,10 @@ Discord 行為：
 - Bot 新加入伺服器時，會優先在系統頻道、否則在第一個有權發言的文字頻道送出私人聊天與 `/ai_start` 使用說明。
 - 應用程式安裝到使用者帳號時，`APPLICATION_AUTHORIZED` Webhook 會觸發 Bot 私訊使用說明。
 - 每個伺服器頻道與 Bot 私訊各自保存角色、對話、回合、時間、壓縮內容、模型狀態及玩家分配；在不同頻道使用 `/ai_start` 或 `/archive_return` 不會覆蓋其他頻道故事。
+- 每個新故事自動租用最前面的閒置對話 API Key 組，Key 1 優先；每次實際 AI 呼叫會延長 24 小時，超過 24 小時沒有 AI 活動的組可由新故事接手。所有已設定組都忙碌時會要求新增 Key 組，不會讓兩個活躍故事偷偷共用。
 - `/ai_start num:22` 固定使用第 22 張角色卡的開場 1；`/ai_start num:22 opening:2` 使用開場 2。開場選擇只屬於目前頻道，不修改角色卡的全域預設。
 - `/ai_status num:2` 顯示 `預覽（目前開場/開場總數）`；上一張／下一張會回到該卡開場 1，另外兩個按鈕只切換目前角色卡的開場。
-- 網頁聊天標題列可手動選擇「本地對話」或已使用過的 Discord 頻道／私訊；查看、發言、編輯、重算、停止、保存及載入均作用於目前選擇的故事，Discord 新活動不會自動切換網頁。
+- 網頁聊天標題列可手動選擇「本地對話」或已使用過的 Discord 頻道／私訊；查看、發言、編輯、重算、停止、保存及載入均作用於目前選擇的故事，Discord 新活動不會自動切換網頁。選擇器旁的刪除按鈕只刪除 Discord 故事並切回本地對話，不會刪除對話存檔；本地對話不可刪除。
 - `/archive action:1` 每次私密顯示一份存檔的名稱、角色與最後對話，使用左右按鈕翻頁；完整存檔只在顯示時讀取。
 - 存檔瀏覽會分行顯示完整的 `/archive_return mode:0 num:N` 與 `/archive_return mode:1 num:N`，中文說明不屬於指令內容。
 - `/archive_return mode:0` 會先把 runtime 載入到存檔末端，再公開顯示開場白與最初五回合；每按一次「繼續」追加五回合。新對話會終止尚未完成的回放，並直接從存檔末端繼續。
@@ -240,7 +244,7 @@ Discord Developer Portal 設定：
 
 Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 是隨程式發布的預設。第一次啟動會複製到 `data/`；之後 Git 自動更新不會修改使用者的本機預設。
 
-主頁「匯出當前全局設定」會寫入 `data/app-defaults.json`，保存：
+主頁「匯出當前全局設定」會產生 JSON 檔，支援時由瀏覽器選擇儲存位置，否則使用瀏覽器下載功能。檔案保存：
 
 - 使用者設定
 - 角色卡
@@ -262,11 +266,13 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 
 三個按鈕的差異：
 
-- 「匯出當前全局設定」：把目前設定保存成使用者本機設定。
-- 「匯入全局設定」：以本機設定覆蓋目前使用者設定、角色卡、Prompt 與環境設定。
-- 「使用作者預設」：把目前程式版本隨附的作者預設複製到本機預設，不立即修改目前角色卡、Prompt、使用者設定或目前對話。
+- 「匯出當前全局設定」：自行選擇位置保存一個 JSON 檔；瀏覽器不支援位置選擇 API 時，改用一般下載。
+- 「匯入全局設定」：自行選擇 JSON 檔，覆蓋目前使用者設定、角色卡、Prompt 與非機密環境設定。
+- 「使用作者預設」：直接套用目前程式版本隨附的作者預設，不建立匯入用中介檔。
 
-Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`，所以只取得作者預設不會立即套用。
+匯入或使用作者預設會清空目前對話及 AI 呼叫紀錄，但保留所有對話存檔，以及這台裝置原有的 Discord Token、NovelAI Token、Client ID 與對話 API Key。
+
+Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`；按下「使用作者預設」後會立即套用作者版本。
 
 可提交的發布內容：
 
@@ -291,9 +297,9 @@ Prompt 模式與助手 Prompt 都包含在主功能預設 JSON，不再分散寫
 | `GET` / `PUT` | `/api/time-tracking` | 讀取或保存時間統計。 |
 | `GET` / `PUT` | `/api/global-lorebook` | 讀取或保存所有角色卡共用的全局世界書。 |
 | `GET` / `PUT` | `/api/context-compression` | 讀取或保存模型內容。 |
-| `POST` | `/api/defaults/save` | 保存主功能預設。 |
-| `POST` | `/api/defaults/apply` | 套用主功能預設。 |
-| `POST` | `/api/defaults/update` | 以發布預設更新本機預設，不立即套用。 |
+| `GET` | `/api/defaults/export` | 取得不含密鑰與對話的全局設定 JSON。 |
+| `POST` | `/api/defaults/import` | 匯入選定的全局設定並保留本機密鑰與對話存檔。 |
+| `POST` | `/api/defaults/author` | 直接套用目前版本隨附的作者預設。 |
 | `GET` / `POST` | `/api/novelai/defaults` | 讀取或保存 NovelAI 預設。 |
 | `GET` | `/api/novelai/status` | 讀取 NovelAI token 狀態與 Anlas。 |
 | `POST` | `/api/novelai/generate` | 生成 NovelAI 圖片。 |

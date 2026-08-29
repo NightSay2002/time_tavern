@@ -132,7 +132,8 @@ test("assistant conversations never reset or restore time tracking", () => {
   assert.match(captureSource, /activeAssistantMode \? \{\} : \{ timeTracking:/);
   assert.match(applySource, /if \(!currentState\.activeAssistantMode\)/);
   assert.match(savedLoaderSource, /if \(!currentState\.activeAssistantMode\)/);
-  assert.match(discordStartSource, /resetTimeTracking: !hasActiveAssistantTarget\(state\)/);
+  assert.match(discordStartSource, /const useAssistant = !requestedCard && hasActiveAssistantTarget\(state\)/);
+  assert.match(discordStartSource, /resetTimeTracking: !useAssistant/);
 });
 
 test("a legacy checkpoint without time state does not reset current progress or settings", () => {

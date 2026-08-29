@@ -80,6 +80,10 @@ import {
   shouldIncludeUserCustomSupplement
 } from "./chat-api-request.js";
 import {
+  claimConversationApiKeySlot,
+  normalizeConversationApiKeyAssignments
+} from "./chat-api-key-leases.js";
+import {
   buildMultimodalMessageContent,
   getMessageChatImages,
   isSupportedChatImageAttachment,
@@ -158,6 +162,7 @@ let lastPersistedCardStateContent = "";
 let savedSessionStorageMigrated = false;
 let conversationContextStorageMigrated = false;
 let activeConversationExecutionContextId = "";
+let displacedWebConversationContext = null;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
 let appDefaultEnvironmentValuesCache = null;
 const environmentBackup = syncEnvironmentBackup({ envFile: ENV_FILE, dataDir: DATA_DIR });
@@ -396,6 +401,9 @@ function isDefaultEnvSecretKey(key = "") {
   if (/^(?:CONVERSATION_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_KEY)[2-9]\d*$/iu.test(normalizedKey)) {
     return true;
   }
+  if (/^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|CUSTOM_API_KEY)_GROUP[2-9]\d*(?:_[2-9]\d*)?$/iu.test(normalizedKey)) {
+    return true;
+  }
   if (DEFAULT_ENV_EXCLUDED_KEYS.has(normalizedKey.toUpperCase())) {
     return true;
   }
@@ -508,6 +516,27 @@ function buildEnvContentFromDefaultEnvironment(values = {}) {
   return [
     "# 由本機預設載入的環境設定。",
     "# Discord Bot Token、Client ID 與對話 API Key 不會寫入預設。",
+    ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
+  ].join("\n") + "\n";
+}
+
+function buildImportedEnvironmentContent(values = {}, currentContent = "") {
+  const importedValues = normalizeDefaultEnvironmentValues(values);
+  const preservedSecrets = Object.fromEntries(
+    Object.entries(parseEnvContent(currentContent)).filter(([key, value]) =>
+      isDefaultEnvSecretKey(key) && safeText(value)
+    )
+  );
+  const entries = Object.entries({
+    ...importedValues,
+    ...preservedSecrets
+  }).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    return "";
+  }
+  return [
+    "# 由匯入的全局設定產生。",
+    "# 這台裝置原有的 Token、Client ID 與 API Key 已保留。",
     ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
 }
@@ -845,6 +874,10 @@ const DISCORD_SLASH_COMMANDS = [
     description: "停止目前正在生成的 AI 回覆"
   },
   {
+    name: "close",
+    description: "關閉並刪除目前頻道的故事；對話存檔不受影響"
+  },
+  {
     name: "player_set",
     description: "把自己設定為指定玩家座位",
     options: [
@@ -1146,6 +1179,7 @@ function createDefaultState() {
     activeSavedSessionId: null,
     selectedConversationContextId: LOCAL_CONVERSATION_CONTEXT_ID,
     conversationContextIndex: {},
+    conversationApiKeyAssignments: {},
     conversationContextStorageVersion: 0,
     selectedOpeningDialogueId: "",
     updatedAt: nowIso()
@@ -1682,7 +1716,7 @@ function persistCardState(currentState) {
   lastPersistedCardStateContent = comparableContent;
 }
 
-function saveDefaultAppSettings(currentState) {
+function createGlobalSettingsExport(currentState) {
   const normalizedRoleCards = Array.isArray(currentState?.roleCards)
     ? currentState.roleCards.map((card) => normalizeRoleCard(card))
     : [];
@@ -1701,6 +1735,7 @@ function saveDefaultAppSettings(currentState) {
   );
   const payload = {
     version: 3,
+    uiLanguage: normalizeUiLanguage(currentState?.uiLanguage),
     userProfile: normalizeUserProfile(currentState?.userProfile),
     roleCards: normalizedRoleCards,
     assistantCards: normalizeAssistantCards(currentState?.assistantCards),
@@ -1715,18 +1750,7 @@ function saveDefaultAppSettings(currentState) {
     environment,
     updatedAt: nowIso()
   };
-  writeJsonFile(APP_DEFAULTS_FILE, payload);
-  appDefaultEnvironmentValuesCache = environment.values;
-  applyDefaultEnvToProcess();
-
-  return {
-    defaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
-    userProfile: payload.userProfile,
-    roleCardCount: payload.roleCards.length,
-    environmentCount: Object.keys(environment.values).length,
-    modularPromptCount: Object.keys(modularPromptConfigs).length,
-    updatedAt: payload.updatedAt
-  };
+  return payload;
 }
 
 function sanitizeNovelAiDefaultSettings(input = {}) {
@@ -1777,50 +1801,59 @@ function saveNovelAiDefaultsPayload(input = {}) {
   return payload;
 }
 
-function updateLocalDefaultsFromBundles() {
-  const appDefaults = readBundledAppDefaults();
-  const novelAiDefaults = readJsonFile(BUNDLED_NOVELAI_DEFAULTS_FILE);
-  if (!appDefaults) {
-    throw new Error("找不到發布預設 defaults/app-defaults.json。");
+function normalizeGlobalSettingsImport(input = {}) {
+  const source = input && typeof input === "object" && !Array.isArray(input)
+    ? input
+    : null;
+  if (!source) {
+    throw new Error("全局設定檔必須是 JSON 物件。");
   }
-  if (!novelAiDefaults) {
-    throw new Error("找不到發布預設 defaults/novelai-defaults.json。");
+  const recognizedFields = [
+    "userProfile",
+    "roleCards",
+    "assistantCards",
+    "globalLorebook",
+    "conversationSettings",
+    "modularPromptConfigs",
+    "environment"
+  ];
+  if (!recognizedFields.some((field) => Object.prototype.hasOwnProperty.call(source, field))) {
+    throw new Error("這不是有效的全局設定檔。");
   }
-
-  writeJsonFile(APP_DEFAULTS_FILE, appDefaults);
-  writeJsonFile(NOVELAI_DEFAULTS_FILE, novelAiDefaults);
-
-  return {
-    appDefaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
-    novelAiDefaultsFile: path.relative(path.join(__dirname, ".."), NOVELAI_DEFAULTS_FILE),
-    roleCardCount: Array.isArray(appDefaults.roleCards) ? appDefaults.roleCards.length : 0,
-    modularPromptCount: Object.keys(appDefaults.modularPromptConfigs || {}).length,
-    updatedAt: nowIso()
-  };
+  return source;
 }
 
-function applyDefaultAppSettings(currentState) {
+function applyGlobalSettingsImport(currentState, input = {}) {
   appDefaultEnvironmentValuesCache = null;
-  const appDefaults = loadAppDefaults();
-  if (!appDefaults) {
-    throw new Error("找不到本機預設 data/app-defaults.json。");
-  }
-
-  const defaultState = createDefaultState();
+  const imported = normalizeGlobalSettingsImport(input);
   const savedSessions = Array.isArray(currentState?.savedSessions)
     ? currentState.savedSessions.map((session, index) => normalizeSavedSession(session, index))
     : [];
-  currentState.userProfile = cloneData(defaultState.userProfile, { identityText: "", displayName: "" });
-  currentState.roleCards = cloneData(defaultState.roleCards, []).map((card) => normalizeRoleCard(card));
-  currentState.assistantCards = normalizeAssistantCards(defaultState.assistantCards);
-  currentState.globalLorebook = normalizeGlobalLorebook(defaultState.globalLorebook);
-  currentState.roleCardRuntimeState = normalizeRoleCardRuntimeStateMap(defaultState.roleCardRuntimeState);
-  currentState.activeRoleCardId = defaultState.activeRoleCardId || null;
-  currentState.activeAssistantMode = normalizeAssistantMode(defaultState.activeAssistantMode);
-  currentState.conversationSettings = normalizeConversationSettings(defaultState.conversationSettings);
-  currentState.contextCompression = normalizeContextCompressionState(defaultState.contextCompression);
-  currentState.timeTracking = normalizeTimeTrackingState(defaultState.timeTracking);
-  currentState.modularPromptConfigs = normalizeModularPromptConfigs(appDefaults.modularPromptConfigs);
+  currentState.uiLanguage = normalizeUiLanguage(imported.uiLanguage || currentState.uiLanguage);
+  currentState.userProfile = normalizeUserProfile(imported.userProfile);
+  currentState.roleCards = Array.isArray(imported.roleCards)
+    ? imported.roleCards.map((card) => normalizeRoleCard(card))
+    : [];
+  currentState.assistantCards = normalizeAssistantCards(imported.assistantCards);
+  currentState.globalLorebook = normalizeGlobalLorebook(imported.globalLorebook);
+  const validRoleCardIds = new Set(currentState.roleCards.map((card) => card.id));
+  currentState.roleCardRuntimeState = Object.fromEntries(
+    Object.entries(normalizeRoleCardRuntimeStateMap(imported.roleCardRuntimeState))
+      .filter(([cardId]) => validRoleCardIds.has(cardId))
+  );
+  const activeRoleCardId = safeText(imported.activeRoleCardId);
+  const activeAssistantMode = normalizeAssistantMode(imported.activeAssistantMode);
+  currentState.activeRoleCardId = validRoleCardIds.has(activeRoleCardId) ? activeRoleCardId : null;
+  currentState.activeAssistantMode = getAssistantCardById(currentState, activeAssistantMode)
+    ? activeAssistantMode
+    : null;
+  if (currentState.activeAssistantMode) {
+    currentState.activeRoleCardId = null;
+  }
+  currentState.conversationSettings = normalizeConversationSettings(imported.conversationSettings);
+  currentState.contextCompression = normalizeContextCompressionState(imported.contextCompression);
+  currentState.timeTracking = normalizeTimeTrackingState(imported.timeTracking);
+  currentState.modularPromptConfigs = normalizeModularPromptConfigs(imported.modularPromptConfigs);
   currentState.aiSessionStarted = false;
   currentState.pendingOpeningBroadcast = false;
   currentState.selectedOpeningDialogueId = "";
@@ -1833,23 +1866,22 @@ function applyDefaultAppSettings(currentState) {
   currentState.activeSavedSessionId = null;
   delete currentState.conversationMode;
 
-  const environment = normalizeDefaultEnvironment(appDefaults.environment);
-  saveEnvFileContent(buildEnvContentFromDefaultEnvironment(environment.values));
+  const environment = normalizeDefaultEnvironment(imported.environment);
+  saveEnvFileContent(buildImportedEnvironmentContent(environment.values, readEnvFileContent()));
   appDefaultEnvironmentValuesCache = environment.values;
   applyDefaultEnvToProcess();
 
   modularPromptConfigStore = cloneData(currentState.modularPromptConfigs, {});
   characterCardCreationAssistantPrompt =
-    readStoredAssistantPrompt(appDefaults) ||
+    readStoredAssistantPrompt(imported) ||
     getCharacterCardCreationAssistantPrompt();
   contextCompressionPrompt =
-    readStoredContextCompressionPrompt(appDefaults) ||
+    readStoredContextCompressionPrompt(imported) ||
     getContextCompressionPrompt();
   const modularPromptConfigs = getModularPromptConfigsPayload();
   saveState(currentState);
 
   return {
-    defaultsFile: path.relative(path.join(__dirname, ".."), APP_DEFAULTS_FILE),
     roleCardCount: currentState.roleCards.length,
     environmentCount: Object.keys(environment.values).length,
     modularPromptCount: Object.keys(modularPromptConfigs).length,
@@ -1959,6 +1991,7 @@ function loadState() {
       selectedConversationContextId: normalizeConversationContextId(parsed.selectedConversationContextId) ||
         LOCAL_CONVERSATION_CONTEXT_ID,
       conversationContextIndex: normalizeConversationContextIndex(parsed.conversationContextIndex),
+      conversationApiKeyAssignments: normalizeConversationApiKeyAssignments(parsed.conversationApiKeyAssignments),
       conversationContextStorageVersion: Math.max(0, Number.parseInt(parsed.conversationContextStorageVersion, 10) || 0),
       selectedOpeningDialogueId: safeText(parsed.selectedOpeningDialogueId)
     };
@@ -2025,6 +2058,7 @@ function saveState(state) {
   state.selectedConversationContextId = normalizeConversationContextId(state.selectedConversationContextId) ||
     LOCAL_CONVERSATION_CONTEXT_ID;
   state.conversationContextIndex = normalizeConversationContextIndex(state.conversationContextIndex);
+  state.conversationApiKeyAssignments = normalizeConversationApiKeyAssignments(state.conversationApiKeyAssignments);
   state.conversationContextStorageVersion = CONVERSATION_CONTEXT_STORAGE_VERSION;
   state.turnState = normalizeTurnState(state.turnState, state);
   state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
@@ -2674,13 +2708,19 @@ function getConversationContextLabel(metadata = {}, language = UI_LANGUAGE_TRADI
 
 function listConversationContexts(currentState) {
   const language = normalizeUiLanguage(currentState.uiLanguage);
+  const assignments = normalizeConversationApiKeyAssignments(currentState.conversationApiKeyAssignments);
   const localMetadata = normalizeConversationContextMetadata({}, LOCAL_CONVERSATION_CONTEXT_ID);
   const discordContexts = Object.values(normalizeConversationContextIndex(currentState.conversationContextIndex))
     .sort((left, right) => safeText(right.updatedAt).localeCompare(safeText(left.updatedAt)));
-  return [localMetadata, ...discordContexts].map((metadata) => ({
-    ...metadata,
-    label: getConversationContextLabel(metadata, language)
-  }));
+  return [localMetadata, ...discordContexts].map((metadata) => {
+    const assignment = assignments[metadata.id];
+    return {
+      ...metadata,
+      label: getConversationContextLabel(metadata, language),
+      keyGroup: assignment?.slot || null,
+      keyLastUsedAt: assignment?.lastUsedAt || ""
+    };
+  });
 }
 
 function switchSelectedConversationContext(currentState, requestedContextId = "") {
@@ -2713,6 +2753,56 @@ function switchSelectedConversationContext(currentState, requestedContextId = ""
   currentState.selectedConversationContextId = contextId;
   saveState(currentState);
   return { ok: true };
+}
+
+function hasStoredConversationContext(currentState, contextId = "") {
+  const normalizedId = normalizeConversationContextId(contextId);
+  if (!normalizedId) {
+    return false;
+  }
+  if (normalizedId === LOCAL_CONVERSATION_CONTEXT_ID) {
+    return true;
+  }
+  return Boolean(currentState.conversationContextIndex?.[normalizedId]) ||
+    fs.existsSync(getConversationContextFilePath(normalizedId));
+}
+
+function deleteConversationContext(currentState, requestedContextId = "") {
+  const contextId = normalizeConversationContextId(requestedContextId);
+  if (!contextId) {
+    return { ok: false, status: 400, error: "對話故事 ID 無效。" };
+  }
+  if (contextId === LOCAL_CONVERSATION_CONTEXT_ID) {
+    return { ok: false, status: 400, error: "本地對話不可刪除。" };
+  }
+  if (!hasStoredConversationContext(currentState, contextId)) {
+    return { ok: false, status: 404, error: "找不到這個 Discord 頻道故事。" };
+  }
+
+  const selectedContextId = normalizeConversationContextId(currentState.selectedConversationContextId) ||
+    LOCAL_CONVERSATION_CONTEXT_ID;
+  if (selectedContextId === contextId) {
+    const localContext = readConversationContextSnapshot(LOCAL_CONVERSATION_CONTEXT_ID);
+    applyConversationContextSnapshot(
+      currentState,
+      localContext?.snapshot || createEmptyConversationContextSnapshot(
+        currentState,
+        LOCAL_CONVERSATION_CONTEXT_ID
+      ),
+      LOCAL_CONVERSATION_CONTEXT_ID
+    );
+    currentState.selectedConversationContextId = LOCAL_CONVERSATION_CONTEXT_ID;
+  }
+
+  currentState.conversationContextIndex = normalizeConversationContextIndex(currentState.conversationContextIndex);
+  delete currentState.conversationContextIndex[contextId];
+  currentState.conversationApiKeyAssignments = normalizeConversationApiKeyAssignments(
+    currentState.conversationApiKeyAssignments
+  );
+  delete currentState.conversationApiKeyAssignments[contextId];
+  fs.rmSync(getConversationContextFilePath(contextId), { force: true });
+  saveState(currentState);
+  return { ok: true, contextId, selectedContextId: currentState.selectedConversationContextId };
 }
 
 function ensureSavedSessionsDir() {
@@ -4580,8 +4670,8 @@ function readRawBody(req, maxBytes = 32 * 1024 * 1024) {
   });
 }
 
-async function readBody(req) {
-  const rawBody = await readRawBody(req);
+async function readBody(req, maxBytes = 32 * 1024 * 1024) {
+  const rawBody = await readRawBody(req, maxBytes);
   if (rawBody.length === 0) {
     return {};
   }
@@ -8073,6 +8163,7 @@ function saveGeneratedNovelAiImagesForMessage(generatedImages = [], prompt = "")
 
 async function buildModelImageGenerationResult({
   currentState = state,
+  contextId = "",
   runtimeUserName = "",
   profile = {},
   triggerAction = {},
@@ -8090,7 +8181,8 @@ async function buildModelImageGenerationResult({
       includeLatestAssistant
     }),
     purpose: getModelTriggerApiPurpose(profile, "image_prompt"),
-    aiLogTargetState: currentState
+    aiLogTargetState: currentState,
+    conversationContextId: contextId
   });
   const basePrompt = safeText(promptCompletion.content);
   if (!basePrompt) {
@@ -8161,7 +8253,11 @@ async function runModelImageGenerationTask(context = {}) {
 
 function queueParallelModelImageGeneration(context = {}) {
   const contextOptions = context.contextId
-    ? { contextId: context.contextId, contextMetadata: context.contextMetadata || {} }
+    ? {
+        contextId: context.contextId,
+        contextMetadata: context.contextMetadata || {},
+        requireExistingContext: true
+      }
     : {};
   void buildModelImageGenerationResult(context)
     .then((result) => withStateLock(
@@ -8652,11 +8748,18 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
           compressedThroughTurnNumber,
           updatedAt: nowIso()
         });
+        const imageContextId = normalizeConversationContextId(activeConversationExecutionContextId) ||
+          normalizeConversationContextId(currentState.selectedConversationContextId) ||
+          LOCAL_CONVERSATION_CONTEXT_ID;
+        const imageKeyAssignment = assignConversationApiKeyGroup(currentState, {
+          contextId: imageContextId
+        });
+        if (!imageKeyAssignment.ok) {
+          throw new Error(imageKeyAssignment.error);
+        }
         const imageContext = {
           currentState: cloneData(currentState, {}),
-          contextId: normalizeConversationContextId(activeConversationExecutionContextId) ||
-            normalizeConversationContextId(currentState.selectedConversationContextId) ||
-            LOCAL_CONVERSATION_CONTEXT_ID,
+          contextId: imageContextId,
           contextMetadata: currentState.conversationContextIndex?.[
             normalizeConversationContextId(activeConversationExecutionContextId) ||
               normalizeConversationContextId(currentState.selectedConversationContextId)
@@ -9024,18 +9127,29 @@ function isModelImagePromptPurpose(purpose = "") {
   return isContextCompressionPurpose(purpose) && safeText(purpose).split(":").includes("image_prompt");
 }
 
-function getPrimaryChatApiKey() {
-  const provider = getChatApiProvider();
+function getChatApiKeyGroupPrimaryKey(slot = 1, envSource = process.env) {
+  const groupSlot = Math.max(1, Number.parseInt(slot, 10) || 1);
+  const provider = normalizeChatApiProvider(
+    envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
+  );
   const providerKeys = getChatApiProviderKeyAliases(provider);
-  return envFirstText([
+  const baseKeys = [
     "CHAT_API_KEY",
     "CONVERSATION_API_KEY",
     ...providerKeys,
     ...(provider === "zhipu" ? [] : ["DEEPSEEK_API_KEY"])
-  ]);
+  ];
+  const keys = groupSlot === 1
+    ? baseKeys
+    : baseKeys.map((key) => `${key}_GROUP${groupSlot}`);
+  return envObjectFirstText(envSource, keys);
 }
 
-function getChatApiProcessingKeyEntries(envSource = process.env) {
+function getPrimaryChatApiKey(slot = 1, envSource = process.env) {
+  return getChatApiKeyGroupPrimaryKey(slot, envSource);
+}
+
+function getChatApiProcessingKeyEntries(envSource = process.env, slot = 1) {
   const source = envSource && typeof envSource === "object" ? envSource : {};
   const collectEntries = (prefixes) => Object.entries(source)
     .map(([key, value]) => {
@@ -9053,18 +9167,66 @@ function getChatApiProcessingKeyEntries(envSource = process.env) {
     .filter(Boolean)
     .sort((a, b) => a.index - b.index);
 
-  const genericEntries = collectEntries(["CHAT_API_KEY", "CONVERSATION_API_KEY"]);
+  const groupSlot = Math.max(1, Number.parseInt(slot, 10) || 1);
+  const genericPrefixes = groupSlot === 1
+    ? ["CHAT_API_KEY", "CONVERSATION_API_KEY"]
+    : [`CHAT_API_KEY_GROUP${groupSlot}_`, `CONVERSATION_API_KEY_GROUP${groupSlot}_`];
+  const genericEntries = collectEntries(genericPrefixes);
   if (genericEntries.length > 0) {
     return genericEntries;
   }
   const provider = normalizeChatApiProvider(
     envObjectFirstText(source, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
-  const providerPrefixes = getChatApiProviderKeyAliases(provider);
+  let providerPrefixes = getChatApiProviderKeyAliases(provider);
   if (provider === "deepseek") {
     providerPrefixes.push("DEEPSEEK_KEY", "deepseek_key");
   }
+  if (groupSlot > 1) {
+    providerPrefixes = providerPrefixes.map((prefix) => `${prefix}_GROUP${groupSlot}_`);
+  }
   return collectEntries(providerPrefixes);
+}
+
+function getConfiguredChatApiKeyGroupSlots(envSource = process.env) {
+  const groupNumbers = new Set([1]);
+  Object.keys(envSource || {}).forEach((key) => {
+    const match = key.match(/_GROUP([2-9]\d*)(?:_|$)/u);
+    if (match) {
+      groupNumbers.add(Number(match[1]));
+    }
+  });
+  const configured = [...groupNumbers]
+    .sort((left, right) => left - right)
+    .filter((slot) => Boolean(getChatApiKeyGroupPrimaryKey(slot, envSource)));
+  return configured.length > 0 ? configured : [1];
+}
+
+function getChatApiKeyGroupFingerprints(envSource = process.env) {
+  return Object.fromEntries(getConfiguredChatApiKeyGroupSlots(envSource).map((slot) => {
+    const primaryKey = getChatApiKeyGroupPrimaryKey(slot, envSource);
+    const processingKeys = getChatApiProcessingKeyEntries(envSource, slot).map((entry) => entry.value);
+    const fingerprint = crypto.createHash("sha256")
+      .update(JSON.stringify([primaryKey, ...processingKeys]))
+      .digest("hex");
+    return [slot, fingerprint];
+  }));
+}
+
+function didExistingChatApiKeyGroupsChange(previousGroups = {}, nextGroups = {}) {
+  return Object.entries(previousGroups).some(([slot, fingerprint]) => nextGroups[slot] !== fingerprint);
+}
+
+function assignConversationApiKeyGroup(currentState = state, options = {}) {
+  const contextId = normalizeConversationContextId(options.contextId) || getCurrentConversationContextId();
+  const result = claimConversationApiKeySlot(currentState.conversationApiKeyAssignments, {
+    contextId,
+    availableSlots: getConfiguredChatApiKeyGroupSlots(options.envSource || process.env),
+    forceNew: options.forceNew,
+    now: options.now
+  });
+  currentState.conversationApiKeyAssignments = result.assignments;
+  return result;
 }
 
 function getContextCompressionProfileIdFromPurpose(purpose = "") {
@@ -9086,14 +9248,22 @@ function getContextCompressionProfileOrderIndex(purpose = "", currentState = sta
   return index >= 0 ? index : 0;
 }
 
-function getContextCompressionChatApiKey(purpose = "context_compression") {
-  const processingKeys = getChatApiProcessingKeyEntries(process.env);
-  if (processingKeys.length === 0) {
-    return getPrimaryChatApiKey();
+function getContextCompressionChatApiKey(
+  purpose = "context_compression",
+  currentState = state,
+  contextId = ""
+) {
+  const assignment = assignConversationApiKeyGroup(currentState, { contextId });
+  if (!assignment.ok) {
+    throw new Error(assignment.error);
   }
-  const profileIndex = getContextCompressionProfileOrderIndex(purpose);
+  const processingKeys = getChatApiProcessingKeyEntries(process.env, assignment.slot);
+  if (processingKeys.length === 0) {
+    return getPrimaryChatApiKey(assignment.slot);
+  }
+  const profileIndex = getContextCompressionProfileOrderIndex(purpose, currentState);
   const keyIndex = Math.min(profileIndex, processingKeys.length - 1);
-  return processingKeys[keyIndex]?.value || getPrimaryChatApiKey();
+  return processingKeys[keyIndex]?.value || getPrimaryChatApiKey(assignment.slot);
 }
 
 function getChatApiModel(purpose = "chat") {
@@ -9105,11 +9275,15 @@ function getChatApiModel(purpose = "chat") {
   );
 }
 
-function getChatApiKey(purpose = "chat") {
+function getChatApiKey(purpose = "chat", currentState = state, contextId = "") {
   if (isContextCompressionPurpose(purpose)) {
-    return getContextCompressionChatApiKey(purpose);
+    return getContextCompressionChatApiKey(purpose, currentState, contextId);
   }
-  return getPrimaryChatApiKey();
+  const assignment = assignConversationApiKeyGroup(currentState, { contextId });
+  if (!assignment.ok) {
+    throw new Error(assignment.error);
+  }
+  return getPrimaryChatApiKey(assignment.slot);
 }
 
 function getChatApiTemperature(purpose = "chat", temperature = null) {
@@ -9710,7 +9884,7 @@ function getChatApiProviderBaseUrlAliases(provider = DEFAULT_CHAT_API_PROVIDER) 
   return [];
 }
 
-function resolveChatApiTestConfig(envSource = {}) {
+function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
   const provider = normalizeChatApiProvider(
     envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
@@ -9719,15 +9893,7 @@ function resolveChatApiTestConfig(envSource = {}) {
     ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", ...getChatApiProviderBaseUrlAliases(provider)],
     getDefaultChatApiBaseUrl(provider)
   );
-  const apiKey = envObjectFirstText(
-    envSource,
-    [
-      "CHAT_API_KEY",
-      "CONVERSATION_API_KEY",
-      ...getChatApiProviderKeyAliases(provider),
-      ...(provider === "zhipu" ? [] : ["DEEPSEEK_API_KEY"])
-    ]
-  );
+  const apiKey = getChatApiKeyGroupPrimaryKey(keyGroupSlot, envSource);
   const model = envObjectFirstText(
     envSource,
     ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
@@ -9757,9 +9923,9 @@ function resolveChatApiTestConfig(envSource = {}) {
   };
 }
 
-async function testChatApiConnection(envSource = {}) {
+async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
   const startedAt = Date.now();
-  const config = resolveChatApiTestConfig(envSource);
+  const config = resolveChatApiTestConfig(envSource, keyGroupSlot);
   const publicConfig = {
     provider: config.provider,
     baseUrl: config.baseUrl,
@@ -9884,10 +10050,12 @@ async function callChatApiCompletionRaw({
   purpose = "chat",
   retryCount = 0,
   responseFormat = null,
-  aiLogTargetState = null
+  aiLogTargetState = null,
+  conversationContextId = ""
 }) {
-  const appendAiLog = (entry) => appendAiLogToState(entry, aiLogTargetState || state);
-  const apiKey = getChatApiKey(purpose);
+  const targetState = aiLogTargetState || state;
+  const appendAiLog = (entry) => appendAiLogToState(entry, targetState);
+  const apiKey = getChatApiKey(purpose, targetState, conversationContextId);
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
@@ -10071,7 +10239,8 @@ async function callChatApiCompletionRaw({
       maxTokens: resolvedMaxTokens,
       purpose,
       retryCount: retryCount + 1,
-      aiLogTargetState
+      aiLogTargetState,
+      conversationContextId
     });
 
     return {
@@ -10794,26 +10963,49 @@ async function runConversationTurnStreaming({
   });
 }
 
-function statePayload(state) {
+function getWebConversationStateView(currentState) {
+  if (
+    currentState !== state ||
+    !activeConversationExecutionContextId ||
+    !displacedWebConversationContext?.snapshot
+  ) {
+    return currentState;
+  }
+  const selectedContextId = normalizeConversationContextId(currentState.selectedConversationContextId) ||
+    LOCAL_CONVERSATION_CONTEXT_ID;
+  if (displacedWebConversationContext.contextId !== selectedContextId) {
+    return currentState;
+  }
+  const viewState = { ...currentState };
+  applyConversationContextSnapshot(
+    viewState,
+    displacedWebConversationContext.snapshot,
+    selectedContextId
+  );
+  return viewState;
+}
+
+function statePayload(currentState) {
+  const payloadState = getWebConversationStateView(currentState);
   const compactedAiLogs = compactAiLogsForStorage(
-    Array.isArray(state.aiLogs) ? state.aiLogs.map((entry) => normalizeAiLog(entry)) : []
+    Array.isArray(payloadState.aiLogs) ? payloadState.aiLogs.map((entry) => normalizeAiLog(entry)) : []
   );
   const {
     savedSessions: _savedSessions,
     activeSavedSessionId: _activeSavedSessionId,
     ...publicState
-  } = state;
+  } = payloadState;
   return {
     ...publicState,
-    conversation: normalizeConversationForClient(state.conversation),
+    conversation: normalizeConversationForClient(payloadState.conversation),
     aiLogs: compactedAiLogs.logs,
     aiLogContentStore: compactedAiLogs.contentStore,
     modularPromptConfigs: getModularPromptConfigsPayload(),
     contextCompressionPrompt: getContextCompressionPrompt(),
     characterCardCreationAssistantPrompt: getCharacterCardCreationAssistantPrompt(),
-    webDisplay: getWebChatDisplayConfig(state),
-    savedSessionsMeta: listSavedSessionSummaries(state),
-    uiActions: createUiActions(state),
+    webDisplay: getWebChatDisplayConfig(payloadState),
+    savedSessionsMeta: listSavedSessionSummaries(payloadState),
+    uiActions: createUiActions(payloadState),
     chatApi: {
       provider: getChatApiProvider(),
       baseUrl: getChatApiBaseUrl(),
@@ -10829,8 +11021,8 @@ function statePayload(state) {
       authorizeUrl: getDiscordAuthorizeUrl()
     },
     conversationContexts: {
-      selectedContextId: state.selectedConversationContextId,
-      items: listConversationContexts(state)
+      selectedContextId: payloadState.selectedConversationContextId,
+      items: listConversationContexts(payloadState)
     }
   };
 }
@@ -10912,6 +11104,13 @@ function scheduleServerRestart() {
 function withStateLock(task, options = {}) {
   const runTask = async () => {
     const requestedContextId = normalizeConversationContextId(options.contextId);
+    if (
+      options.requireExistingContext &&
+      requestedContextId &&
+      !hasStoredConversationContext(state, requestedContextId)
+    ) {
+      return null;
+    }
     const selectedContextId = normalizeConversationContextId(state.selectedConversationContextId) ||
       LOCAL_CONVERSATION_CONTEXT_ID;
     const shouldSwitchContext = Boolean(requestedContextId && requestedContextId !== selectedContextId);
@@ -10921,6 +11120,10 @@ function withStateLock(task, options = {}) {
     }
     if (shouldSwitchContext) {
       selectedContextSnapshot = captureConversationContextSnapshot(state);
+      displacedWebConversationContext = {
+        contextId: selectedContextId,
+        snapshot: selectedContextSnapshot
+      };
       writeConversationContextSnapshot(state, selectedContextId, state.conversationContextIndex?.[selectedContextId]);
       const storedContext = readConversationContextSnapshot(requestedContextId);
       applyConversationContextSnapshot(
@@ -10948,6 +11151,7 @@ function withStateLock(task, options = {}) {
         );
         applyConversationContextSnapshot(state, selectedContextSnapshot, selectedContextId);
         activeConversationExecutionContextId = "";
+        displacedWebConversationContext = null;
         saveState(state);
       } else if (requestedContextId && options.contextMetadata) {
         saveState(state);
@@ -11426,13 +11630,23 @@ async function rewriteRecentUserInput({
 
 async function replayConversationFromMessageNumber({
   messageNumber,
+  messageId = "",
   content,
   source = "discord",
   extra = {}
 }) {
   return withStateLock(async () => {
-    const normalizedMessageNumber = Math.floor(Number(messageNumber));
-    if (!Number.isFinite(normalizedMessageNumber) || normalizedMessageNumber < 1) {
+    let normalizedMessageNumber = Math.floor(Number(messageNumber));
+    if (safeText(messageId)) {
+      const targetIndex = state.conversation.findIndex((item) => item?.id === safeText(messageId));
+      if (targetIndex < 0) {
+        throw new Error("訊息不存在");
+      }
+      if (state.conversation[targetIndex]?.role !== "user") {
+        throw new Error("僅允許用這個方式編輯使用者訊息");
+      }
+      normalizedMessageNumber = targetIndex + 1;
+    } else if (!Number.isFinite(normalizedMessageNumber) || normalizedMessageNumber < 1) {
       throw new Error("請提供有效的訊息編號，從 1 開始。");
     }
     return replayConversationFromUserIndexLocked({
@@ -11623,6 +11837,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/conversation-context" && method === "DELETE") {
+      const body = await readBody(req);
+      const contextId = normalizeConversationContextId(body?.contextId);
+      if (contextId) {
+        requestStopActiveGeneration(contextId);
+      }
+      const result = await withStateLock(() => deleteConversationContext(state, contextId));
+      if (!result.ok) {
+        sendJson(res, result.status || 400, { error: result.error });
+        return;
+      }
+      sendJson(res, 200, {
+        deletedContextId: result.contextId,
+        state: statePayload(state),
+        selectedContextId: state.selectedConversationContextId,
+        contexts: listConversationContexts(state)
+      });
+      return;
+    }
+
     if (pathname === "/api/ui-language" && method === "GET") {
       sendJson(res, 200, { language: getUiLanguage() });
       return;
@@ -11658,8 +11892,18 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/env" && method === "PUT") {
       const body = await readBody(req);
       const previousNovelAiConfigured = Boolean(getNovelAiToken());
+      const previousChatApiKeyGroups = getChatApiKeyGroupFingerprints(process.env);
       const content = saveEnvFileContent(body?.content);
       const novelAiConfigured = Boolean(getNovelAiToken());
+      const nextChatApiKeyGroups = getChatApiKeyGroupFingerprints(process.env);
+      const chatApiKeyAssignmentsReset = didExistingChatApiKeyGroupsChange(
+        previousChatApiKeyGroups,
+        nextChatApiKeyGroups
+      );
+      if (chatApiKeyAssignmentsReset) {
+        state.conversationApiKeyAssignments = {};
+        saveState(state);
+      }
       const promptImageActions = shouldSyncPromptImageActionAvailability(
         previousNovelAiConfigured,
         novelAiConfigured
@@ -11673,6 +11917,7 @@ const server = http.createServer(async (req, res) => {
           };
       sendJson(res, 200, {
         content,
+        chatApiKeyAssignmentsReset,
         promptImageActions,
         state: statePayload(state),
         restartHint: "已保存 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
@@ -11685,7 +11930,7 @@ const server = http.createServer(async (req, res) => {
       const envSource = body?.env && typeof body.env === "object"
         ? body.env
         : parseEnvContent(body?.content || "");
-      const result = await testChatApiConnection(envSource);
+      const result = await testChatApiConnection(envSource, body?.keyGroup);
       sendJson(res, 200, result);
       return;
     }
@@ -11909,67 +12154,75 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/context-compression" && method === "GET") {
-      sendJson(res, 200, {
+      const payload = await withStateLock(() => ({
         contextCompression: normalizeContextCompressionState(state.contextCompression),
         compressionProfiles: getEnabledCompressionProfiles(state),
         state: statePayload(state)
-      });
+      }));
+      sendJson(res, 200, payload);
       return;
     }
 
     if (pathname === "/api/context-compression" && method === "PUT") {
       const body = await readBody(req);
-      const current = normalizeContextCompressionState(state.contextCompression);
-      const profileId = normalizeCompressionProfileId(body?.profileId || STANDARD_COMPRESSION_PROFILE_ID);
-      const profileState = getCompressionProfileState(current, profileId);
-      const updatedProfileState = {
-        ...profileState,
-        summary: safeText(body?.summary),
-        updatedAt: nowIso()
-      };
-      state.contextCompression = current;
-      setCompressionProfileState(state, profileId, updatedProfileState);
-      saveState(state);
-      sendJson(res, 200, {
-        contextCompression: normalizeContextCompressionState(state.contextCompression),
-        compressionProfiles: getEnabledCompressionProfiles(state),
-        state: statePayload(state)
+      const payload = await withStateLock(() => {
+        const current = normalizeContextCompressionState(state.contextCompression);
+        const profileId = normalizeCompressionProfileId(body?.profileId || STANDARD_COMPRESSION_PROFILE_ID);
+        const profileState = getCompressionProfileState(current, profileId);
+        const updatedProfileState = {
+          ...profileState,
+          summary: safeText(body?.summary),
+          updatedAt: nowIso()
+        };
+        state.contextCompression = current;
+        setCompressionProfileState(state, profileId, updatedProfileState);
+        saveState(state);
+        return {
+          contextCompression: normalizeContextCompressionState(state.contextCompression),
+          compressionProfiles: getEnabledCompressionProfiles(state),
+          state: statePayload(state)
+        };
       });
+      sendJson(res, 200, payload);
       return;
     }
 
     if (pathname === "/api/time-tracking" && method === "GET") {
-      sendJson(res, 200, {
+      const payload = await withStateLock(() => ({
         timeTracking: normalizeTimeTrackingState(state.timeTracking),
         state: statePayload(state)
-      });
+      }));
+      sendJson(res, 200, payload);
       return;
     }
 
     if (pathname === "/api/time-tracking" && method === "PUT") {
       const body = await readBody(req);
-      const current = normalizeTimeTrackingState(state.timeTracking);
-      const rawYear = body?.currentYear ?? current.currentYear;
-      const rawMonth = body?.currentMonth ?? current.currentMonth;
-      const rawDate = body?.currentDate ?? current.currentDate;
-      const year = normalizeTimeTrackingYear(rawYear, current.currentYear);
-      const month = Math.floor(Number(rawMonth));
-      const date = Math.floor(Number(rawDate));
-      const dateFields = isValidMonthDate(month, date, year)
-        ? { currentYear: year, currentMonth: month, currentDate: date }
-        : { currentYear: current.currentYear, currentMonth: current.currentMonth, currentDate: current.currentDate };
-      state.timeTracking = normalizeTimeTrackingState({
-        ...current,
-        ...body,
-        ...dateFields,
-        pendingTransition: null,
-        config: normalizeTimeTrackingConfig(body?.config || current.config)
+      const payload = await withStateLock(() => {
+        const current = normalizeTimeTrackingState(state.timeTracking);
+        const rawYear = body?.currentYear ?? current.currentYear;
+        const rawMonth = body?.currentMonth ?? current.currentMonth;
+        const rawDate = body?.currentDate ?? current.currentDate;
+        const year = normalizeTimeTrackingYear(rawYear, current.currentYear);
+        const month = Math.floor(Number(rawMonth));
+        const date = Math.floor(Number(rawDate));
+        const dateFields = isValidMonthDate(month, date, year)
+          ? { currentYear: year, currentMonth: month, currentDate: date }
+          : { currentYear: current.currentYear, currentMonth: current.currentMonth, currentDate: current.currentDate };
+        state.timeTracking = normalizeTimeTrackingState({
+          ...current,
+          ...body,
+          ...dateFields,
+          pendingTransition: null,
+          config: normalizeTimeTrackingConfig(body?.config || current.config)
+        });
+        saveState(state);
+        return {
+          timeTracking: normalizeTimeTrackingState(state.timeTracking),
+          state: statePayload(state)
+        };
       });
-      saveState(state);
-      sendJson(res, 200, {
-        timeTracking: normalizeTimeTrackingState(state.timeTracking),
-        state: statePayload(state)
-      });
+      sendJson(res, 200, payload);
       return;
     }
 
@@ -12115,27 +12368,36 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/sessions/save" && method === "POST") {
       const body = await readBody(req);
-      const created = createSavedSessionFromCurrentState(state, body.name);
-      saveState(state);
-      sendJson(res, 201, {
-        session: buildSavedSessionSummary(created),
-        state: statePayload(state)
+      const payload = await withStateLock(() => {
+        const created = createSavedSessionFromCurrentState(state, body.name);
+        saveState(state);
+        return {
+          session: buildSavedSessionSummary(created),
+          state: statePayload(state)
+        };
       });
+      sendJson(res, 201, payload);
       return;
     }
 
     const sessionLoadMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/load$/);
     if (sessionLoadMatch && method === "POST") {
-      const loaded = loadSavedSessionIntoRuntime(state, sessionLoadMatch[1]);
-      if (!loaded) {
+      const result = await withStateLock(() => {
+        const loaded = loadSavedSessionIntoRuntime(state, sessionLoadMatch[1]);
+        if (!loaded) {
+          return null;
+        }
+        saveState(state);
+        return {
+          session: buildSavedSessionSummary(loaded),
+          state: statePayload(state)
+        };
+      });
+      if (!result) {
         sendJson(res, 404, { error: "對話存檔不存在" });
         return;
       }
-      saveState(state);
-      sendJson(res, 200, {
-        session: buildSavedSessionSummary(loaded),
-        state: statePayload(state)
-      });
+      sendJson(res, 200, result);
       return;
     }
 
@@ -12174,52 +12436,75 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pathname === "/api/defaults/save" && method === "POST") {
-      const defaults = saveDefaultAppSettings(state);
-      sendJson(res, 200, {
-        defaults,
-        state: statePayload(state)
-      });
+    if (pathname === "/api/defaults/export" && method === "GET") {
+      const defaults = await withStateLock(() => createGlobalSettingsExport(state));
+      sendJson(res, 200, { defaults });
       return;
     }
 
-    if (pathname === "/api/defaults/apply" && method === "POST") {
-      const defaults = applyDefaultAppSettings(state);
-      sendJson(res, 200, {
-        defaults,
+    if (pathname === "/api/defaults/import" && method === "POST") {
+      const body = await readBody(req, 128 * 1024 * 1024);
+      let imported;
+      try {
+        imported = normalizeGlobalSettingsImport(body?.defaults ?? body);
+      } catch (error) {
+        sendJson(res, 400, { error: safeText(error?.message) || "全局設定檔格式無效。" });
+        return;
+      }
+      const payload = await withStateLock(() => ({
+        defaults: applyGlobalSettingsImport(state, imported),
         state: statePayload(state)
-      });
+      }));
+      sendJson(res, 200, payload);
       return;
     }
 
-    if (pathname === "/api/defaults/update" && method === "POST") {
-      const defaults = updateLocalDefaultsFromBundles();
-      sendJson(res, 200, {
-        defaults,
+    if (pathname === "/api/defaults/author" && method === "POST") {
+      const bundledDefaults = readBundledAppDefaults();
+      if (!bundledDefaults) {
+        sendJson(res, 404, { error: "找不到目前版本的作者預設。" });
+        return;
+      }
+      const payload = await withStateLock(() => ({
+        defaults: applyGlobalSettingsImport(state, bundledDefaults),
         state: statePayload(state)
-      });
+      }));
+      sendJson(res, 200, payload);
       return;
     }
 
     if (pathname === "/api/role-cards" && method === "GET") {
-      sendJson(res, 200, { roleCards: state.roleCards, activeRoleCardId: state.activeRoleCardId });
+      const viewState = getWebConversationStateView(state);
+      sendJson(res, 200, { roleCards: viewState.roleCards, activeRoleCardId: viewState.activeRoleCardId });
       return;
     }
 
     if (pathname === "/api/assistant-modes/character-card-creation/start" && method === "POST") {
       const result = await withStateLock(async () => {
+        const keyAssignment = assignConversationApiKeyGroup(state, { forceNew: true });
+        if (!keyAssignment.ok) {
+          return { error: keyAssignment.error, status: 409 };
+        }
         const assistant = startAssistantCard(state, CHARACTER_CARD_CREATION_ASSISTANT_MODE);
         const openingMessage = appendAssistantOpeningMessage(state, assistant, { platform: "web" });
         saveState(state);
         return { openingMessage, state: statePayload(state), status: 200 };
       });
 
+      if (result.error) {
+        sendJson(res, result.status || 400, { error: result.error });
+        return;
+      }
       sendJson(res, 200, { openingMessage: result.openingMessage, state: result.state });
       return;
     }
 
     if (pathname === "/api/assistant-cards" && method === "GET") {
-      sendJson(res, 200, { assistantCards: getAssistantCards(state), activeAssistantMode: state.activeAssistantMode });
+      const viewState = getWebConversationStateView(state);
+      sendJson(res, 200, {
+        assistantCards: getAssistantCards(viewState),
+        activeAssistantMode: viewState.activeAssistantMode
+      });
       return;
     }
 
@@ -12282,10 +12567,14 @@ const server = http.createServer(async (req, res) => {
     const assistantStartMatch = pathname.match(/^\/api\/assistant-cards\/([^/]+)\/start$/);
     if (assistantStartMatch && method === "POST") {
       const result = await withStateLock(async () => {
-        const assistant = startAssistantCard(state, assistantStartMatch[1]);
-        if (!assistant) {
+        if (!getAssistantCardById(state, assistantStartMatch[1])) {
           return { error: "助手不存在", status: 404 };
         }
+        const keyAssignment = assignConversationApiKeyGroup(state, { forceNew: true });
+        if (!keyAssignment.ok) {
+          return { error: keyAssignment.error, status: 409 };
+        }
+        const assistant = startAssistantCard(state, assistantStartMatch[1]);
         const openingMessage = appendAssistantOpeningMessage(state, assistant, { platform: "web" });
         saveState(state);
         return { openingMessage, state: statePayload(state), status: 200 };
@@ -12499,6 +12788,11 @@ const server = http.createServer(async (req, res) => {
           return { error: "角色卡不存在", status: 404 };
         }
 
+        const keyAssignment = assignConversationApiKeyGroup(state, { forceNew: true });
+        if (!keyAssignment.ok) {
+          return { error: keyAssignment.error, status: 409 };
+        }
+
         state.activeRoleCardId = cardId;
         state.activeAssistantMode = null;
         state.activeSavedSessionId = null;
@@ -12549,11 +12843,11 @@ const server = http.createServer(async (req, res) => {
     const messageFeedbackMatch = pathname.match(/^\/api\/messages\/([^/]+)\/feedback$/);
     if (messageFeedbackMatch && method === "POST") {
       const body = await readBody(req);
-      const result = applyAssistantFeedbackToConversation(state, {
+      const result = await withStateLock(() => applyAssistantFeedbackToConversation(state, {
         assistantMessageId: messageFeedbackMatch[1],
         feedback: body.feedback || body.type || body.value,
         source: "web"
-      });
+      }));
       if (!result.ok) {
         sendJson(res, result.status || 400, { error: result.error || "回饋標記失敗" });
         return;
@@ -12574,29 +12868,29 @@ const server = http.createServer(async (req, res) => {
       const messageId = messageEditMatch[1];
       const body = await readBody(req);
       const newContent = safeText(body.content);
-
-      const message = state.conversation.find((item) => item.id === messageId);
-      if (!message) {
-        sendJson(res, 404, { error: "訊息不存在" });
-        return;
-      }
-
-      if (message.role !== "assistant") {
-        sendJson(res, 400, { error: "僅允許編輯 AI 輸出對話" });
-        return;
-      }
-
       if (!newContent) {
         sendJson(res, 400, { error: "內容不可空白" });
         return;
       }
-
-      message.content = newContent;
-      message.edited = true;
-      message.updatedAt = nowIso();
-
-      saveState(state);
-      sendJson(res, 200, { message, state: statePayload(state) });
+      const result = await withStateLock(() => {
+        const message = state.conversation.find((item) => item.id === messageId);
+        if (!message) {
+          return { error: "訊息不存在", status: 404 };
+        }
+        if (message.role !== "assistant") {
+          return { error: "僅允許編輯 AI 輸出對話", status: 400 };
+        }
+        message.content = newContent;
+        message.edited = true;
+        message.updatedAt = nowIso();
+        saveState(state);
+        return { message, state: statePayload(state), status: 200 };
+      });
+      if (result.error) {
+        sendJson(res, result.status, { error: result.error });
+        return;
+      }
+      sendJson(res, 200, { message: result.message, state: result.state });
       return;
     }
 
@@ -12605,30 +12899,33 @@ const server = http.createServer(async (req, res) => {
       const messageId = messageReplayEditMatch[1];
       const body = await readBody(req);
       const newContent = safeText(body.content);
-      const targetIndex = state.conversation.findIndex((item) => item?.id === messageId);
-      if (targetIndex < 0) {
-        sendJson(res, 404, { error: "訊息不存在" });
-        return;
-      }
-      const message = state.conversation[targetIndex];
-      if (message?.role !== "user") {
-        sendJson(res, 400, { error: "僅允許用這個方式編輯使用者訊息" });
-        return;
-      }
       if (!newContent) {
         sendJson(res, 400, { error: "內容不可空白" });
         return;
       }
-      const result = await replayConversationFromMessageNumber({
-        messageNumber: targetIndex + 1,
-        content: newContent,
-        source: "web",
-        extra: {
-          platform: "web",
-          replayFromWebEdit: true,
-          editedMessageId: messageId
+      let result;
+      try {
+        result = await replayConversationFromMessageNumber({
+          messageId,
+          content: newContent,
+          source: "web",
+          extra: {
+            platform: "web",
+            replayFromWebEdit: true,
+            editedMessageId: messageId
+          }
+        });
+      } catch (error) {
+        if (error?.message === "訊息不存在") {
+          sendJson(res, 404, { error: error.message });
+          return;
         }
-      });
+        if (error?.message === "僅允許用這個方式編輯使用者訊息") {
+          sendJson(res, 400, { error: error.message });
+          return;
+        }
+        throw error;
+      }
       sendJson(res, 200, {
         ...result,
         backgroundImageGeneration: hasPendingModelImageGeneration(result.modelProcessingResult),
@@ -12649,10 +12946,6 @@ const server = http.createServer(async (req, res) => {
       const content = safeText(body.content) || (images.length > 0 ? DEFAULT_IMAGE_ONLY_USER_CONTENT : "");
       if (!content) {
         sendJson(res, 400, { error: "請輸入內容或附加圖片。" });
-        return;
-      }
-      if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用助手。" });
         return;
       }
       const result = await runConversationTurn({
@@ -12710,10 +13003,6 @@ const server = http.createServer(async (req, res) => {
       const content = safeText(body.content) || (images.length > 0 ? DEFAULT_IMAGE_ONLY_USER_CONTENT : "");
       if (!content) {
         sendJson(res, 400, { error: "請輸入內容或附加圖片。" });
-        return;
-      }
-      if (!state.aiSessionStarted || !hasActiveConversationTarget(state)) {
-        sendJson(res, 400, { error: "尚未開始。請先在網頁選擇角色卡或啟用助手。" });
         return;
       }
 
@@ -13328,9 +13617,10 @@ async function startSessionFromDiscord(
     if (roleCardNumber === null) {
       return { ok: false, error: "角色卡編號必須是 0 或正整數。" };
     }
+    let requestedCard = null;
     if (roleCardNumber > 0) {
-      const selectedCard = getDiscordRoleCardByNumber(state.roleCards, roleCardNumber);
-      if (!selectedCard) {
+      requestedCard = getDiscordRoleCardByNumber(state.roleCards, roleCardNumber);
+      if (!requestedCard) {
         const cardCount = Array.isArray(state.roleCards) ? state.roleCards.length : 0;
         return {
           ok: false,
@@ -13339,19 +13629,18 @@ async function startSessionFromDiscord(
             : "目前沒有可使用的角色卡。"
         };
       }
-      state.activeRoleCardId = selectedCard.id;
-      state.activeAssistantMode = null;
     }
 
-    const card = getActiveRoleCard(state);
-    if (!card && !hasActiveAssistantTarget(state)) {
+    const card = requestedCard || getActiveRoleCard(state);
+    const useAssistant = !requestedCard && hasActiveAssistantTarget(state);
+    if (!card && !useAssistant) {
       return {
         ok: false,
         error: "尚未選擇角色卡或助手模式。請先到網頁建立角色卡，或啟用助手。"
       };
     }
     const hasRequestedOpening = requestedOpeningNumber !== null && requestedOpeningNumber !== undefined;
-    if (hasActiveAssistantTarget(state) && hasRequestedOpening) {
+    if (useAssistant && hasRequestedOpening) {
       return { ok: false, error: "助手模式沒有角色卡開場，請不要輸入 opening。" };
     }
 
@@ -13371,22 +13660,32 @@ async function startSessionFromDiscord(
         };
       }
       selectedOpening = openings[openingNumber - 1];
-      state.selectedOpeningDialogueId = selectedOpening.id;
-    } else {
-      state.selectedOpeningDialogueId = "";
     }
 
+    const keyAssignment = assignConversationApiKeyGroup(state, {
+      contextId: getDiscordConversationContextId(channelId),
+      forceNew: true
+    });
+    if (!keyAssignment.ok) {
+      return { ok: false, error: keyAssignment.error };
+    }
+
+    if (requestedCard) {
+      state.activeRoleCardId = requestedCard.id;
+      state.activeAssistantMode = null;
+    }
+    state.selectedOpeningDialogueId = selectedOpening?.id || "";
     state.aiSessionStarted = true;
     state.pendingOpeningBroadcast = false;
     state.lastDiscordChannelId = channelId;
     resetDiscordPlayerAssignments(state, channelId);
     state.activeSavedSessionId = null;
     resetConversationProgress(state, {
-      resetTimeTracking: !hasActiveAssistantTarget(state)
+      resetTimeTracking: !useAssistant
     });
     state.roleCardRuntimeState = {};
     resetGeneratedBackendContextPreservingManual(state);
-    if (hasActiveAssistantTarget(state)) {
+    if (useAssistant) {
       const assistant = getActiveAssistantCard(state);
       const openingMessage = appendAssistantOpeningMessage(state, assistant, {
         platform: "discord",
@@ -14098,6 +14397,23 @@ async function handleSlashCommand(interaction) {
     await safeSendInteractionText(
       interaction,
       discordSystemText(stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"),
+      { ephemeral: true }
+    );
+    return;
+  }
+
+  if (name === "close") {
+    const contextId = getDiscordConversationContextId(interaction.channelId);
+    requestStopActiveGeneration(contextId);
+    cancelDiscordArchiveReplays("", interaction.channelId);
+    const result = await withStateLock(() => deleteConversationContext(state, contextId));
+    await safeSendInteractionText(
+      interaction,
+      discordSystemText(
+        result.ok
+          ? "已關閉並刪除目前頻道的故事；已建立的對話存檔仍然保留。"
+          : result.error
+      ),
       { ephemeral: true }
     );
     return;

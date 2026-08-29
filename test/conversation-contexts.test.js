@@ -25,15 +25,60 @@ test("legacy shared conversation migrates to its last Discord channel", () => {
 test("Discord work swaps channel runtime and restores the web-selected story", () => {
   assert.match(serverSource, /requestedContextId !== selectedContextId/u);
   assert.match(serverSource, /selectedContextSnapshot = captureConversationContextSnapshot\(state\)/u);
+  assert.match(serverSource, /displacedWebConversationContext = \{[\s\S]*snapshot: selectedContextSnapshot/u);
+  assert.match(serverSource, /function getWebConversationStateView/u);
   assert.match(serverSource, /applyConversationContextSnapshot\([\s\S]*requestedContextId/u);
   assert.match(serverSource, /applyConversationContextSnapshot\(state, selectedContextSnapshot, selectedContextId\)/u);
+});
+
+test("web conversation mutations are serialized with Discord context work", () => {
+  assert.match(serverSource, /pathname === "\/api\/sessions\/save"[\s\S]*?withStateLock\(\(\) =>/u);
+  assert.match(serverSource, /pathname === "\/api\/context-compression"[\s\S]*?method === "PUT"[\s\S]*?withStateLock/u);
+  assert.match(serverSource, /pathname === "\/api\/time-tracking"[\s\S]*?method === "PUT"[\s\S]*?withStateLock/u);
+  assert.match(serverSource, /messageFeedbackMatch[\s\S]*?withStateLock/u);
+  assert.match(serverSource, /messageEditMatch[\s\S]*?withStateLock/u);
+  assert.match(serverSource, /replayConversationFromMessageNumber\(\{[\s\S]*?messageId/u);
 });
 
 test("web exposes and controls the selected conversation context", () => {
   assert.match(serverSource, /pathname === "\/api\/conversation-contexts" && method === "GET"/u);
   assert.match(serverSource, /pathname === "\/api\/conversation-context" && method === "PUT"/u);
+  assert.match(serverSource, /pathname === "\/api\/conversation-context" && method === "DELETE"/u);
   assert.match(htmlSource, /id="conversationContextSelect"/u);
+  assert.match(htmlSource, /id="deleteConversationContextBtn"/u);
   assert.match(webSource, /function renderConversationContextPicker/u);
   assert.match(webSource, /PUT[\s\S]*contextId/u);
+  assert.match(webSource, /DELETE[\s\S]*contextId/u);
 });
 
+test("deleting a Discord story preserves archives and releases its key group", () => {
+  const startIndex = serverSource.indexOf("function deleteConversationContext");
+  const endIndex = serverSource.indexOf("function ensureSavedSessionsDir", startIndex);
+  const deleteSource = serverSource.slice(startIndex, endIndex);
+  assert.match(deleteSource, /本地對話不可刪除/u);
+  assert.match(deleteSource, /delete currentState\.conversationContextIndex\[contextId\]/u);
+  assert.match(deleteSource, /delete currentState\.conversationApiKeyAssignments\[contextId\]/u);
+  assert.match(deleteSource, /fs\.rmSync\(getConversationContextFilePath\(contextId\)/u);
+  assert.doesNotMatch(deleteSource, /savedSessions|SAVED_SESSIONS/u);
+  assert.match(serverSource, /requireExistingContext: true/u);
+});
+
+test("conversation contexts lease independent chat API key groups", () => {
+  assert.match(serverSource, /conversationApiKeyAssignments: normalizeConversationApiKeyAssignments/u);
+  assert.match(serverSource, /assignConversationApiKeyGroup\(state, \{ forceNew: true \}\)/u);
+  assert.match(serverSource, /contextId: getDiscordConversationContextId\(channelId\),[\s\S]*forceNew: true/u);
+  assert.match(serverSource, /getChatApiKey\(purpose, targetState, conversationContextId\)/u);
+  assert.match(webSource, /對話 API Key 組切換/u);
+  assert.match(webSource, /CHAT_API_KEY_GROUP\$\{groupNumber\}/u);
+});
+
+test("Discord start validates a free key group before changing the active story", () => {
+  const startIndex = serverSource.indexOf("async function startSessionFromDiscord");
+  const endIndex = serverSource.indexOf("function buildDiscordStatusText", startIndex);
+  const startSource = serverSource.slice(startIndex, endIndex);
+  const assignmentIndex = startSource.indexOf("const keyAssignment = assignConversationApiKeyGroup");
+  const roleMutationIndex = startSource.indexOf("state.activeRoleCardId = requestedCard.id");
+  assert.ok(assignmentIndex >= 0);
+  assert.ok(roleMutationIndex > assignmentIndex);
+  assert.match(startSource, /if \(!keyAssignment\.ok\) \{[\s\S]*return \{ ok: false/u);
+});

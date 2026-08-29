@@ -99,6 +99,7 @@
                 <span class="sr-only">選擇對話故事</span>
                 <select id="conversationContextSelect" aria-label="選擇對話故事"></select>
               </label>
+              <button id="deleteConversationContextBtn" type="button" class="icon-button context-delete-button" title="刪除目前 Discord 頻道故事" aria-label="刪除目前 Discord 頻道故事">×</button>
               <button id="stopChatBtn" type="button" class="icon-button" title="停止正在生成的回覆">■</button>
               <button id="discordBotLinkBtn" type="button" class="icon-button" title="Discord Bot 連結">✦</button>
             </div>
@@ -151,6 +152,7 @@
           <button id="useDefaultsBtn" type="button" class="secondary">匯入全局設定</button>
           <button id="saveDefaultsBtn" type="button" class="secondary">匯出當前全局設定</button>
           <button id="updateDefaultsBtn" type="button" class="secondary">使用作者預設</button>
+          <input id="globalSettingsFileInput" type="file" class="hidden" accept=".json,application/json" />
         </div>
       </form>
     </dialog>

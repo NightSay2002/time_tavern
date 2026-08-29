@@ -27,8 +27,16 @@ test("conversation tools and global settings use separate sections", () => {
   assert.match(defaultsMenu, /id="useDefaultsBtn"[^>]*>匯入全局設定</u);
   assert.match(defaultsMenu, /id="saveDefaultsBtn"[^>]*>匯出當前全局設定</u);
   assert.match(defaultsMenu, /id="updateDefaultsBtn"[^>]*>使用作者預設</u);
+  assert.match(defaultsMenu, /id="globalSettingsFileInput"[^>]*type="file"[^>]*accept="\.json,application\/json"/u);
   assert.match(appSource, /saveDefaultsBtn\.textContent = "匯出當前全局設定"/u);
   assert.match(appSource, /useDefaultsBtn\.textContent = "匯入全局設定"/u);
+  assert.match(appSource, /window\.showSaveFilePicker/u);
+  assert.match(appSource, /URL\.createObjectURL/u);
+  assert.match(appSource, /globalSettingsFileInput\.click\(\)/u);
+  assert.match(appSource, /request\("\/api\/defaults\/export"\)/u);
+  assert.match(appSource, /request\("\/api\/defaults\/import"/u);
+  assert.match(appSource, /request\("\/api\/defaults\/author"/u);
+  assert.doesNotMatch(appSource, /\/api\/defaults\/(?:save|apply|update)/u);
   assert.doesNotMatch(appSource, /closeDefaultsMenuBtn[\s\S]{0,180}otherActionsDialog/u);
 });
 

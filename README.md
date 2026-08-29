@@ -44,7 +44,7 @@ npm start
 
 `npm start` 會先檢查目前追蹤的 GitHub 分支。工作區沒有程式碼改動且可 fast-forward 時會自動更新；離線、有本機程式碼改動或分支已分岔時會保留現況並繼續啟動。
 
-使用者的角色卡、使用者設定、Prompt、目前對話與本機預設都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。根目錄 `.env` 會自動備份到 `data/environment.env`；新版本缺少 `.env` 時，啟動器會由該備份還原。舊版若曾把本機預設或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
+使用者的角色卡、使用者設定、Prompt 與目前對話都放在被 Git 忽略的 `data/`，自動更新不會覆蓋。根目錄 `.env` 會自動備份到 `data/environment.env`；新版本缺少 `.env` 時，啟動器會由該備份還原。舊版若曾把本機預設或 Prompt 寫進追蹤檔，更新器會先遷移到 `data/` 再更新程式碼。
 
 若本機程式檔改動使自動更新跳過，手動更新時先停止服務並備份整個 `data/`，取得乾淨的新版本後，只把備份的 `data/` 放回新版本再啟動。不要用舊程式檔覆蓋新版本。`data/environment.env` 含 Token 與 API Key，請勿分享或提交。
 
@@ -66,7 +66,7 @@ CHAT_API_MODEL=deepseek-v4-pro
 
 也可把 provider 改為 `zhipu` 並選用 `glm-5.3` 或原生多模態的 `glm-5.3-flash`；系統始終使用 `CHAT_API_MODEL` 指定的模型，不會因上傳圖片自動換模型。完整 provider 設定見 [細節文件](docs/DETAILS.md)。
 
-在網頁環境設定切換對話 API 供應商時，會一併切換並保留各供應商自己的主 API Key、大模型處理 Key、輸出模型與 Base URL；思考模式強度使用同一個欄位。DeepSeek 的「使用預設」為高強度；其他供應商只會在目前模型明確支援時顯示「關閉」。關閉思考後會使用溫度，並不附帶使用者自訂補充。
+環境設定的對話 API Key 可用 `Key 1`、`Key 2...` 分頁管理，每組同時包含主對話 Key 與大模型處理 Key。新故事自動租用最前面的閒置組，任何 AI 呼叫都會續期；24 小時沒有 AI 活動後才供其他故事使用。切換供應商時會保留各供應商自己的 Key 組、輸出模型與 Base URL。
 
 NovelAI 圖片功能另外填：
 
@@ -92,7 +92,7 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 
 服務已在運行時若更新到後端程式，請使用環境設定中的「重啟伺服器」或重新執行啟動器；只刷新網頁只會重新載入前端檔案。
 
-主頁「設定及其他雜項」中的「全局設定」包含「匯入全局設定」、「匯出當前全局設定」與「使用作者預設」；匯出只寫入本機設定，匯入才會套用，使用作者預設則會替換本機設定但不立即修改正在使用的角色卡、Prompt 或目前對話。
+主頁「設定及其他雜項」中的「全局設定」可把目前設定匯出成 JSON 檔、從自行選擇的 JSON 檔匯入，或直接套用目前版本隨附的作者預設。檔案不包含對話、對話存檔、AI 呼叫紀錄、Token 或 API Key；匯入與套用作者預設也不會覆蓋本機密鑰及對話存檔。
 
 ## 功能
 
@@ -114,7 +114,7 @@ NovelAI：
 
 Discord：
 
-- 八個 Slash 指令：`/ai_start`、`/ai_status`、`/stop`、`/player_set`、`/reload`、`/quick_send`、`/archive`、`/archive_return`。
+- 九個 Slash 指令：`/ai_start`、`/ai_status`、`/stop`、`/close`、`/player_set`、`/reload`、`/quick_send`、`/archive`、`/archive_return`。
 - 每個頻道與私訊可獨立遊玩不同故事；支援文字／圖片附件、多開場角色卡、存檔瀏覽、多玩家座位、訊息重算與反應回饋，網頁可手動切換管理各故事。
 
 ## 預覽
