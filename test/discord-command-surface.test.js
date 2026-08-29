@@ -40,6 +40,12 @@ test("Discord exposes exactly the nine supported Slash commands", () => {
   assert.match(serverSource, /handleDiscordRoleCardBrowserButton\(interaction\)/u);
   assert.match(serverSource, /name:\s*"archive",[\s\S]*?name:\s*"action"/u);
   assert.match(serverSource, /name:\s*"archive_return",[\s\S]*?name:\s*"mode",[\s\S]*?name:\s*"num"/u);
+  const archiveCommand = serverSource.match(/name:\s*"archive",[\s\S]*?\n  \},\n  \{\n    name:\s*"archive_return"/u)?.[0] || "";
+  const archiveReturnCommand = serverSource.match(/name:\s*"archive_return",[\s\S]*?\n  \}\n\];/u)?.[0] || "";
+  assert.match(archiveCommand, /choices:\s*\[\s*\{ name: "0", value: 0 \},\s*\{ name: "1", value: 1 \}/u);
+  assert.match(archiveReturnCommand, /choices:\s*\[\s*\{ name: "0", value: 0 \},\s*\{ name: "1", value: 1 \}/u);
+  assert.doesNotMatch(archiveCommand, /name:\s*"[01] [^"]+"/u);
+  assert.doesNotMatch(archiveReturnCommand, /name:\s*"[01] [^"]+"/u);
   assert.match(serverSource, /if \(name === "close"\)[\s\S]*?deleteConversationContext\(state, contextId\)/u);
   assert.match(serverSource, /handleDiscordArchiveBrowserButton\(interaction\)/u);
   assert.match(serverSource, /handleDiscordArchiveReplayButton\(interaction\)/u);

@@ -945,8 +945,8 @@ const DISCORD_SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.Integer,
         required: true,
         choices: [
-          { name: "0 保存目前對話", value: 0 },
-          { name: "1 瀏覽存檔", value: 1 }
+          { name: "0", value: 0 },
+          { name: "1", value: 1 }
         ]
       },
       {
@@ -967,8 +967,8 @@ const DISCORD_SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.Integer,
         required: true,
         choices: [
-          { name: "0 從頭回放", value: 0 },
-          { name: "1 從最後對話繼續", value: 1 }
+          { name: "0", value: 0 },
+          { name: "1", value: 1 }
         ]
       },
       {
