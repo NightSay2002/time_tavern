@@ -51,6 +51,17 @@ test("Discord exposes exactly the nine supported Slash commands", () => {
   assert.match(serverSource, /handleDiscordArchiveReplayButton\(interaction\)/u);
 });
 
+test("Discord registers one global command set and clears legacy guild duplicates", () => {
+  const registerBlock = serverSource.match(/async function registerSlashCommands[\s\S]*?\n\}\n\nconst recentDiscordUserInstallEvents/u)?.[0] || "";
+  const welcomeBlock = serverSource.match(/async function welcomeNewDiscordGuild[\s\S]*?\n\}\n\nasync function handleSlashCommand/u)?.[0] || "";
+
+  assert.match(registerBlock, /app\.commands\.set\(globalCommands\)/u);
+  assert.match(registerBlock, /guild\.commands\.set\(\[\]\)/u);
+  assert.doesNotMatch(registerBlock, /guild\.commands\.set\(guildCommands\)/u);
+  assert.match(welcomeBlock, /guild\.commands\.set\(\[\]\)/u);
+  assert.doesNotMatch(serverSource, /DISCORD_GUILD_ID/u);
+});
+
 test("web exposes exactly four slash command menu entries", () => {
   const block = webSource.match(/const CHAT_COMMAND_MENU_ITEMS = \[([\s\S]*?)\n\];/u)?.[1] || "";
   const commands = Array.from(block.matchAll(/^\s+command:\s*"([^"]+)"/gmu), (match) => match[1])

@@ -48,7 +48,6 @@
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
 | `DISCORD_ALLOWED_USER_ID` | 空 | 設定後只接受該 Discord User ID 的指令、訊息、編輯與反應。 |
 | `DISCORD_PUBLIC_KEY` | 自動取得 | 驗證 Discord Application Authorized Webhook；Bot 未連線時可填 Developer Portal Public Key 作備援。 |
-| `DISCORD_GUILD_ID` | 空 | 額外指定 guild；啟動時亦會同步所有已加入的 guild。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
 | `DISCORD_LOGIN_RETRY_INITIAL_MS` | `15000` | Discord 登入第一次重試等待時間。 |
 | `DISCORD_LOGIN_RETRY_MAX_MS` | `300000` | Discord 登入退避上限。 |
@@ -215,7 +214,7 @@ Slash 指令：
 
 Discord 行為：
 
-- Bot 每次上線都會立即同步 Slash 指令到所有已加入的 Discord 伺服器，並同步全域指令。
+- Bot 每次上線只同步全域 Slash 指令，並清除所有已加入伺服器中的舊 guild 指令，避免全域與伺服器指令重複顯示。全域指令同時支援伺服器安裝與使用者安裝。
 - Bot 新加入伺服器時，會優先在系統頻道、否則在第一個有權發言的文字頻道送出私人聊天與 `/ai_start` 使用說明。
 - 應用程式安裝到使用者帳號時，`APPLICATION_AUTHORIZED` Webhook 會觸發 Bot 私訊使用說明。
 - 每個伺服器頻道與 Bot 私訊各自保存角色、對話、回合、時間、壓縮內容、模型狀態及玩家分配；在不同頻道使用 `/ai_start` 或 `/archive_return` 不會覆蓋其他頻道故事。

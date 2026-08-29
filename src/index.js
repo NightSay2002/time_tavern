@@ -174,7 +174,6 @@ ensureLocalDefaultsFiles();
 applyDefaultEnvToProcess();
 const PORT = Number(process.env.PORT || 3234);
 const DISCORD_BOT_TOKEN = safeText(process.env.DISCORD_BOT_TOKEN);
-const DISCORD_GUILD_ID = safeText(process.env.DISCORD_GUILD_ID);
 const DISCORD_PUBLIC_KEY = safeText(process.env.DISCORD_PUBLIC_KEY);
 const DISCORD_ALLOWED_USER_ID = safeText(process.env.DISCORD_ALLOWED_USER_ID);
 const DEFAULT_CHAT_API_PROVIDER = "deepseek";
@@ -14154,7 +14153,6 @@ async function registerSlashCommands(discordClient) {
 
   const language = getUiLanguage();
   const globalCommands = localizeDiscordSlashCommands(DISCORD_GLOBAL_SLASH_COMMANDS, language);
-  const guildCommands = localizeDiscordSlashCommands(DISCORD_SLASH_COMMANDS, language);
 
   try {
     await app.commands.set(globalCommands);
@@ -14163,36 +14161,19 @@ async function registerSlashCommands(discordClient) {
     console.error("全域 Slash 指令註冊失敗：", error);
   }
 
-  const guildIds = new Set(
-    Array.from(discordClient.guilds.cache.keys())
-      .map((guildId) => safeText(guildId))
-      .filter(Boolean)
-  );
-  const configuredGuildId = safeText(DISCORD_GUILD_ID);
-  const clientId = getDiscordClientId();
-  if (configuredGuildId && clientId && configuredGuildId === clientId) {
-    console.warn(`已略過 guild Slash 指令註冊：DISCORD_GUILD_ID=${configuredGuildId} 看起來是 Bot Client ID，不是伺服器 ID。`);
-  } else if (configuredGuildId) {
-    guildIds.add(configuredGuildId);
-  }
-
-  let registeredGuilds = 0;
-  for (const guildId of guildIds) {
+  const guilds = Array.from(discordClient.guilds.cache.values());
+  let clearedGuilds = 0;
+  for (const guild of guilds) {
     try {
-      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId);
-      await guild.commands.set(guildCommands);
-      registeredGuilds += 1;
+      await guild.commands.set([]);
+      clearedGuilds += 1;
     } catch (error) {
-      if (error?.code === 10004) {
-        console.warn(`已略過 guild Slash 指令註冊：找不到 guild ${guildId}，請確認 Bot 已加入該伺服器。`);
-        continue;
-      }
-      console.error(`Guild Slash 指令註冊失敗（${guildId}）：`, error);
+      console.error(`Guild Slash 指令清理失敗（${guild.id}）：`, error);
     }
   }
 
-  if (guildIds.size > 0) {
-    console.log(`Slash 指令已即時同步到 ${registeredGuilds}/${guildIds.size} 個 Discord 伺服器`);
+  if (guilds.length > 0) {
+    console.log(`已清除 ${clearedGuilds}/${guilds.length} 個 Discord 伺服器的重複 Slash 指令`);
   }
 }
 
@@ -14276,9 +14257,9 @@ async function findDiscordGuildWelcomeChannel(guild) {
 
 async function welcomeNewDiscordGuild(guild) {
   try {
-    await guild.commands.set(localizeDiscordSlashCommands(DISCORD_SLASH_COMMANDS, getUiLanguage()));
+    await guild.commands.set([]);
   } catch (error) {
-    console.warn(`新 Discord 伺服器 Slash 指令同步失敗（${guild.id}）：${error.message || error}`);
+    console.warn(`新 Discord 伺服器重複 Slash 指令清理失敗（${guild.id}）：${error.message || error}`);
   }
 
   const channel = await findDiscordGuildWelcomeChannel(guild);
