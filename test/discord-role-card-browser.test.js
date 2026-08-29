@@ -54,13 +54,18 @@ test("Discord role card browser provides bounded card and opening buttons", () =
   assert.match(payload.content, /預覽（2\/3）：.*開場 B2/u);
   assert.match(payload.content, /\/ai_start num:2 opening:2/u);
   assert.equal(buttons.length, 4);
-  assert.equal(buttons[0].custom_id, "role_card_browser:1:1");
-  assert.equal(buttons[1].custom_id, "role_card_browser:2:1");
-  assert.equal(buttons[2].custom_id, "role_card_browser:2:3");
-  assert.equal(buttons[3].custom_id, "role_card_browser:3:1");
+  assert.equal(buttons[0].custom_id, "role_card_browser:1:1:previous_card");
+  assert.equal(buttons[1].custom_id, "role_card_browser:2:1:previous_opening");
+  assert.equal(buttons[2].custom_id, "role_card_browser:2:3:next_opening");
+  assert.equal(buttons[3].custom_id, "role_card_browser:3:1:next_card");
+  assert.equal(new Set(buttons.map((button) => button.custom_id)).size, buttons.length);
   assert.equal(buttons[0].disabled, false);
   assert.equal(buttons[3].disabled, false);
   assert.deepEqual(parseDiscordRoleCardBrowserCustomId(buttons[2].custom_id), {
+    cardNumber: 2,
+    openingNumber: 3
+  });
+  assert.deepEqual(parseDiscordRoleCardBrowserCustomId("role_card_browser:2:3"), {
     cardNumber: 2,
     openingNumber: 3
   });
@@ -77,6 +82,17 @@ test("Discord role card browser handles empty and final pages", () => {
   assert.match(final.content, /角色卡 4 \/ 4/u);
   assert.match(final.content, /模式：自訂模式/u);
   assert.equal(buttons[3].disabled, true);
+  assert.equal(new Set(buttons.map((button) => button.custom_id)).size, buttons.length);
+});
+
+test("Discord role card browser keeps every custom id unique with no openings", () => {
+  const payload = buildDiscordRoleCardBrowserPayload({
+    roleCards: [{ id: "only", name: "唯一角色", mode: "single" }]
+  });
+  const buttons = payload.components[0].toJSON().components;
+
+  assert.equal(buttons.every((button) => button.disabled), true);
+  assert.equal(new Set(buttons.map((button) => button.custom_id)).size, buttons.length);
 });
 
 test("Discord role card browser supports current and legacy role modes", () => {

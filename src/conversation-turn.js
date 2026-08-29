@@ -144,6 +144,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   let modelProcessingResult = generation?.modelProcessingResult || deps.getLastModelProcessingResult?.(currentState) || {};
   let assistantText = safeText(generation?.content);
   let fullReasoning = safeText(generation?.reasoningContent);
+  const excludeAssistantFromModel = Boolean(generation?.excludeFromModel);
 
   if (generation?.suppressAssistantMessage) {
     requireDependency(deps, "saveState")(currentState);
@@ -160,6 +161,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
         assistantText,
         runtimeUserName,
         modelProcessingResult,
+        generation,
         input
       })
     : true;
@@ -182,11 +184,13 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   });
   assistantText = safeText(finalizedAssistantOutput?.content) || assistantText;
 
-  const timeTrackingUpdate = deps.updateTimeTrackingAfterAssistantTurn?.(
-    currentState,
-    assistantText,
-    storedUserContent
-  ) || {};
+  const timeTrackingUpdate = excludeAssistantFromModel
+    ? {}
+    : deps.updateTimeTrackingAfterAssistantTurn?.(
+      currentState,
+      assistantText,
+      storedUserContent
+    ) || {};
   const stateAfterTurnSnapshot = captureCheckpoint(currentState);
   const assistantMessage = requireDependency(deps, "createMessageRecord")({
     role: "assistant",
@@ -194,7 +198,11 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
     source: input.source,
     extra: buildAssistantExtra({
       turnExtra,
-      assistantExtra: input.assistantExtra || {},
+      assistantExtra: {
+        ...(generation?.assistantExtra || {}),
+        ...(input.assistantExtra || {}),
+        ...(excludeAssistantFromModel ? { excludeFromModel: true, systemError: true } : {})
+      },
       reasoningContent: fullReasoning,
       compressionNotice: generation?.compressionNotice,
       autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
@@ -203,7 +211,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   });
 
   requireDependency(deps, "appendConversationMessage")(assistantMessage);
-  if (!modelProcessingResult.skipReasoner) {
+  if (!modelProcessingResult.skipReasoner && !excludeAssistantFromModel) {
     const afterProcessingResult = await deps.updateCompressionAfterAssistantMessage?.(currentState, runtimeUserName, assistantMessage, turnExtra);
     if (afterProcessingResult?.didProcess) {
       modelProcessingResult = afterProcessingResult;

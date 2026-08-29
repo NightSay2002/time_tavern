@@ -4865,6 +4865,18 @@ function isImageOnlyMessage(message = {}) {
   return Boolean(message?.imageOnly || message?.extra?.imageOnly || getMessageImageAttachments(message).length > 0);
 }
 
+function isModelInvisibleMessage(message = {}) {
+  const content = String(message?.content || "").trim();
+  return Boolean(
+    message?.excludeFromModel ||
+    message?.systemError ||
+    message?.extra?.excludeFromModel ||
+    message?.extra?.systemError ||
+    content.startsWith("模型呼叫失敗，已改用錯誤訊息回覆：") ||
+    content === "尚未設定 CHAT_API_KEY / 對話 API Key，這是本地回覆佔位訊息。"
+  );
+}
+
 function openEditAssistantMessage(messageId = "") {
   if (!messageId) {
     return;
@@ -5155,7 +5167,7 @@ function renderMessages(state, options = {}) {
 
     const feedbackControls = document.createElement("div");
     feedbackControls.className = "message-feedback-actions";
-    if (message.role === "assistant" && !message.streaming && !isImageOnlyMessage(message)) {
+    if (message.role === "assistant" && !message.streaming && !isImageOnlyMessage(message) && !isModelInvisibleMessage(message)) {
       const currentFeedback = getMessageFeedbackType(message);
       ["like", "dislike"].forEach((feedbackType) => {
         const feedbackBtn = document.createElement("button");
@@ -5176,7 +5188,7 @@ function renderMessages(state, options = {}) {
     }
 
     body.append(header, content);
-    if (message.role === "assistant" && !message.streaming && !isImageOnlyMessage(message)) {
+    if (message.role === "assistant" && !message.streaming && !isImageOnlyMessage(message) && !isModelInvisibleMessage(message)) {
       body.appendChild(feedbackControls);
     }
 

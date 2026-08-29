@@ -35,6 +35,8 @@ import { stripLeadingContextRoundLabels } from "./context-rounds.js";
 import {
   composeReasonerRequestMessages,
   hasReachedContextRoundLimit,
+  isModelInvisibleMessage,
+  isSystemAssistantErrorContent,
   selectReasonerDialogueContextMessages
 } from "./dialogue-context.js";
 import {
@@ -81,7 +83,8 @@ import {
 } from "./chat-api-request.js";
 import {
   claimConversationApiKeySlot,
-  normalizeConversationApiKeyAssignments
+  normalizeConversationApiKeyAssignments,
+  releaseConversationApiKeySlot
 } from "./chat-api-key-leases.js";
 import {
   buildMultimodalMessageContent,
@@ -2795,13 +2798,54 @@ function deleteConversationContext(currentState, requestedContextId = "") {
 
   currentState.conversationContextIndex = normalizeConversationContextIndex(currentState.conversationContextIndex);
   delete currentState.conversationContextIndex[contextId];
-  currentState.conversationApiKeyAssignments = normalizeConversationApiKeyAssignments(
-    currentState.conversationApiKeyAssignments
+  currentState.conversationApiKeyAssignments = releaseConversationApiKeySlot(
+    currentState.conversationApiKeyAssignments,
+    contextId
   );
-  delete currentState.conversationApiKeyAssignments[contextId];
   fs.rmSync(getConversationContextFilePath(contextId), { force: true });
   saveState(currentState);
   return { ok: true, contextId, selectedContextId: currentState.selectedConversationContextId };
+}
+
+function isDiscordUnknownChannelError(error) {
+  return Number(error?.code || error?.rawError?.code) === 10003;
+}
+
+async function deleteDiscordConversationContextForChannel(channelId = "", reason = "") {
+  const contextId = getDiscordConversationContextId(channelId);
+  if (!contextId || !hasStoredConversationContext(state, contextId)) {
+    return false;
+  }
+  requestStopActiveGeneration(contextId);
+  cancelDiscordArchiveReplays("", channelId);
+  const result = await withStateLock(() => deleteConversationContext(state, contextId));
+  if (result.ok) {
+    console.log(`[Discord] 已清除${reason ? `${reason}的` : ""}頻道故事並釋放 Key：${channelId}`);
+  }
+  return result.ok;
+}
+
+async function cleanupDeletedDiscordChannelContexts(discordClient) {
+  const contexts = Object.values(normalizeConversationContextIndex(state.conversationContextIndex))
+    .filter((metadata) => safeText(metadata.guildId) && safeText(metadata.channelId));
+  let removedCount = 0;
+  for (const metadata of contexts) {
+    try {
+      const channel = await discordClient.channels.fetch(metadata.channelId, { force: true });
+      if (channel) {
+        continue;
+      }
+    } catch (error) {
+      if (!isDiscordUnknownChannelError(error)) {
+        console.warn(`Discord 頻道狀態檢查失敗（${metadata.channelId}）：${error.message || error}`);
+        continue;
+      }
+    }
+    if (await deleteDiscordConversationContextForChannel(metadata.channelId, "已不存在")) {
+      removedCount += 1;
+    }
+  }
+  return removedCount;
 }
 
 function ensureSavedSessionsDir() {
@@ -8929,10 +8973,6 @@ function buildModularPromptPreview(currentState, mode = "single", configInput = 
   };
 }
 
-function isModelInvisibleMessage(message = {}) {
-  return Boolean(message?.excludeFromModel || message?.imageOnly || message?.extra?.excludeFromModel || message?.extra?.imageOnly);
-}
-
 function getMessageModelContent(message) {
   if (!message || typeof message !== "object") {
     return "";
@@ -10805,6 +10845,7 @@ async function generateOneShotConversationAssistant({ state: currentState, runti
   const content = await runReasonerHistoryConversationTurn(currentState, runtimeUserName, {
     turnExtra
   });
+  const systemError = isSystemAssistantErrorContent(content);
   const modelProcessingResult = getLastModelProcessingResult(currentState);
   const imageOnlyProcessing = Array.isArray(modelProcessingResult.processedActions) &&
     modelProcessingResult.processedActions.length > 0 &&
@@ -10816,6 +10857,8 @@ async function generateOneShotConversationAssistant({ state: currentState, runti
     content,
     reasoningContent: "",
     compressionNotice,
+    excludeFromModel: systemError,
+    assistantExtra: systemError ? { excludeFromModel: true, systemError: true } : {},
     suppressAssistantMessage: Boolean(modelProcessingResult.suppressAssistantMessage),
     modelProcessingResult
   };
@@ -10834,8 +10877,11 @@ async function generateStreamingConversationAssistant({ state: currentState, run
       onReasoningDelta,
       onContentDelta
     });
+    const systemError = isSystemAssistantErrorContent(streamed.content);
     return {
       ...streamed,
+      excludeFromModel: systemError,
+      assistantExtra: systemError ? { excludeFromModel: true, systemError: true } : {},
       compressionNotice: false,
       modelProcessingResult: getLastModelProcessingResult(currentState)
     };
@@ -10880,8 +10926,11 @@ async function generateStreamingConversationAssistant({ state: currentState, run
     onReasoningDelta,
     onContentDelta
   });
+  const systemError = isSystemAssistantErrorContent(streamed.content);
   return {
     ...streamed,
+    excludeFromModel: systemError,
+    assistantExtra: systemError ? { excludeFromModel: true, systemError: true } : {},
     compressionNotice,
     modelProcessingResult: getLastModelProcessingResult(currentState)
   };
@@ -10910,8 +10959,9 @@ function createConversationTurnDeps(options = {}) {
       ? generateStreamingConversationAssistant({ ...context, handlers })
       : generateOneShotConversationAssistant(context),
     getLastModelProcessingResult,
-    shouldEnsureMinimumAssistantLength: ({ state: currentState, assistantText, modelProcessingResult }) => (
+    shouldEnsureMinimumAssistantLength: ({ state: currentState, assistantText, modelProcessingResult, generation }) => (
       !hasActiveAssistantTarget(currentState) &&
+      !generation?.excludeFromModel &&
       !modelProcessingResult.skipReasoner &&
       countVisibleCharacters(assistantText) < getMinimumReplyChars()
     ),
@@ -13327,7 +13377,9 @@ async function rememberDiscordReplyAndFeedback(assistantMessage = null, sentMess
     const stored = state.conversation.find((item) => item?.id === assistantMessage?.id);
     rememberDiscordReplyMessageIds(stored || assistantMessage, sentMessages);
   }, contextOptions);
-  await addDiscordFeedbackReactions(sentMessages);
+  if (!isModelInvisibleMessage(assistantMessage)) {
+    await addDiscordFeedbackReactions(sentMessages);
+  }
 }
 
 async function applyDiscordReactionFeedback(reaction, user) {
@@ -14634,12 +14686,26 @@ function setupDiscordBot() {
     }
     discordConnected = true;
     console.log(`Discord bot 已上線：${discordClient.user?.tag || "unknown"}`);
+    try {
+      const removedContextCount = await cleanupDeletedDiscordChannelContexts(discordClient);
+      if (removedContextCount > 0) {
+        console.log(`[Discord] 啟動時清除了 ${removedContextCount} 個已刪除頻道的故事。`);
+      }
+    } catch (error) {
+      console.warn(`Discord 已刪除頻道故事清理失敗：${error.message || error}`);
+    }
     void registerSlashCommands(discordClient);
   });
 
   discordClient.on("guildCreate", (guild) => {
     void welcomeNewDiscordGuild(guild).catch((error) => {
       console.warn(`Discord 新伺服器歡迎訊息發送失敗（${guild.id}）：${error.message || error}`);
+    });
+  });
+
+  discordClient.on("channelDelete", (channel) => {
+    void deleteDiscordConversationContextForChannel(channel.id, "剛刪除").catch((error) => {
+      console.warn(`Discord 已刪除頻道故事清理失敗（${channel.id}）：${error.message || error}`);
     });
   });
 

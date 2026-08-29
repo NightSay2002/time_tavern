@@ -26,6 +26,12 @@ export function normalizeConversationApiKeyAssignments(input = {}) {
   }));
 }
 
+export function releaseConversationApiKeySlot(assignmentsInput = {}, contextId = "") {
+  const assignments = normalizeConversationApiKeyAssignments(assignmentsInput);
+  delete assignments[text(contextId)];
+  return assignments;
+}
+
 export function claimConversationApiKeySlot(assignmentsInput = {}, options = {}) {
   const contextId = text(options.contextId);
   const now = Number.isFinite(options.now) ? options.now : Date.now();

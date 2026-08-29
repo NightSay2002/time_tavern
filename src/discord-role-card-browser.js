@@ -79,7 +79,9 @@ export function getInitialDiscordOpeningNumber(currentState = {}, roleCardNumber
 }
 
 export function parseDiscordRoleCardBrowserCustomId(customId = "") {
-  const match = safeText(customId).match(/^role_card_browser:(\d+):(\d+)$/u);
+  const match = safeText(customId).match(
+    /^role_card_browser:(\d+):(\d+)(?::(?:previous_card|previous_opening|next_opening|next_card))?$/u
+  );
   const cardNumber = match ? normalizeDiscordRoleCardNumber(match[1]) : null;
   const openingNumber = match ? normalizeDiscordRoleCardNumber(match[2]) : null;
   return cardNumber && openingNumber ? { cardNumber, openingNumber } : null;
@@ -132,22 +134,22 @@ export function buildDiscordRoleCardBrowserPayload(
   ].join("\n");
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.max(1, number - 1)}:1`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.max(1, number - 1)}:1:previous_card`)
       .setLabel(text("上一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number <= 1),
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${number}:${Math.max(1, openingNumber - 1)}`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${number}:${Math.max(1, openingNumber - 1)}:previous_opening`)
       .setLabel(text("上一個開場"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(openings.length <= 1 || openingNumber <= 1),
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${number}:${Math.min(Math.max(1, openings.length), openingNumber + 1)}`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${number}:${Math.min(Math.max(1, openings.length), openingNumber + 1)}:next_opening`)
       .setLabel(text("下一個開場"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(openings.length <= 1 || openingNumber >= openings.length),
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.min(cards.length, number + 1)}:1`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.min(cards.length, number + 1)}:1:next_card`)
       .setLabel(text("下一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number >= cards.length)

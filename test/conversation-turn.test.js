@@ -209,3 +209,46 @@ test("saves an image-only turn without creating or post-processing an assistant 
     "after-assistant"
   ].includes(event.type)), false);
 });
+
+test("stores a model failure for display without post-processing it as dialogue", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.generateAssistant = () => ({
+    content: "模型呼叫失敗，已改用錯誤訊息回覆：測試錯誤",
+    excludeFromModel: true,
+    assistantExtra: { excludeFromModel: true, systemError: true },
+    modelProcessingResult: { skipReasoner: false }
+  });
+  deps.shouldEnsureMinimumAssistantLength = ({ generation }) => {
+    events.push({ type: "minimum-check", excluded: generation.excludeFromModel });
+    return !generation.excludeFromModel;
+  };
+  deps.ensureMinimumAssistantLength = () => {
+    events.push({ type: "expand" });
+    return { content: "不應補寫" };
+  };
+  deps.updateTimeTrackingAfterAssistantTurn = () => {
+    events.push({ type: "update-assistant-time" });
+    return {};
+  };
+  deps.updateCompressionAfterAssistantMessage = () => {
+    events.push({ type: "after-assistant" });
+    return {};
+  };
+
+  const result = await runConversationTurnWorkflow(deps, {
+    state,
+    content: "使用者內容",
+    source: "discord"
+  });
+
+  assert.equal(result.assistantMessage.excludeFromModel, true);
+  assert.equal(result.assistantMessage.systemError, true);
+  assert.match(result.assistantMessage.content, /模型呼叫失敗/u);
+  assert.deepEqual(events.find((event) => event.type === "minimum-check"), {
+    type: "minimum-check",
+    excluded: true
+  });
+  assert.equal(events.some((event) => ["expand", "update-assistant-time", "after-assistant"].includes(event.type)), false);
+});

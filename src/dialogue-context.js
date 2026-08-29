@@ -2,8 +2,22 @@ function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isModelInvisibleMessage(message = {}) {
-  return Boolean(message.excludeFromModel || message.imageOnly || message.extra?.excludeFromModel || message.extra?.imageOnly);
+export function isSystemAssistantErrorContent(value = "") {
+  const content = normalizeText(value);
+  return content.startsWith("模型呼叫失敗，已改用錯誤訊息回覆：") ||
+    content === "尚未設定 CHAT_API_KEY / 對話 API Key，這是本地回覆佔位訊息。";
+}
+
+export function isModelInvisibleMessage(message = {}) {
+  return Boolean(
+    message.excludeFromModel ||
+    message.imageOnly ||
+    message.systemError ||
+    message.extra?.excludeFromModel ||
+    message.extra?.imageOnly ||
+    message.extra?.systemError ||
+    (message.role === "assistant" && isSystemAssistantErrorContent(message.content))
+  );
 }
 
 function getMessageTurnNumber(message = {}) {

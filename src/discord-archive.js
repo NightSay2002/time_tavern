@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle
 } from "discord.js";
+import { isModelInvisibleMessage } from "./dialogue-context.js";
 import { localizeSystemText, normalizeUiLanguage, UI_LANGUAGE_SIMPLIFIED } from "./ui-language.js";
 
 const ARCHIVE_BROWSER_PREFIX = "archive_browser:";
@@ -25,10 +26,7 @@ function truncateText(value, maxLength = ARCHIVE_PREVIEW_LIMIT) {
 function isInvisibleArchiveMessage(message = {}) {
   return Boolean(
     message?.source === "model_image" ||
-    message?.excludeFromModel ||
-    message?.imageOnly ||
-    message?.extra?.excludeFromModel ||
-    message?.extra?.imageOnly
+    isModelInvisibleMessage(message)
   );
 }
 

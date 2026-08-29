@@ -4,7 +4,8 @@ import test from "node:test";
 import {
   CHAT_API_KEY_LEASE_MS,
   claimConversationApiKeySlot,
-  normalizeConversationApiKeyAssignments
+  normalizeConversationApiKeyAssignments,
+  releaseConversationApiKeySlot
 } from "../src/chat-api-key-leases.js";
 
 const NOW = Date.parse("2026-08-29T12:00:00.000Z");
@@ -72,4 +73,21 @@ test("invalid persisted leases are discarded", () => {
   }), {
     local: { slot: 1, lastUsedAt: "2026-08-29T12:00:00.000Z" }
   });
+});
+
+test("deleting a story releases its key group immediately", () => {
+  const assignments = {
+    "discord:1": { slot: 1, lastUsedAt: new Date(NOW).toISOString() },
+    "discord:2": { slot: 2, lastUsedAt: new Date(NOW).toISOString() }
+  };
+  const released = releaseConversationApiKeySlot(assignments, "discord:1");
+  const claimed = claimConversationApiKeySlot(released, {
+    contextId: "discord:3",
+    availableSlots: [1, 2],
+    forceNew: true,
+    now: NOW + 1000
+  });
+  assert.deepEqual(Object.keys(released), ["discord:2"]);
+  assert.equal(claimed.ok, true);
+  assert.equal(claimed.slot, 1);
 });

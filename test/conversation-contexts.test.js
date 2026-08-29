@@ -57,10 +57,18 @@ test("deleting a Discord story preserves archives and releases its key group", (
   const deleteSource = serverSource.slice(startIndex, endIndex);
   assert.match(deleteSource, /本地對話不可刪除/u);
   assert.match(deleteSource, /delete currentState\.conversationContextIndex\[contextId\]/u);
-  assert.match(deleteSource, /delete currentState\.conversationApiKeyAssignments\[contextId\]/u);
+  assert.match(deleteSource, /releaseConversationApiKeySlot\([\s\S]*contextId/u);
   assert.match(deleteSource, /fs\.rmSync\(getConversationContextFilePath\(contextId\)/u);
   assert.doesNotMatch(deleteSource, /savedSessions|SAVED_SESSIONS/u);
   assert.match(serverSource, /requireExistingContext: true/u);
+});
+
+test("Discord channel deletion and startup reconciliation release abandoned stories", () => {
+  assert.match(serverSource, /async function cleanupDeletedDiscordChannelContexts/u);
+  assert.match(serverSource, /discordClient\.channels\.fetch\(metadata\.channelId, \{ force: true \}\)/u);
+  assert.match(serverSource, /discordClient\.on\("channelDelete"/u);
+  assert.match(serverSource, /deleteDiscordConversationContextForChannel\(channel\.id/u);
+  assert.match(serverSource, /await cleanupDeletedDiscordChannelContexts\(discordClient\)/u);
 });
 
 test("conversation contexts lease independent chat API key groups", () => {
