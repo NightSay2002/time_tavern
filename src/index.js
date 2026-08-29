@@ -139,10 +139,13 @@ const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
 const CONVERSATION_CONTEXTS_DIR = path.join(DATA_DIR, "conversation-contexts");
 const CURRENT_CONVERSATION_IMAGES_DIR = path.join(DATA_DIR, "conversation-images");
 const SAVED_SESSION_IMAGES_DIR = path.join(DATA_DIR, "saved-session-images");
-const SAVED_SESSION_STORAGE_VERSION = 4;
+const SAVED_SESSION_STORAGE_VERSION = 5;
 const CONVERSATION_CONTEXT_STORAGE_VERSION = 1;
 const LOCAL_CONVERSATION_CONTEXT_ID = "local";
 const AI_LOG_CONTENT_REFERENCE_MIN_CHARS = 120;
+const AI_LOG_CONTENT_CHUNK_CHARS = 4096;
+const conversationImageReferencesByContext = new Map();
+let conversationImageReferenceIndexInitialized = false;
 const NOVELAI_ALBUM_DIR = path.join(DATA_DIR, "novelai-album");
 const NOVELAI_ALBUM_INDEX_FILE = path.join(NOVELAI_ALBUM_DIR, "index.json");
 const BUNDLED_NOVELAI_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "novelai-defaults.json");
@@ -1986,7 +1989,9 @@ function loadState() {
       pendingOpeningBroadcast: Boolean(parsed.pendingOpeningBroadcast),
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
       discordPlayers: normalizeDiscordPlayerState(parsed.discordPlayers),
-      conversation: normalizeConversationForClient(cloneData(parsed.conversation, [])),
+      conversation: normalizeConversationForClient(cloneData(parsed.conversation, []), {
+        preserveInternalState: true
+      }),
       aiLogs: expandAiLogsFromStorage(parsed.aiLogs, parsed.aiLogContentStore)
         .map((entry) => normalizeAiLog(entry)),
       activeSavedSessionId: null,
@@ -2247,9 +2252,22 @@ function compactAiLogsForStorage(aiLogs = []) {
   const compactTextField = (target, field, content) => {
     const reference = contentReferences.get(content);
     delete target[`${field}Ref`];
+    delete target[`${field}ChunkRefs`];
     if (reference) {
       delete target[field];
       target[`${field}Ref`] = reference;
+      return;
+    }
+    if (content.length > AI_LOG_CONTENT_CHUNK_CHARS) {
+      const chunkReferences = [];
+      for (let index = 0; index < content.length; index += AI_LOG_CONTENT_CHUNK_CHARS) {
+        const chunk = content.slice(index, index + AI_LOG_CONTENT_CHUNK_CHARS);
+        const chunkReference = crypto.createHash("sha256").update(chunk).digest("base64url").slice(0, 32);
+        contentStore[chunkReference] = chunk;
+        chunkReferences.push(chunkReference);
+      }
+      delete target[field];
+      target[`${field}ChunkRefs`] = chunkReferences;
       return;
     }
     target[field] = content;
@@ -2289,7 +2307,15 @@ function expandAiLogsFromStorage(aiLogs = [], contentStore = {}) {
       return source[field];
     }
     const reference = safeText(source?.[`${field}Ref`]);
-    return typeof store[reference] === "string" ? store[reference] : "";
+    if (typeof store[reference] === "string") {
+      return store[reference];
+    }
+    const chunkReferences = Array.isArray(source?.[`${field}ChunkRefs`])
+      ? source[`${field}ChunkRefs`]
+      : [];
+    return chunkReferences.map((chunkReference) => (
+      typeof store[chunkReference] === "string" ? store[chunkReference] : ""
+    )).join("");
   };
   return (Array.isArray(aiLogs) ? aiLogs : []).map((entry) => {
     const source = entry && typeof entry === "object" ? entry : {};
@@ -2458,7 +2484,9 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.selectedOpeningDialogueId = safeText(source.selectedOpeningDialogueId);
   currentState.lastDiscordChannelId = safeText(source.lastDiscordChannelId);
   currentState.discordPlayers = normalizeDiscordPlayerState(source.discordPlayers);
-  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
+  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
+    preserveInternalState: true
+  });
   currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
     .map((entry) => normalizeAiLog(entry));
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
@@ -2508,7 +2536,9 @@ function applySavedConversationSnapshot(currentState, snapshot) {
       nowIso()
     ));
   }
-  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
+  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
+    preserveInternalState: true
+  });
   currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
     .map((entry) => normalizeAiLog(entry));
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
@@ -2648,7 +2678,9 @@ function applyConversationContextSnapshot(currentState, snapshot = {}, contextId
     ...currentState,
     conversation: source.conversation
   });
-  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []));
+  currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
+    preserveInternalState: true
+  });
   currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
     .map((entry) => normalizeAiLog(entry));
   currentState.lastDiscordChannelId = channelId;
@@ -2660,6 +2692,7 @@ function readConversationContextSnapshot(contextId = "") {
   if (!parsed || parsed.version !== CONVERSATION_CONTEXT_STORAGE_VERSION || !parsed.snapshot) {
     return null;
   }
+  updateConversationContextImageReferences(contextId, parsed.snapshot.conversation);
   return {
     metadata: normalizeConversationContextMetadata(parsed.metadata, contextId),
     snapshot: parsed.snapshot
@@ -2672,6 +2705,7 @@ function writeConversationContextSnapshot(currentState, contextId = "", metadata
   const compactedAiLogs = compactAiLogsForStorage(snapshot.aiLogs);
   snapshot.aiLogs = compactedAiLogs.logs;
   snapshot.aiLogContentStore = compactedAiLogs.contentStore;
+  updateConversationContextImageReferences(normalizedId, snapshot.conversation);
   writeJsonFile(getConversationContextFilePath(normalizedId), {
     version: CONVERSATION_CONTEXT_STORAGE_VERSION,
     contextId: normalizedId,
@@ -2803,6 +2837,7 @@ function deleteConversationContext(currentState, requestedContextId = "") {
     contextId
   );
   fs.rmSync(getConversationContextFilePath(contextId), { force: true });
+  conversationImageReferencesByContext.delete(contextId);
   saveState(currentState);
   return { ok: true, contextId, selectedContextId: currentState.selectedConversationContextId };
 }
@@ -2989,10 +3024,7 @@ function restoreSavedSessionImagesToCurrentConversation(snapshot = {}) {
   return runtimeSnapshot;
 }
 
-function cleanupCurrentConversationImages(conversation = []) {
-  if (!fs.existsSync(CURRENT_CONVERSATION_IMAGES_DIR)) {
-    return;
-  }
+function collectCurrentConversationImageReferences(conversation = []) {
   const referenced = new Set();
   rewriteConversationImageUrls(conversation, (imageUrl) => {
     const reference = parseConversationImageUrl(imageUrl);
@@ -3001,6 +3033,45 @@ function cleanupCurrentConversationImages(conversation = []) {
     }
     return imageUrl;
   });
+  return referenced;
+}
+
+function updateConversationContextImageReferences(contextId = "", conversation = []) {
+  const normalizedId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
+  conversationImageReferencesByContext.set(
+    normalizedId,
+    collectCurrentConversationImageReferences(conversation)
+  );
+}
+
+function ensureConversationImageReferenceIndex() {
+  if (conversationImageReferenceIndexInitialized) {
+    return;
+  }
+  conversationImageReferenceIndexInitialized = true;
+  if (!fs.existsSync(CONVERSATION_CONTEXTS_DIR)) {
+    return;
+  }
+  try {
+    fs.readdirSync(CONVERSATION_CONTEXTS_DIR, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isFile() || !/^[a-zA-Z0-9_-]+\.json$/u.test(entry.name)) {
+        return;
+      }
+      const parsed = readJsonFile(path.join(CONVERSATION_CONTEXTS_DIR, entry.name));
+      const contextId = normalizeConversationContextId(parsed?.contextId);
+      if (contextId && Array.isArray(parsed?.snapshot?.conversation)) {
+        updateConversationContextImageReferences(contextId, parsed.snapshot.conversation);
+      }
+    });
+  } catch (error) {
+    console.warn("建立對話圖片引用索引失敗：" + (safeText(error?.message) || "未知錯誤"));
+  }
+}
+
+function cleanupCurrentConversationImagesByReferences(referenced = new Set()) {
+  if (!fs.existsSync(CURRENT_CONVERSATION_IMAGES_DIR)) {
+    return;
+  }
   try {
     fs.readdirSync(CURRENT_CONVERSATION_IMAGES_DIR, { withFileTypes: true }).forEach((entry) => {
       if (entry.isFile() && normalizeConversationImageFileName(entry.name) && !referenced.has(entry.name)) {
@@ -3013,24 +3084,18 @@ function cleanupCurrentConversationImages(conversation = []) {
 }
 
 function cleanupCurrentConversationImagesAcrossContexts(currentState) {
-  const conversations = [Array.isArray(currentState?.conversation) ? currentState.conversation : []];
-  if (fs.existsSync(CONVERSATION_CONTEXTS_DIR)) {
-    try {
-      fs.readdirSync(CONVERSATION_CONTEXTS_DIR, { withFileTypes: true }).forEach((entry) => {
-        if (!entry.isFile() || !entry.name.endsWith(".json")) {
-          return;
-        }
-        const parsed = readJsonFile(path.join(CONVERSATION_CONTEXTS_DIR, entry.name));
-        if (Array.isArray(parsed?.snapshot?.conversation)) {
-          conversations.push(parsed.snapshot.conversation);
-        }
-      });
-    } catch (error) {
-      console.warn("讀取其他對話故事的圖片引用失敗：" + (safeText(error?.message) || "未知錯誤"));
-      return;
+  ensureConversationImageReferenceIndex();
+  const currentContextId = normalizeConversationContextId(
+    activeConversationExecutionContextId || currentState?.selectedConversationContextId
+  ) || LOCAL_CONVERSATION_CONTEXT_ID;
+  updateConversationContextImageReferences(currentContextId, currentState?.conversation);
+  const referenced = new Set();
+  conversationImageReferencesByContext.forEach((fileNames) => {
+    for (const fileName of fileNames) {
+      referenced.add(fileName);
     }
-  }
-  cleanupCurrentConversationImages(conversations.flat());
+  });
+  cleanupCurrentConversationImagesByReferences(referenced);
 }
 
 function deleteSavedSessionImages(sessionId = "") {
@@ -3089,6 +3154,36 @@ function writeSavedSessionExternalData(sessionOrId, snapshot = {}) {
     updatedAt: nowIso()
   };
   writeJsonFile(getSavedSessionDataFilePath(sessionId), payload);
+}
+
+function migrateSavedSessionStorageFiles() {
+  ensureSavedSessionsDir();
+  let migratedCount = 0;
+  try {
+    fs.readdirSync(SAVED_SESSIONS_DIR, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isFile() || !/^[a-zA-Z0-9_-]+\.json$/u.test(entry.name)) {
+        return;
+      }
+      const filePath = path.join(SAVED_SESSIONS_DIR, entry.name);
+      const parsed = readJsonFile(filePath);
+      if (!parsed || (Number(parsed.version) >= SAVED_SESSION_STORAGE_VERSION && parsed.snapshot)) {
+        return;
+      }
+      const snapshot = cloneData(
+        parsed.snapshot && typeof parsed.snapshot === "object" ? parsed.snapshot : parsed,
+        {}
+      );
+      snapshot.aiLogs = expandAiLogsFromStorage(snapshot.aiLogs, snapshot.aiLogContentStore)
+        .map((item) => normalizeAiLog(item));
+      delete snapshot.aiLogContentStore;
+      const sessionId = entry.name.slice(0, -".json".length);
+      writeSavedSessionExternalData(sessionId, snapshot);
+      migratedCount += 1;
+    });
+  } catch (error) {
+    console.warn(`對話存檔分塊遷移失敗：${safeText(error?.message) || "未知錯誤"}`);
+  }
+  return migratedCount;
 }
 
 function materializeSavedSessionSnapshot(session) {
@@ -3180,16 +3275,44 @@ function buildSavedSessionSummary(session) {
   };
 }
 
-function normalizeConversationForClient(conversation = []) {
+function normalizeConversationForClient(conversation = [], options = {}) {
+  const preserveInternalState = options.preserveInternalState === true;
   return (Array.isArray(conversation) ? conversation : []).map((message) => {
-    if (message?.role !== "assistant") {
-      return message;
+    const normalizedMessage = message?.role === "assistant"
+      ? {
+          ...message,
+          content: finalizeAssistantOutputContent(message.content).content
+        }
+      : message;
+    if (preserveInternalState || !normalizedMessage || typeof normalizedMessage !== "object") {
+      return normalizedMessage;
     }
-    const finalized = finalizeAssistantOutputContent(message.content);
-    return {
-      ...message,
-      content: finalized.content
-    };
+    const {
+      stateBeforeTurnSnapshot: _stateBeforeTurnSnapshot,
+      stateAfterTurnSnapshot: _stateAfterTurnSnapshot,
+      modelContent: _modelContent,
+      baseModelContent: _baseModelContent,
+      basePrompt: _basePrompt,
+      triggeredLorebooks: _triggeredLorebooks,
+      discordReplyMessageIds: _discordReplyMessageIds,
+      discordMessageId: _discordMessageId,
+      ...clientMessage
+    } = normalizedMessage;
+    if (clientMessage.extra && typeof clientMessage.extra === "object") {
+      const {
+        stateBeforeTurnSnapshot: _extraStateBeforeTurnSnapshot,
+        stateAfterTurnSnapshot: _extraStateAfterTurnSnapshot,
+        modelContent: _extraModelContent,
+        baseModelContent: _extraBaseModelContent,
+        basePrompt: _extraBasePrompt,
+        triggeredLorebooks: _extraTriggeredLorebooks,
+        discordReplyMessageIds: _extraDiscordReplyMessageIds,
+        discordMessageId: _extraDiscordMessageId,
+        ...clientExtra
+      } = clientMessage.extra;
+      clientMessage.extra = clientExtra;
+    }
+    return clientMessage;
   });
 }
 
@@ -11103,12 +11226,14 @@ function statePayload(currentState) {
   };
 }
 
+const savedSessionStorageFileMigrationCount = migrateSavedSessionStorageFiles();
 let state = loadState();
 const trailingFailedConversationTurnsSanitized = markTrailingFailedConversationTurnsInvalid(state);
 cleanupCurrentConversationImagesAcrossContexts(state);
 const imageGenerationCompressionStateSanitized = sanitizeImageGenerationCompressionState(state);
 if (
   savedSessionStorageMigrated ||
+  savedSessionStorageFileMigrationCount > 0 ||
   conversationContextStorageMigrated ||
   imageGenerationCompressionStateSanitized ||
   trailingFailedConversationTurnsSanitized > 0
@@ -11288,9 +11413,6 @@ function appendConversationMessage(entry) {
     }
   }
   state.conversation.push(entry);
-  if (state.conversation.length > 500) {
-    state.conversation = state.conversation.slice(-500);
-  }
 }
 
 function rollbackFailedConversationTurn(currentState, {
@@ -13661,11 +13783,27 @@ async function sendInteractionPublicLongReply(interaction, text, options = {}) {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
+    const channel = await getInteractionFallbackChannel(interaction);
     for (const chunk of chunks) {
-      const sent = await interaction.followUp({
-        content: chunk || " ",
-        allowedMentions: { parse: [] }
-      });
+      let sent = null;
+      if (channel) {
+        try {
+          sent = await channel.send({
+            content: chunk || " ",
+            allowedMentions: { parse: [] }
+          });
+        } catch (error) {
+          if (!isUnknownInteractionError(error)) {
+            console.warn(`Discord 頻道正文發送失敗，改用 Interaction 回覆：${error.message || error}`);
+          }
+        }
+      }
+      if (!sent) {
+        sent = await interaction.followUp({
+          content: chunk || " ",
+          allowedMentions: { parse: [] }
+        });
+      }
       if (sent) {
         sentMessages.push(sent);
       }

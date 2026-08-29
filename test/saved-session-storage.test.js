@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import test from "node:test";
 
@@ -16,6 +17,14 @@ test("saved-session summaries use metadata without opening full snapshots", () =
   const summarySource = functionSource("buildSavedSessionSummary", "normalizeConversationForClient");
   assert.doesNotMatch(summarySource, /readSavedSessionExternalData/);
   assert.match(summarySource, /session\.messageCount/);
+});
+
+test("legacy and detached saved-session files migrate without deletion", () => {
+  const migrationSource = functionSource("migrateSavedSessionStorageFiles", "materializeSavedSessionSnapshot");
+  assert.match(migrationSource, /fs\.readdirSync\(SAVED_SESSIONS_DIR/u);
+  assert.match(migrationSource, /expandAiLogsFromStorage/u);
+  assert.match(migrationSource, /writeSavedSessionExternalData/u);
+  assert.doesNotMatch(migrationSource, /unlinkSync|rmSync/u);
 });
 
 test("app state stores cards separately and saved sessions contain conversation state only", () => {
@@ -106,8 +115,48 @@ test("AI logs use shared content references in storage and expand for display", 
   const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
   assert.match(contextWriterSource, /compactAiLogsForStorage\(snapshot\.aiLogs\)/);
   assert.match(statePayloadSource, /aiLogContentStore: compactedAiLogs\.contentStore/);
+  assert.match(serverSource, /AI_LOG_CONTENT_CHUNK_CHARS/u);
+  assert.match(serverSource, /ChunkRefs/u);
   assert.match(webSource, /resolveAiLogStoredText/);
   assert.match(webSource, /wrapper\.addEventListener\("toggle"/);
+});
+
+test("long AI log prompts round trip through chunk deduplication", () => {
+  const fieldsSource = functionSource("getAiLogTextFields", "compactAiLogsForStorage");
+  const compactSource = functionSource("compactAiLogsForStorage", "expandAiLogsFromStorage");
+  const expandSource = functionSource("expandAiLogsFromStorage", "captureRuntimeSnapshot");
+  const createStorageHelpers = new Function(
+    "crypto",
+    `
+      const AI_LOG_CONTENT_REFERENCE_MIN_CHARS = 120;
+      const AI_LOG_CONTENT_CHUNK_CHARS = 4096;
+      const safeText = (value) => typeof value === "string" ? value.trim() : "";
+      ${fieldsSource}
+      ${compactSource}
+      ${expandSource}
+      return { compactAiLogsForStorage, expandAiLogsFromStorage };
+    `
+  );
+  const { compactAiLogsForStorage, expandAiLogsFromStorage } = createStorageHelpers(crypto);
+  const sharedPrefix = "共同上下文".repeat(2200);
+  const logs = Array.from({ length: 20 }, (_, index) => ({
+    id: `log-${index}`,
+    requestMessages: [{ role: "user", content: `${sharedPrefix}\n第 ${index} 次輸入` }],
+    responseText: `回覆 ${index}`,
+    debugReasoningContent: ""
+  }));
+
+  const compacted = compactAiLogsForStorage(logs);
+  const expanded = expandAiLogsFromStorage(compacted.logs, compacted.contentStore);
+  const rawBytes = Buffer.byteLength(JSON.stringify(logs));
+  const compactedBytes = Buffer.byteLength(JSON.stringify(compacted));
+
+  assert.ok(compacted.logs[0].requestMessages[0].contentChunkRefs.length > 1);
+  assert.ok(compactedBytes < rawBytes * 0.4, `${compactedBytes} should be much smaller than ${rawBytes}`);
+  assert.deepEqual(
+    expanded.map((entry) => entry.requestMessages[0].content),
+    logs.map((entry) => entry.requestMessages[0].content)
+  );
 });
 
 test("100 cards and 100 saves keep app-state session metadata small", () => {
@@ -123,7 +172,7 @@ test("100 cards and 100 saves keep app-state session metadata small", () => {
     snapshot: { roleCards, conversation }
   }));
   const metadataSessions = legacySessions.map((session, index) => ({
-    storageVersion: 4,
+    storageVersion: 5,
     id: session.id,
     name: session.name,
     roleCardId: `card-${index + 1}`,

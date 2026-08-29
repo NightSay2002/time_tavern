@@ -70,6 +70,7 @@ const el = {
   chatHeaderTitle: document.getElementById("chatHeaderTitle"),
   chatHeaderSubtitle: document.getElementById("chatHeaderSubtitle"),
   conversationContextSelect: document.getElementById("conversationContextSelect"),
+  chatHistoryEdgeBtn: document.getElementById("chatHistoryEdgeBtn"),
   deleteConversationContextBtn: document.getElementById("deleteConversationContextBtn"),
   aiLogs: document.getElementById("aiLogs"),
   chatForm: document.getElementById("chatForm"),
@@ -128,6 +129,7 @@ const el = {
   sessionPreviewMeta: document.getElementById("sessionPreviewMeta"),
   sessionPreviewMessages: document.getElementById("sessionPreviewMessages"),
   sessionPreviewActions: document.getElementById("sessionPreviewActions"),
+  sessionPreviewHistoryEdgeBtn: document.getElementById("sessionPreviewHistoryEdgeBtn"),
   loadSessionPreviewBtn: document.getElementById("loadSessionPreviewBtn"),
   deleteSessionPreviewBtn: document.getElementById("deleteSessionPreviewBtn"),
   sessionPickerPrevBtn: document.getElementById("sessionPickerPrevBtn"),
@@ -256,6 +258,12 @@ let roleCardDialogReturnToPicker = false;
 let sessionPickerPage = 1;
 let selectedSessionPreviewId = "";
 let selectedSessionPreview = null;
+let sessionPreviewRenderStart = 0;
+let conversationRenderStart = 0;
+let conversationHistoryLoading = false;
+let sessionPreviewHistoryLoading = false;
+let conversationHistoryLoadBlockedUntil = 0;
+let sessionPreviewHistoryLoadBlockedUntil = 0;
 let timeTrackingStartPointDraft = null;
 let roleCardCoverImageReadTask = null;
 let coverCropState = null;
@@ -280,6 +288,8 @@ const DEFAULT_ASSISTANT_CARD_NAME = "寫卡助手";
 const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色群組與無角色模式設定包。";
 const ROLE_CARD_PICKER_PAGE_SIZE = 9;
 const SESSION_PICKER_PAGE_SIZE = 6;
+const CONVERSATION_RENDER_WINDOW_SIZE = 20;
+const CONVERSATION_RENDER_SHIFT_SIZE = 10;
 const BUILTIN_PROMPT_MODES = ["single", "multi", "no_role"];
 const DEFAULT_ROLE_CARD_MODE = "multi";
 const STANDARD_COMPRESSION_PROFILE_ID = "standard";
@@ -4381,6 +4391,7 @@ function renderSessionPreviewPlaceholder(message = "尚未選擇存檔。") {
   if (el.sessionPreviewActions) {
     el.sessionPreviewActions.hidden = true;
   }
+  updateHistoryEdgeButton(el.sessionPreviewHistoryEdgeBtn, 0, 0);
   if (el.sessionPreviewMessages) {
     const empty = document.createElement("p");
     empty.className = "form-hint";
@@ -4466,10 +4477,22 @@ function createSessionBook(session, index) {
   return item;
 }
 
-function renderSessionPreview(session = {}) {
+function renderSessionPreview(session = {}, options = {}) {
   const conversation = Array.isArray(session.conversation) ? session.conversation : [];
+  const sameSession = selectedSessionPreview?.id === (session.id || "");
   selectedSessionPreviewId = session.id || "";
   selectedSessionPreview = session;
+  const latestStart = Math.max(0, conversation.length - CONVERSATION_RENDER_WINDOW_SIZE);
+  sessionPreviewRenderStart = Number.isInteger(options.startIndex)
+    ? Math.min(Math.max(0, options.startIndex), latestStart)
+    : sameSession
+      ? Math.min(sessionPreviewRenderStart, latestStart)
+      : 0;
+  updateHistoryEdgeButton(
+    el.sessionPreviewHistoryEdgeBtn,
+    sessionPreviewRenderStart,
+    conversation.length
+  );
   if (el.sessionPreviewTitle) {
     el.sessionPreviewTitle.dataset.uiLanguageSkip = "true";
     el.sessionPreviewTitle.textContent = session.name || "存檔預覽";
@@ -4502,14 +4525,18 @@ function renderSessionPreview(session = {}) {
   }
 
   const fragment = document.createDocumentFragment();
-  conversation.forEach((message, index) => {
+  conversation
+    .slice(sessionPreviewRenderStart, sessionPreviewRenderStart + CONVERSATION_RENDER_WINDOW_SIZE)
+    .forEach((message, index) => {
+    const actualIndex = sessionPreviewRenderStart + index;
     const item = document.createElement("article");
     item.className = `session-preview-message ${message.role || "unknown"}`;
+    item.dataset.messageNumber = String(actualIndex + 1);
 
     const header = document.createElement("div");
     header.className = "session-preview-message-header";
     const author = document.createElement("strong");
-    author.append(`#${index + 1} `);
+    author.append(`#${actualIndex + 1} `);
     if (message.role === "assistant") {
       const authorName = document.createElement("span");
       authorName.dataset.uiLanguageSkip = "true";
@@ -4551,13 +4578,105 @@ function renderSessionPreview(session = {}) {
     item.append(header, body);
     fragment.appendChild(item);
   });
+  sessionPreviewHistoryLoadBlockedUntil = Date.now() + 200;
   el.sessionPreviewMessages.replaceChildren(fragment);
   renderSessionPicker(appState);
-  if (isMobileLayout()) {
+  if (isMobileLayout() && !options.preserveScroll) {
     window.requestAnimationFrame(() => {
       el.sessionPreviewPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
+}
+
+function captureHistoryScrollAnchor(container, selector, edge = "start") {
+  const items = Array.from(container?.querySelectorAll(selector) || []);
+  const anchor = edge === "end" ? items.at(-1) : items[0];
+  if (!anchor) {
+    return null;
+  }
+  return {
+    messageNumber: anchor.dataset.messageNumber || "",
+    offsetTop: anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+  };
+}
+
+function updateHistoryEdgeButton(button, renderStart, totalMessages) {
+  if (!button) {
+    return;
+  }
+  const latestStart = Math.max(0, totalMessages - CONVERSATION_RENDER_WINDOW_SIZE);
+  const atEarliest = renderStart <= 0;
+  const canSwitchEdge = latestStart > 0;
+  const label = atEarliest ? "跳回現在" : "跳到最早訊息";
+  button.disabled = !canSwitchEdge;
+  button.textContent = atEarliest ? "⇊" : "⇈";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
+function restoreHistoryScrollAnchor(container, selector, anchor) {
+  if (!container || !anchor?.messageNumber) {
+    return;
+  }
+  const target = container.querySelector(`${selector}[data-message-number="${anchor.messageNumber}"]`);
+  if (!target) {
+    return;
+  }
+  const nextOffsetTop = target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+  container.scrollTop += nextOffsetTop - anchor.offsetTop;
+}
+
+function shiftSessionPreviewWindow(direction) {
+  const conversation = Array.isArray(selectedSessionPreview?.conversation)
+    ? selectedSessionPreview.conversation
+    : [];
+  const maxStart = Math.max(0, conversation.length - CONVERSATION_RENDER_WINDOW_SIZE);
+  const nextStart = Math.min(
+    maxStart,
+    Math.max(0, sessionPreviewRenderStart + direction * CONVERSATION_RENDER_SHIFT_SIZE)
+  );
+  if (
+    sessionPreviewHistoryLoading
+    || nextStart === sessionPreviewRenderStart
+    || !selectedSessionPreview
+    || !el.sessionPreviewMessages
+  ) {
+    return;
+  }
+  sessionPreviewHistoryLoading = true;
+  const anchor = captureHistoryScrollAnchor(
+    el.sessionPreviewMessages,
+    ".session-preview-message",
+    direction < 0 ? "start" : "end"
+  );
+  renderSessionPreview(selectedSessionPreview, {
+    startIndex: nextStart,
+    preserveScroll: true
+  });
+  window.requestAnimationFrame(() => {
+    restoreHistoryScrollAnchor(el.sessionPreviewMessages, ".session-preview-message", anchor);
+    sessionPreviewHistoryLoading = false;
+  });
+}
+
+function jumpSessionPreviewHistoryEdge() {
+  if (!selectedSessionPreview || !el.sessionPreviewMessages) {
+    return;
+  }
+  const conversation = Array.isArray(selectedSessionPreview.conversation)
+    ? selectedSessionPreview.conversation
+    : [];
+  const latestStart = Math.max(0, conversation.length - CONVERSATION_RENDER_WINDOW_SIZE);
+  const jumpToLatest = sessionPreviewRenderStart <= 0 && latestStart > 0;
+  renderSessionPreview(selectedSessionPreview, {
+    startIndex: jumpToLatest ? latestStart : 0,
+    preserveScroll: true
+  });
+  window.requestAnimationFrame(() => {
+    el.sessionPreviewMessages.scrollTop = jumpToLatest
+      ? el.sessionPreviewMessages.scrollHeight
+      : 0;
+  });
 }
 
 async function previewSession(sessionId = "") {
@@ -5053,13 +5172,30 @@ function renderMessages(state, options = {}) {
     empty.className = "discord-empty";
     empty.textContent = "尚無對話。";
     el.messages.replaceChildren(empty);
+    updateHistoryEdgeButton(el.chatHistoryEdgeBtn, 0, 0);
     realignMobileChat();
     return;
   }
 
+  const defaultStart = Math.max(0, conversation.length - CONVERSATION_RENDER_WINDOW_SIZE);
+  conversationRenderStart = Number.isInteger(options.startIndex)
+    ? Math.min(Math.max(0, options.startIndex), defaultStart)
+    : defaultStart;
+  const focusIndex = Math.floor(Number(options.focusMessageNumber || 0)) - 1;
+  if (focusIndex >= 0 && focusIndex < conversationRenderStart) {
+    conversationRenderStart = Math.min(
+      defaultStart,
+      Math.max(0, focusIndex - Math.floor(CONVERSATION_RENDER_WINDOW_SIZE / 2))
+    );
+  }
+  updateHistoryEdgeButton(el.chatHistoryEdgeBtn, conversationRenderStart, conversation.length);
+
   const fragment = document.createDocumentFragment();
   let lastDivider = "";
-  conversation.forEach((message, index) => {
+  conversation
+    .slice(conversationRenderStart, conversationRenderStart + CONVERSATION_RENDER_WINDOW_SIZE)
+    .forEach((message, index) => {
+    const actualIndex = conversationRenderStart + index;
     const dividerLabel = formatDateDivider(message.createdAt);
     if (dividerLabel && dividerLabel !== lastDivider) {
       const divider = document.createElement("div");
@@ -5075,7 +5211,7 @@ function renderMessages(state, options = {}) {
     if (isInvalidConversationMessage(message)) {
       wrapper.classList.add("invalid-conversation");
     }
-    wrapper.dataset.messageNumber = String(index + 1);
+    wrapper.dataset.messageNumber = String(actualIndex + 1);
     if (message.id) {
       wrapper.dataset.messageId = message.id;
     }
@@ -5251,11 +5387,61 @@ function renderMessages(state, options = {}) {
     fragment.appendChild(wrapper);
   });
 
+  conversationHistoryLoadBlockedUntil = Date.now() + 200;
   el.messages.replaceChildren(fragment);
   if (options.focusMessageNumber && scrollMessageNumberIntoView(options.focusMessageNumber)) {
     return;
   }
   realignMobileChat({ scroll: options.scroll !== false });
+}
+
+function shiftConversationRenderWindow(direction) {
+  const conversation = Array.isArray(appState?.conversation) ? appState.conversation : [];
+  const maxStart = Math.max(0, conversation.length - CONVERSATION_RENDER_WINDOW_SIZE);
+  const nextStart = Math.min(
+    maxStart,
+    Math.max(0, conversationRenderStart + direction * CONVERSATION_RENDER_SHIFT_SIZE)
+  );
+  if (
+    conversationHistoryLoading
+    || nextStart === conversationRenderStart
+    || !appState
+    || !el.messages
+  ) {
+    return;
+  }
+  conversationHistoryLoading = true;
+  const anchor = captureHistoryScrollAnchor(
+    el.messages,
+    ".discord-message",
+    direction < 0 ? "start" : "end"
+  );
+  renderMessages(appState, {
+    startIndex: nextStart,
+    scroll: false
+  });
+  window.requestAnimationFrame(() => {
+    restoreHistoryScrollAnchor(el.messages, ".discord-message", anchor);
+    conversationHistoryLoading = false;
+  });
+}
+
+function jumpConversationHistoryEdge() {
+  if (!appState?.conversation?.length || !el.messages) {
+    return;
+  }
+  const latestStart = Math.max(
+    0,
+    appState.conversation.length - CONVERSATION_RENDER_WINDOW_SIZE
+  );
+  const jumpToLatest = conversationRenderStart <= 0 && latestStart > 0;
+  renderMessages(appState, {
+    startIndex: jumpToLatest ? latestStart : 0,
+    scroll: false
+  });
+  window.requestAnimationFrame(() => {
+    el.messages.scrollTop = jumpToLatest ? el.messages.scrollHeight : 0;
+  });
 }
 
 function formatAiLogPurpose(purpose) {
@@ -5293,7 +5479,15 @@ function resolveAiLogStoredText(source, field, contentStore = {}) {
     return source[field];
   }
   const reference = String(source?.[`${field}Ref`] || "").trim();
-  return typeof contentStore?.[reference] === "string" ? contentStore[reference] : "";
+  if (typeof contentStore?.[reference] === "string") {
+    return contentStore[reference];
+  }
+  const chunkReferences = Array.isArray(source?.[`${field}ChunkRefs`])
+    ? source[`${field}ChunkRefs`]
+    : [];
+  return chunkReferences.map((chunkReference) => (
+    typeof contentStore?.[chunkReference] === "string" ? contentStore[chunkReference] : ""
+  )).join("");
 }
 
 function formatAiLogMessages(messages, contentStore = {}) {
@@ -8481,6 +8675,39 @@ async function removeRoleCard(card) {
 }
 
 function bindEvents() {
+  if (el.chatHistoryEdgeBtn) {
+    el.chatHistoryEdgeBtn.addEventListener("click", jumpConversationHistoryEdge);
+  }
+  if (el.sessionPreviewHistoryEdgeBtn) {
+    el.sessionPreviewHistoryEdgeBtn.addEventListener("click", jumpSessionPreviewHistoryEdge);
+  }
+  if (el.messages) {
+    el.messages.addEventListener("scroll", () => {
+      if (Date.now() < conversationHistoryLoadBlockedUntil) {
+        return;
+      }
+      if (el.messages.scrollTop <= 80) {
+        shiftConversationRenderWindow(-1);
+      } else if (el.messages.scrollTop + el.messages.clientHeight >= el.messages.scrollHeight - 80) {
+        shiftConversationRenderWindow(1);
+      }
+    }, { passive: true });
+  }
+  if (el.sessionPreviewMessages) {
+    el.sessionPreviewMessages.addEventListener("scroll", () => {
+      if (Date.now() < sessionPreviewHistoryLoadBlockedUntil) {
+        return;
+      }
+      if (el.sessionPreviewMessages.scrollTop <= 80) {
+        shiftSessionPreviewWindow(-1);
+      } else if (
+        el.sessionPreviewMessages.scrollTop + el.sessionPreviewMessages.clientHeight
+        >= el.sessionPreviewMessages.scrollHeight - 80
+      ) {
+        shiftSessionPreviewWindow(1);
+      }
+    }, { passive: true });
+  }
   if (el.conversationContextSelect) {
     el.conversationContextSelect.addEventListener("change", () => {
       void switchConversationContext(el.conversationContextSelect.value);

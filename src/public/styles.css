@@ -1291,6 +1291,11 @@ dialog.session-picker-dialog {
   padding-inline: 10px;
 }
 
+.session-preview-actions .history-jump-button {
+  min-width: 40px;
+  padding-inline: 8px;
+}
+
 .session-preview-messages {
   min-height: 0;
   display: grid;
@@ -1494,6 +1499,11 @@ dialog.session-picker-dialog {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.history-jump-button {
+  font-size: 20px;
+  line-height: 1;
 }
 
 .sr-only {

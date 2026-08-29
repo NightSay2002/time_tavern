@@ -11,6 +11,7 @@ test("Discord generation commands defer privately and publish only successful ou
   );
   assert.match(serverSource, /const failureText = getFailedConversationReplyText\(result\);[\s\S]*?safeSendInteractionError/u);
   assert.match(serverSource, /sendInteractionPublicLongReply\(interaction, replyText\)/u);
+  assert.match(serverSource, /sent = await channel\.send\(\{/u);
 });
 
 test("Discord normal-message failures stay out of public guild channels", () => {
