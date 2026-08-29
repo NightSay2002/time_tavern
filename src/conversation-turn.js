@@ -98,11 +98,12 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   const captureCheckpoint = requireDependency(deps, "captureCheckpoint");
 
   let userMessage = existingUserMessage;
+  let stateBeforeTurnSnapshot = null;
   if (!userMessage) {
     if (!storedUserContent || !modelUserContent) {
       throw new Error(input.emptyInputMessage || "input cannot be empty");
     }
-    const stateBeforeTurnSnapshot = captureCheckpoint(currentState);
+    stateBeforeTurnSnapshot = captureCheckpoint(currentState);
     userMessage = requireDependency(deps, "createMessageRecord")({
       role: "user",
       content: storedUserContent,
@@ -133,18 +134,43 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   const runtimeUserName = requireDependency(deps, "resolveRuntimeUserName")(currentState, turnExtra, input);
   deps.attachTriggeredLorebooksToUserMessage?.(userMessage, currentState, runtimeUserName);
 
-  const generation = await requireDependency(deps, "generateAssistant")({
-    state: currentState,
-    runtimeUserName,
-    userMessage,
-    storedUserContent,
-    input,
-    turnExtra
-  });
+  let generation;
+  try {
+    generation = await requireDependency(deps, "generateAssistant")({
+      state: currentState,
+      runtimeUserName,
+      userMessage,
+      storedUserContent,
+      input,
+      turnExtra
+    });
+  } catch (error) {
+    if (typeof deps.handleGenerationError !== "function") {
+      throw error;
+    }
+    generation = await deps.handleGenerationError(error, {
+      state: currentState,
+      runtimeUserName,
+      userMessage,
+      storedUserContent,
+      input,
+      turnExtra
+    });
+  }
   let modelProcessingResult = generation?.modelProcessingResult || deps.getLastModelProcessingResult?.(currentState) || {};
   let assistantText = safeText(generation?.content);
   let fullReasoning = safeText(generation?.reasoningContent);
   const excludeAssistantFromModel = Boolean(generation?.excludeFromModel);
+
+  if (excludeAssistantFromModel) {
+    deps.rollbackFailedTurn?.(currentState, {
+      userMessage,
+      stateBeforeTurnSnapshot,
+      pendingAssistantFeedback
+    });
+  } else {
+    deps.clearInvalidConversationMessages?.(currentState);
+  }
 
   if (generation?.suppressAssistantMessage) {
     requireDependency(deps, "saveState")(currentState);
@@ -201,7 +227,9 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
       assistantExtra: {
         ...(generation?.assistantExtra || {}),
         ...(input.assistantExtra || {}),
-        ...(excludeAssistantFromModel ? { excludeFromModel: true, systemError: true } : {})
+        ...(excludeAssistantFromModel
+          ? { excludeFromModel: true, systemError: true, invalidConversation: true }
+          : {})
       },
       reasoningContent: fullReasoning,
       compressionNotice: generation?.compressionNotice,
@@ -222,6 +250,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   return {
     userMessage,
     assistantMessage,
-    modelProcessingResult
+    modelProcessingResult,
+    failed: excludeAssistantFromModel
   };
 }

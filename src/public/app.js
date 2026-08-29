@@ -4877,6 +4877,10 @@ function isModelInvisibleMessage(message = {}) {
   );
 }
 
+function isInvalidConversationMessage(message = {}) {
+  return Boolean(message?.invalidConversation || message?.extra?.invalidConversation);
+}
+
 function openEditAssistantMessage(messageId = "") {
   if (!messageId) {
     return;
@@ -5068,6 +5072,9 @@ function renderMessages(state, options = {}) {
     const author = getMessageAuthorInfo(message, state);
     const wrapper = document.createElement("article");
     wrapper.className = `message discord-message ${message.role}`;
+    if (isInvalidConversationMessage(message)) {
+      wrapper.classList.add("invalid-conversation");
+    }
     wrapper.dataset.messageNumber = String(index + 1);
     if (message.id) {
       wrapper.dataset.messageId = message.id;
@@ -5092,6 +5099,13 @@ function renderMessages(state, options = {}) {
       badge.className = "discord-message-badge";
       badge.textContent = author.badge;
       header.appendChild(badge);
+    }
+
+    if (isInvalidConversationMessage(message)) {
+      const invalidBadge = document.createElement("span");
+      invalidBadge.className = "discord-message-invalid-badge";
+      invalidBadge.textContent = "無效對話";
+      header.appendChild(invalidBadge);
     }
 
     const timestamp = document.createElement("span");
@@ -5212,7 +5226,7 @@ function renderMessages(state, options = {}) {
     });
     menuList.appendChild(copyBtn);
 
-    if (message.role === "assistant") {
+    if (message.role === "assistant" && !isInvalidConversationMessage(message)) {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.textContent = "編輯訊息";
@@ -5221,7 +5235,7 @@ function renderMessages(state, options = {}) {
         openEditAssistantMessage(message.id);
       });
       menuList.appendChild(editBtn);
-    } else if (message.role === "user") {
+    } else if (message.role === "user" && !isInvalidConversationMessage(message)) {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.textContent = "編輯訊息";

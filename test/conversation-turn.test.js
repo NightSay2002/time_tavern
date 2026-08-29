@@ -210,7 +210,23 @@ test("saves an image-only turn without creating or post-processing an assistant 
   ].includes(event.type)), false);
 });
 
-test("stores a model failure for display without post-processing it as dialogue", async () => {
+test("a successful turn clears older invalid conversation records", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.clearInvalidConversationMessages = () => events.push({ type: "clear-invalid" });
+
+  const result = await runConversationTurnWorkflow(deps, {
+    state,
+    content: "重新發送",
+    source: "web"
+  });
+
+  assert.equal(result.failed, false);
+  assert.equal(events.filter((event) => event.type === "clear-invalid").length, 1);
+});
+
+test("rolls back a failed user turn while keeping the error available for display", async () => {
   const events = [];
   const state = createPendingState();
   const deps = createWorkflowDeps(events);
@@ -220,6 +236,15 @@ test("stores a model failure for display without post-processing it as dialogue"
     assistantExtra: { excludeFromModel: true, systemError: true },
     modelProcessingResult: { skipReasoner: false }
   });
+  deps.rollbackFailedTurn = (_state, { userMessage, stateBeforeTurnSnapshot }) => {
+    userMessage.excludeFromModel = true;
+    userMessage.invalidConversation = true;
+    events.push({
+      type: "rollback-failed-turn",
+      content: userMessage.content,
+      period: stateBeforeTurnSnapshot.timeTracking.currentPeriod
+    });
+  };
   deps.shouldEnsureMinimumAssistantLength = ({ generation }) => {
     events.push({ type: "minimum-check", excluded: generation.excludeFromModel });
     return !generation.excludeFromModel;
@@ -245,10 +270,51 @@ test("stores a model failure for display without post-processing it as dialogue"
 
   assert.equal(result.assistantMessage.excludeFromModel, true);
   assert.equal(result.assistantMessage.systemError, true);
+  assert.equal(result.assistantMessage.invalidConversation, true);
+  assert.equal(result.userMessage.invalidConversation, true);
+  assert.equal(result.userMessage.excludeFromModel, true);
+  assert.equal(result.failed, true);
   assert.match(result.assistantMessage.content, /模型呼叫失敗/u);
+  assert.deepEqual(events.find((event) => event.type === "rollback-failed-turn"), {
+    type: "rollback-failed-turn",
+    content: "使用者內容",
+    period: "morning"
+  });
   assert.deepEqual(events.find((event) => event.type === "minimum-check"), {
     type: "minimum-check",
     excluded: true
   });
   assert.equal(events.some((event) => ["expand", "update-assistant-time", "after-assistant"].includes(event.type)), false);
+});
+
+test("a thrown streaming failure uses the same invalid-turn rollback", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.generateAssistant = () => {
+    throw new Error("stream failed");
+  };
+  deps.handleGenerationError = (error) => ({
+    content: `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`,
+    excludeFromModel: true,
+    modelProcessingResult: { skipReasoner: false }
+  });
+  deps.rollbackFailedTurn = (_state, { userMessage }) => {
+    userMessage.excludeFromModel = true;
+    userMessage.invalidConversation = true;
+    events.push({ type: "rollback-stream-failure" });
+  };
+  deps.shouldEnsureMinimumAssistantLength = () => false;
+
+  const result = await runConversationTurnWorkflow(deps, {
+    state,
+    content: "串流輸入",
+    source: "web"
+  });
+
+  assert.equal(result.failed, true);
+  assert.equal(result.userMessage.invalidConversation, true);
+  assert.equal(result.assistantMessage.invalidConversation, true);
+  assert.match(result.assistantMessage.content, /stream failed/u);
+  assert.equal(events.filter((event) => event.type === "rollback-stream-failure").length, 1);
 });

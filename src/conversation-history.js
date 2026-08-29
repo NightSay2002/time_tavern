@@ -11,7 +11,13 @@ export function findRecentUserMessageIndex(conversation = [], number = 1) {
 
   let userCount = 0;
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
-    if (conversation[index]?.role !== "user") {
+    if (
+      conversation[index]?.role !== "user" ||
+      conversation[index]?.excludeFromModel ||
+      conversation[index]?.invalidConversation ||
+      conversation[index]?.extra?.excludeFromModel ||
+      conversation[index]?.extra?.invalidConversation
+    ) {
       continue;
     }
     userCount += 1;

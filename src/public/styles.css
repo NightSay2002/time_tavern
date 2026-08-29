@@ -1643,6 +1643,16 @@ dialog.session-picker-dialog {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.discord-message.invalid-conversation {
+  border-left: 3px solid rgba(255, 103, 133, 0.8);
+  background: rgba(105, 34, 53, 0.18);
+}
+
+.discord-message.invalid-conversation .discord-avatar,
+.discord-message.invalid-conversation .message-content {
+  opacity: 0.58;
+}
+
 .discord-avatar {
   width: 48px;
   height: 48px;
@@ -1706,6 +1716,16 @@ dialog.session-picker-dialog {
   font-size: 13px;
   font-weight: 900;
   letter-spacing: 0;
+}
+
+.discord-message-invalid-badge {
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 118, 145, 0.55);
+  border-radius: 5px;
+  background: rgba(112, 31, 52, 0.7);
+  color: #ffd6df;
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .discord-message-time,

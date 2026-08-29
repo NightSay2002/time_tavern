@@ -1464,7 +1464,7 @@ function inferTurnCountFromConversation(conversation) {
   if (explicitMax > 0) {
     return explicitMax;
   }
-  return normalized.filter((message) => message?.role === "user").length;
+  return normalized.filter((message) => message?.role === "user" && !isModelInvisibleMessage(message)).length;
 }
 
 function normalizeTurnState(input, currentState = {}) {
@@ -7188,7 +7188,7 @@ function countConversationTurns(currentState, latestUserMessageId = "") {
 
   let count = 0;
   for (let index = 0; index <= latestUserIndex; index += 1) {
-    if (conversation[index]?.role === "user") {
+    if (conversation[index]?.role === "user" && !isModelInvisibleMessage(conversation[index])) {
       count += 1;
     }
   }
@@ -7235,7 +7235,7 @@ function getLatestUserMessage(currentState) {
   }
   for (let i = currentState.conversation.length - 1; i >= 0; i -= 1) {
     const item = currentState.conversation[i];
-    if (item?.role === "user") {
+    if (item?.role === "user" && !isModelInvisibleMessage(item)) {
       return item;
     }
   }
@@ -7253,7 +7253,7 @@ function getPreviousAssistantMessage(currentState, latestUserMessageId = "") {
   }
   if (latestUserIndex < 0) {
     for (let i = currentState.conversation.length - 1; i >= 0; i -= 1) {
-      if (currentState.conversation[i]?.role === "user") {
+      if (currentState.conversation[i]?.role === "user" && !isModelInvisibleMessage(currentState.conversation[i])) {
         latestUserIndex = i;
         break;
       }
@@ -7286,7 +7286,7 @@ function findLatestUserIndex(currentState, latestUserMessageId = "") {
   }
 
   for (let i = currentState.conversation.length - 1; i >= 0; i -= 1) {
-    if (currentState.conversation[i]?.role === "user") {
+    if (currentState.conversation[i]?.role === "user" && !isModelInvisibleMessage(currentState.conversation[i])) {
       return i;
     }
   }
@@ -7461,6 +7461,9 @@ function getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUserMess
     if (!message || typeof message !== "object") {
       return;
     }
+    if (isModelInvisibleMessage(message)) {
+      return;
+    }
     if (message.role === "user") {
       if (pendingUser) {
         rounds.push([pendingUser]);
@@ -7468,7 +7471,7 @@ function getCompletedDialogueRoundsBeforeLatestUser(currentState, latestUserMess
       pendingUser = message;
       return;
     }
-    if (message.role === "assistant" && pendingUser && !isModelInvisibleMessage(message)) {
+    if (message.role === "assistant" && pendingUser) {
       rounds.push([pendingUser, message]);
       pendingUser = null;
     }
@@ -10817,17 +10820,24 @@ async function ensureMinimumAssistantLengthStreaming(
       break;
     }
 
-    const continuation = await callChatApiCompletionStreamRaw({
-      messages: buildContinuationMessagesForMinimumLength(state, output, runtimeUserName),
-      purpose: "chat_expand",
-      onReasoningDelta: (chunk) => {
-        reasoningOutput += chunk;
-        onReasoningDelta?.(chunk);
-      },
-      onContentDelta
-    });
-
-    output = safeText([output, continuation.content].join("\n")).trim();
+    try {
+      const continuation = await callChatApiCompletionStreamRaw({
+        messages: buildContinuationMessagesForMinimumLength(state, output, runtimeUserName),
+        purpose: "chat_expand",
+        onReasoningDelta: (chunk) => {
+          reasoningOutput += chunk;
+          onReasoningDelta?.(chunk);
+        },
+        onContentDelta
+      });
+      output = safeText([output, continuation.content].join("\n")).trim();
+    } catch (error) {
+      if (isGenerationStoppedError(error)) {
+        throw error;
+      }
+      console.warn(`串流補寫失敗，保留原回覆：${error.message}`);
+      break;
+    }
   }
 
   return {
@@ -10838,6 +10848,20 @@ async function ensureMinimumAssistantLengthStreaming(
 
 function isConversationTurnReady(currentState) {
   return Boolean(currentState?.aiSessionStarted && hasActiveConversationTarget(currentState));
+}
+
+function handleConversationGenerationError(error, { state: currentState } = {}) {
+  if (isGenerationStoppedError(error)) {
+    throw error;
+  }
+  const content = `模型呼叫失敗，已改用錯誤訊息回覆：${error?.message || "未知錯誤"}`;
+  return {
+    content,
+    reasoningContent: "",
+    excludeFromModel: true,
+    assistantExtra: { excludeFromModel: true, systemError: true },
+    modelProcessingResult: getLastModelProcessingResult(currentState)
+  };
 }
 
 async function generateOneShotConversationAssistant({ state: currentState, runtimeUserName, input, turnExtra = {} }) {
@@ -10955,6 +10979,9 @@ function createConversationTurnDeps(options = {}) {
     resolveRuntimeUserName: (currentState, turnExtra = {}) =>
       resolveUserDisplayName(currentState.userProfile, turnExtra.discordUserName || ""),
     attachTriggeredLorebooksToUserMessage,
+    handleGenerationError: handleConversationGenerationError,
+    rollbackFailedTurn: rollbackFailedConversationTurn,
+    clearInvalidConversationMessages,
     generateAssistant: (context) => streaming
       ? generateStreamingConversationAssistant({ ...context, handlers })
       : generateOneShotConversationAssistant(context),
@@ -11077,9 +11104,15 @@ function statePayload(currentState) {
 }
 
 let state = loadState();
+const trailingFailedConversationTurnsSanitized = markTrailingFailedConversationTurnsInvalid(state);
 cleanupCurrentConversationImagesAcrossContexts(state);
 const imageGenerationCompressionStateSanitized = sanitizeImageGenerationCompressionState(state);
-if (savedSessionStorageMigrated || conversationContextStorageMigrated || imageGenerationCompressionStateSanitized) {
+if (
+  savedSessionStorageMigrated ||
+  conversationContextStorageMigrated ||
+  imageGenerationCompressionStateSanitized ||
+  trailingFailedConversationTurnsSanitized > 0
+) {
   saveState(state);
 } else {
   persistCardState(state);
@@ -11260,6 +11293,83 @@ function appendConversationMessage(entry) {
   }
 }
 
+function rollbackFailedConversationTurn(currentState, {
+  userMessage = null,
+  stateBeforeTurnSnapshot = null,
+  pendingAssistantFeedback = null
+} = {}) {
+  const userMessageId = safeText(userMessage?.id);
+  if (userMessage) {
+    userMessage.excludeFromModel = true;
+    userMessage.invalidConversation = true;
+    userMessage.systemErrorInput = true;
+    delete userMessage.turnNumber;
+    if (userMessage.extra && typeof userMessage.extra === "object") {
+      userMessage.extra.excludeFromModel = true;
+      userMessage.extra.invalidConversation = true;
+      userMessage.extra.systemErrorInput = true;
+      delete userMessage.extra.turnNumber;
+    }
+  }
+  const feedbackMessage = pendingAssistantFeedback?.assistantMessage;
+  if (feedbackMessage && safeText(feedbackMessage.feedbackAppliedToUserMessageId) === userMessageId) {
+    feedbackMessage.feedbackPendingForNextUser = true;
+    feedbackMessage.feedbackAppliedToUserMessageId = "";
+    feedbackMessage.feedbackAppliedAt = "";
+    feedbackMessage.updatedAt = nowIso();
+  }
+  if (stateBeforeTurnSnapshot) {
+    applyNarrativeCheckpoint(currentState, stateBeforeTurnSnapshot);
+  }
+  syncTurnStateFromConversation(currentState);
+  setLastModelProcessingResult(currentState, {});
+}
+
+function markTrailingFailedConversationTurnsInvalid(currentState) {
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  let earliestCheckpoint = null;
+  let markedCount = 0;
+  for (let index = conversation.length - 1; index >= 1; index -= 2) {
+    const assistantMessage = conversation[index];
+    const userMessage = conversation[index - 1];
+    if (
+      assistantMessage?.role !== "assistant" ||
+      userMessage?.role !== "user" ||
+      !isSystemAssistantErrorContent(assistantMessage.content)
+    ) {
+      break;
+    }
+    earliestCheckpoint = getMessageStateBeforeTurnSnapshot(userMessage) || earliestCheckpoint;
+    userMessage.excludeFromModel = true;
+    userMessage.invalidConversation = true;
+    userMessage.systemErrorInput = true;
+    delete userMessage.turnNumber;
+    assistantMessage.excludeFromModel = true;
+    assistantMessage.invalidConversation = true;
+    assistantMessage.systemError = true;
+    markedCount += 1;
+  }
+  if (markedCount > 0) {
+    if (earliestCheckpoint) {
+      applyNarrativeCheckpoint(currentState, earliestCheckpoint);
+    }
+    syncTurnStateFromConversation(currentState);
+  }
+  return markedCount;
+}
+
+function clearInvalidConversationMessages(currentState) {
+  const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
+  const filtered = conversation.filter((message) => !message?.invalidConversation && !message?.extra?.invalidConversation);
+  if (filtered.length === conversation.length) {
+    return 0;
+  }
+  const removedCount = conversation.length - filtered.length;
+  currentState.conversation = filtered;
+  syncTurnStateFromConversation(currentState);
+  return removedCount;
+}
+
 function resetAiNarrativeProgress(currentState) {
   currentState.roleCardRuntimeState = {};
 }
@@ -11332,7 +11442,7 @@ function findNextUserMessageForAssistantFeedback(currentState, assistantMessage)
     return null;
   }
   for (let index = assistantIndex + 1; index < conversation.length; index += 1) {
-    if (conversation[index]?.role === "user") {
+    if (conversation[index]?.role === "user" && !isModelInvisibleMessage(conversation[index])) {
       return conversation[index];
     }
   }
@@ -11403,7 +11513,10 @@ function getPendingAssistantFeedbackForNextUser(currentState) {
   const conversation = Array.isArray(currentState?.conversation) ? currentState.conversation : [];
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
     const message = conversation[index];
-    if (!message || message.role === "user") {
+    if (!message || isModelInvisibleMessage(message)) {
+      continue;
+    }
+    if (message.role === "user") {
       break;
     }
     if (message.role !== "assistant") {
@@ -11638,6 +11751,7 @@ async function replayConversationFromUserIndexLocked({
     assistantMessage: result.assistantMessage,
     userMessage: result.userMessage,
     modelProcessingResult: result.modelProcessingResult,
+    failed: result.failed,
     replacedUserMessage,
     removedDiscordReplyMessageIds
   };
@@ -11778,6 +11892,7 @@ async function replayConversationFromDiscordMessageId({
     return {
       assistantMessage: result.assistantMessage,
       modelProcessingResult: result.modelProcessingResult,
+      failed: result.failed,
       removedDiscordReplyMessageIds
     };
   }, contextOptions);
@@ -11800,7 +11915,8 @@ async function runConversationTurn({ content, source, extra = {}, images = [], c
     );
     return {
       assistantMessage: result.assistantMessage,
-      modelProcessingResult: result.modelProcessingResult
+      modelProcessingResult: result.modelProcessingResult,
+      failed: result.failed
     };
   }, contextOptions);
 }
@@ -13537,6 +13653,38 @@ async function sendInteractionLongReply(interaction, text) {
   }
 }
 
+async function sendInteractionPublicLongReply(interaction, text, options = {}) {
+  const chunks = splitForDiscord(text, 1800);
+  const sentMessages = [];
+  const discardPrivateReply = options.discardPrivateReply !== false;
+  try {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+    for (const chunk of chunks) {
+      const sent = await interaction.followUp({
+        content: chunk || " ",
+        allowedMentions: { parse: [] }
+      });
+      if (sent) {
+        sentMessages.push(sent);
+      }
+    }
+    if (discardPrivateReply) {
+      await discardDeferredInteractionReply(interaction);
+    }
+    return sentMessages;
+  } catch (error) {
+    if (!isUnknownInteractionError(error)) {
+      throw error;
+    }
+    const remainingText = chunks.slice(sentMessages.length).join("\n");
+    const fallbackMessages = await sendInteractionChannelFallback(interaction, remainingText || text);
+    console.warn(formatInteractionExpiryLog(interaction, fallbackMessages.length > 0));
+    return [...sentMessages, ...fallbackMessages];
+  }
+}
+
 function isUnknownInteractionError(error) {
   return (
     safeText(error?.code) === "10062" ||
@@ -13593,6 +13741,28 @@ async function discardDeferredInteractionReply(interaction) {
     if (!isUnknownInteractionError(error) && code !== "10008" && code !== "10062") {
       throw error;
     }
+  }
+}
+
+function getFailedConversationReplyText(result = {}) {
+  if (!result?.failed) {
+    return "";
+  }
+  return safeText(result.assistantMessage?.content) || "模型呼叫失敗，請稍後再試。";
+}
+
+async function sendDiscordPrivateMessageError(message, content) {
+  const text = discordSystemText(content);
+  if (!message?.guildId) {
+    await message.reply(text);
+    return;
+  }
+  try {
+    await message.author.send(text);
+  } catch (error) {
+    console.warn(
+      `Discord 私密錯誤訊息發送失敗（user=${safeText(message.author?.id) || "unknown"}）：${error.message || error}`
+    );
   }
 }
 
@@ -14156,7 +14326,8 @@ async function processDiscordChatTurn({
     return {
       pendingOpening,
       replyText: formatAssistantMessageForUserDisplay(result.assistantMessage),
-      assistantMessage: result.assistantMessage
+      assistantMessage: result.assistantMessage,
+      failed: result.failed
     };
   } finally {
     stopTyping();
@@ -14186,6 +14357,11 @@ async function handleDiscordChat(message, userContent) {
   const pendingOpening = turn.pendingOpening;
   if (pendingOpening) {
     await sendDiscordLongMessage(message, pendingOpening);
+  }
+  const failureText = getFailedConversationReplyText(turn);
+  if (failureText) {
+    await sendDiscordPrivateMessageError(message, failureText);
+    return;
   }
   if (turn.replyText) {
     const sentMessages = await sendDiscordLongMessage(message, turn.replyText);
@@ -14473,7 +14649,7 @@ async function handleSlashCommand(interaction) {
     const num = interaction.options.getInteger("num");
     const comment = safeText(interaction.options.getString("comment") || "");
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
     const result = await rewriteRecentUserInput({
@@ -14491,8 +14667,13 @@ async function handleSlashCommand(interaction) {
     });
     await deleteDiscordMessagesByIds(interaction.channel, result.removedDiscordReplyMessageIds || []);
     const replyText = formatAssistantMessageForUserDisplay(result.assistantMessage);
+    const failureText = getFailedConversationReplyText(result);
+    if (failureText) {
+      await safeSendInteractionError(interaction, discordSystemText(failureText));
+      return;
+    }
     if (replyText) {
-      const sentMessages = await sendInteractionLongReply(interaction, replyText);
+      const sentMessages = await sendInteractionPublicLongReply(interaction, replyText);
       await rememberDiscordReplyAndFeedback(
         result.assistantMessage,
         sentMessages,
@@ -14514,7 +14695,7 @@ async function handleSlashCommand(interaction) {
       return;
     }
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
     const turn = await processDiscordChatTurn({
       channel: interaction.channel,
@@ -14526,8 +14707,18 @@ async function handleSlashCommand(interaction) {
       contextOptions: getDiscordConversationContextOptions(interaction)
     });
     const combinedReply = [turn.pendingOpening, turn.replyText].filter(Boolean).join("\n\n");
+    const failureText = getFailedConversationReplyText(turn);
+    if (failureText) {
+      await safeSendInteractionError(interaction, discordSystemText(failureText));
+      if (turn.pendingOpening) {
+        await sendInteractionPublicLongReply(interaction, turn.pendingOpening, {
+          discardPrivateReply: false
+        });
+      }
+      return;
+    }
     if (combinedReply) {
-      const sentMessages = await sendInteractionLongReply(interaction, combinedReply);
+      const sentMessages = await sendInteractionPublicLongReply(interaction, combinedReply);
       await rememberDiscordReplyAndFeedback(
         turn.assistantMessage,
         sentMessages,
@@ -14541,7 +14732,7 @@ async function handleSlashCommand(interaction) {
 
   if (name === "ai_start") {
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
     const roleCardNumber = interaction.options.getInteger("num");
@@ -14554,7 +14745,7 @@ async function handleSlashCommand(interaction) {
       await interaction.editReply(discordSystemText(result.error));
       return;
     }
-    await sendInteractionLongReply(interaction, result.openingDialogue);
+    await sendInteractionPublicLongReply(interaction, result.openingDialogue);
     return;
   }
 
@@ -14728,10 +14919,10 @@ function setupDiscordBot() {
       await handleDiscordChat(message, extractedInput);
     } catch (error) {
       if (isGenerationStoppedError(error)) {
-        await message.reply(discordSystemText(GENERATION_STOPPED_MESSAGE));
+        await sendDiscordPrivateMessageError(message, GENERATION_STOPPED_MESSAGE);
         return;
       }
-      await message.reply(discordSystemText(`處理失敗：${error.message || "未知錯誤"}`));
+      await sendDiscordPrivateMessageError(message, `處理失敗：${error.message || "未知錯誤"}`);
     }
   });
 
@@ -14782,6 +14973,11 @@ function setupDiscordBot() {
         if (!result.assistantMessage) {
           return;
         }
+        const failureText = getFailedConversationReplyText(result);
+        if (failureText) {
+          await sendDiscordPrivateMessageError(message, `編輯後重算失敗：${failureText}`);
+          return;
+        }
         const sentMessages = await sendDiscordLongMessage(
           message,
           [
@@ -14803,10 +14999,10 @@ function setupDiscordBot() {
       }
     } catch (error) {
       if (isGenerationStoppedError(error)) {
-        await message.reply(discordSystemText(GENERATION_STOPPED_MESSAGE));
+        await sendDiscordPrivateMessageError(message, GENERATION_STOPPED_MESSAGE);
         return;
       }
-      await message.reply(discordSystemText(`編輯後重算失敗：${error.message || "未知錯誤"}`));
+      await sendDiscordPrivateMessageError(message, `編輯後重算失敗：${error.message || "未知錯誤"}`);
     }
   });
 
@@ -14866,7 +15062,7 @@ function setupDiscordBot() {
         return;
       }
       if (shouldDeferSlashCommandEarly(interaction.commandName) && !interaction.deferred && !interaction.replied) {
-        await interaction.deferReply();
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       }
       await handleSlashCommand(interaction);
     } catch (error) {

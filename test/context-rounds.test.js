@@ -9,6 +9,8 @@ import {
 } from "../src/dialogue-context.js";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
+const stylesSource = fs.readFileSync(new URL("../src/public/styles.css", import.meta.url), "utf8");
 
 test("recent dialogue keeps API roles separate from message content", () => {
   const functionStart = serverSource.indexOf("function buildCacheableDialogueMessages(messages = [])");
@@ -48,6 +50,13 @@ test("ordinary headings in message content are preserved", () => {
 });
 
 test("model failure notices stay visible in history but are excluded from AI context", () => {
+  const invalidUser = {
+    id: "invalid-user",
+    role: "user",
+    content: "失敗的輸入",
+    excludeFromModel: true,
+    invalidConversation: true
+  };
   const failure = {
     id: "error-1",
     role: "assistant",
@@ -57,6 +66,7 @@ test("model failure notices stay visible in history but are excluded from AI con
   const messages = selectReasonerDialogueContextMessages({
     conversation: [
       { id: "user-1", role: "user", content: "前一則輸入", turnNumber: 1 },
+      invalidUser,
       failure,
       latestUser
     ],
@@ -66,7 +76,16 @@ test("model failure notices stay visible in history but are excluded from AI con
   });
 
   assert.equal(isModelInvisibleMessage(failure), true);
+  assert.equal(isModelInvisibleMessage(invalidUser), true);
+  assert.equal(messages.some((message) => message.id === invalidUser.id), false);
   assert.equal(messages.some((message) => message.id === failure.id), false);
   assert.equal(messages.some((message) => message.content === "前一則輸入"), true);
   assert.equal(messages.at(-1).content, "繼續");
+});
+
+test("web marks failed turns as invalid until a later success clears them", () => {
+  assert.match(serverSource, /markTrailingFailedConversationTurnsInvalid/u);
+  assert.match(serverSource, /clearInvalidConversationMessages/u);
+  assert.match(webSource, /invalidBadge\.textContent = "無效對話"/u);
+  assert.match(stylesSource, /\.discord-message\.invalid-conversation/u);
 });

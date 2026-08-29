@@ -53,6 +53,9 @@ export function collectCompletedDialogueRoundsBeforeLatestUser(conversation = []
     if (!message || typeof message !== "object") {
       return;
     }
+    if (isModelInvisibleMessage(message)) {
+      return;
+    }
     if (message.role === "user") {
       if (pendingUser) {
         rounds.push([pendingUser]);
@@ -60,7 +63,7 @@ export function collectCompletedDialogueRoundsBeforeLatestUser(conversation = []
       pendingUser = message;
       return;
     }
-    if (message.role === "assistant" && pendingUser && !isModelInvisibleMessage(message)) {
+    if (message.role === "assistant" && pendingUser) {
       rounds.push([pendingUser, message]);
       pendingUser = null;
     }

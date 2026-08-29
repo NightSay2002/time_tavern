@@ -46,6 +46,18 @@ test("repeating reload 1 targets the same logical turn after replacement", () =>
   assert.equal(conversation[secondTarget].content, "first replacement");
 });
 
+test("reload numbering ignores invalid failed inputs", () => {
+  const conversation = [
+    message("user", "valid input"),
+    message("assistant", "valid reply"),
+    { ...message("user", "failed input"), excludeFromModel: true, invalidConversation: true },
+    { ...message("assistant", "failed reply"), excludeFromModel: true, invalidConversation: true }
+  ];
+
+  assert.equal(findRecentUserMessageIndex(conversation, 1), 0);
+  assert.equal(findRecentUserMessageIndex(conversation, 2), -1);
+});
+
 test("reload num must be a positive integer", () => {
   assert.equal(normalizeRecentUserInputNumber(1), 1);
   assert.equal(normalizeRecentUserInputNumber("2"), 2);
