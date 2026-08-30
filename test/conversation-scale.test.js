@@ -13,7 +13,7 @@ function functionSource(name, nextName) {
   return serverSource.slice(start, end);
 }
 
-test("conversation storage keeps 1000 rounds while the web automatically loads every batch", () => {
+test("conversation storage has no 1000-round cap while the web loads every batch", () => {
   const appendSource = functionSource("appendConversationMessage", "rollbackFailedConversationTurn");
   const clientSource = functionSource("normalizeConversationForClient", "buildSavedSessionDetail");
   const imageCleanupSource = functionSource(
@@ -45,7 +45,8 @@ test("conversation storage keeps 1000 rounds while the web automatically loads e
     timeTracking: { currentDay: 1, currentPeriod: "morning" },
     roleCardRuntimeState: {}
   };
-  const conversation = Array.from({ length: 1000 }, (_, index) => [
+  const roundCount = 1205;
+  const conversation = Array.from({ length: roundCount }, (_, index) => [
     {
       id: `user-${index + 1}`,
       role: "user",
@@ -62,7 +63,7 @@ test("conversation storage keeps 1000 rounds while the web automatically loads e
   const oneStoryBytes = Buffer.byteLength(JSON.stringify({ conversation, aiLogs: [] }));
   const fourStoryBytes = oneStoryBytes * 4;
 
-  assert.equal(conversation.length, 2000);
+  assert.equal(conversation.length, roundCount * 2);
   const seenMessageIds = new Set();
   let visibleStart = Math.max(0, conversation.length - 20);
   while (visibleStart > 0) {

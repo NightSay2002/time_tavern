@@ -1,5 +1,5 @@
-const KEEP_TIME_DIRECTIVE_PATTERN = /[｛{]{1,2}\s*保持時間([^｝}]*)[｝}]{1,2}/u;
-const KEEP_TIME_DIRECTIVE_REPLACE_PATTERN = /[｛{]{1,2}\s*保持時間([^｝}]*)[｝}]{1,2}/gu;
+const KEEP_TIME_DIRECTIVE_PATTERN = /[｛{]{1,2}\s*保持(?:時間|时间)([^｝}]*)[｝}]{1,2}/u;
+const KEEP_TIME_DIRECTIVE_REPLACE_PATTERN = /[｛{]{1,2}\s*保持(?:時間|时间)([^｝}]*)[｝}]{1,2}/gu;
 
 function safeText(value) {
   return typeof value === "string" ? value.trim() : "";

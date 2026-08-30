@@ -52,6 +52,9 @@
 | `DISCORD_LOGIN_RETRY_INITIAL_MS` | `15000` | Discord 登入第一次重試等待時間。 |
 | `DISCORD_LOGIN_RETRY_MAX_MS` | `300000` | Discord 登入退避上限。 |
 | `DISCORD_LOGIN_RETRY_MAX_ATTEMPTS` | `0` | `0` 代表不限次數。 |
+| `QQ_BOT_APP_ID` | 空 | QQ 開放平台官方機器人的 AppID；必須與 AppSecret 同時填寫。 |
+| `QQ_BOT_APP_SECRET` | 空 | QQ 開放平台官方機器人的 AppSecret。 |
+| `QQ_ALLOWED_USER_OPENID` | 空 | 選填；設定後只回應此 QQ `user_openid` 的 C2C 私聊。 |
 | `WEB_USER_NAME_TEMPLATE` | `{{user}}` | 網頁使用者名字模板。 |
 | `WEB_AI_NAME_TEMPLATE` | `{{chur}}` | 網頁 AI 名字模板。 |
 | `WEB_USER_AVATAR_IMAGE` | 空 | 使用者頭像。 |
@@ -85,9 +88,9 @@ Provider 預設 base URL：
 
 ## 介面語言
 
-主頁「其他」中的簡繁切換會保存為全域 `uiLanguage`，同步套用主頁、NovelAI、Storyboard 與 Discord Bot 的系統文字和 Slash 指令說明。完整轉換使用 OpenCC；繁體為 `zh-Hant`，簡體為 `zh-Hans`。
+主頁「設定及其他雜項」中的簡繁切換會保存為全域 `uiLanguage`，啟動時同步套用主頁、NovelAI、Storyboard、Discord 與 QQ。完整雙向轉換使用 OpenCC；繁體為 `zh-Hant`，簡體為 `zh-Hans`。
 
-語言切換只處理程式介面與系統提示，不轉換使用者輸入、角色卡、助手、Prompt、AI 輸出、跑圖 Prompt、存檔對話或其他創作資料。載入對話存檔也不會覆蓋語言設定。
+程式介面、Bot 指令說明、角色卡名稱與預覽、開場、聊天與存檔顯示，以及送往對話 API 的文字都會轉成目前字形；程式碼區塊、圖片及 Base64 不轉換。角色卡編輯欄位、Prompt、使用者輸入與存檔的原始資料不會被批次改寫，因此切換語言或載入對話存檔不會污染原文。
 
 GLM 與圖片輸入：
 
@@ -133,7 +136,8 @@ Prompt 與大模型：
 - 「時間段更改詞」只檢查 user 輸入；命中後會在生成前立即前進一段，早上→中午→晚上→翌日早上。
 - 支援 `3天後` / `三天後` / `第3天`。
 - 自動切換早中晚時，晚上到早上會自動加 1 天。
-- `{{保持時間}}`、`{保持時間}` 與 `｛保持時間｝` 會延後自動切換。
+- `{{保持時間}}`、`{保持時間}`、`｛保持時間｝` 及對應簡體寫法都會延後自動切換。
+- 快捷劇情指令會按全局語言輸出 `{{保持時間}}`、`｛推進劇情到下一個場景｝`、`｛時間流逝——｝`、`｛繼續｝` 或其簡體版本；括號內補充及另行訊息保留使用者原文。
 
 對話與編輯：
 
@@ -208,7 +212,7 @@ Slash 指令：
 | `/close` | 無 | 關閉並刪除目前 Discord 頻道或私訊的故事；已建立的對話存檔不受影響。 |
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
 | `/reload` | `num`、`comment` | 直接改寫倒數第 `num` 次使用者輸入並重新生成；`1` 代表最近一次。 |
-| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；所有模板都可在括號內補充並另起一行追加內容。 |
+| `/quick_send` | `template`、`inside`、`message` | 快速發送常用劇情指令；固定指令及選項跟隨全局簡繁設定，括號內補充與另起一行的內容保留原文。 |
 | `/archive` | `action`、選填 `name` | `0` 保存目前對話，未填名稱時使用日期時間；`1` 私密瀏覽存檔，1 號是最新存檔。 |
 | `/archive_return` | `mode`、`num` | 載入第 `num` 號存檔；`mode:0` 從頭公開回放，`mode:1` 顯示最後五回合並從末端繼續。 |
 
@@ -224,7 +228,7 @@ Discord 行為：
 - `/ai_status num:2` 顯示 `預覽（目前開場/開場總數）`；上一張／下一張會回到該卡開場 1，另外兩個按鈕只切換目前角色卡的開場。
 - 角色卡預覽的四個按鈕各自使用唯一 ID；即使位於第一張、最後一張或角色卡沒有多個開場，Discord 也不會因停用按鈕的 ID 重複而拒絕回覆。
 - 模型呼叫失敗與缺少 API Key 時，該次使用者輸入及系統通知會在網頁標示為「無效對話」，不成為正式回合；時間、壓縮及模型狀態回復到輸入前，兩則訊息也不進入正文、壓縮或大模型上下文。下一次對話成功後會自動移除先前所有無效對話；啟動時會把舊版本留在故事尾端的失敗回合補上無效標記。Discord Slash 指令會以 ephemeral 私密訊息顯示生成錯誤，成功正文直接送到原頻道，不依賴可能過期的 Interaction token；伺服器中的普通訊息則改以私訊通知，避免錯誤文字進入公開故事頻道。
-- 網頁聊天標題列可手動選擇「本地對話」或已使用過的 Discord 頻道／私訊；查看、發言、編輯、重算、停止、保存及載入均作用於目前選擇的故事，Discord 新活動不會自動切換網頁。選擇器旁的刪除按鈕只刪除 Discord 故事並切回本地對話，不會刪除對話存檔；本地對話不可刪除。
+- 網頁聊天標題列可手動選擇「本地對話」、已使用過的 Discord 頻道／私訊或 QQ 私聊；查看、發言、編輯、重算、停止、保存及載入均作用於目前選擇的故事，外部 Bot 新活動不會自動切換網頁。選擇器旁的刪除按鈕只刪除該故事並切回本地對話，不會刪除對話存檔；本地對話不可刪除。
 - `/archive action:1` 每次私密顯示一份存檔的名稱、角色與最後對話，使用左右按鈕翻頁；完整存檔只在顯示時讀取。
 - `/archive` 的 `action` 與 `/archive_return` 的 `mode` 選項只顯示純數字 `0`／`1`；「瀏覽存檔」、「從頭回放」等中文只出現在參數說明，不是要輸入的內容。
 - 存檔瀏覽會分行顯示完整的 `/archive_return mode:0 num:N` 與 `/archive_return mode:1 num:N`，中文說明不屬於指令內容。
@@ -242,6 +246,30 @@ Discord Developer Portal 設定：
 2. Guild Install 加入 `bot`、`applications.commands` 與 Bot 所需權限；User Install 加入 `applications.commands`。
 3. 將 Webhooks Endpoint 設為可公開連線的 `https://你的網址/api/discord/events`，啟用 Events 並訂閱 `APPLICATION_AUTHORIZED`。
 4. Bot 上線後會自動取得驗證用 Public Key；只有 Webhook 可能早於 Bot 連線時，才需要填 `DISCORD_PUBLIC_KEY`。
+
+## QQ 官方 Bot 私聊
+
+- 只訂閱與處理 `C2C_MESSAGE_CREATE`，不處理群聊、QQ 頻道或主動通知。
+- 在 QQ 開放平台建立官方機器人後，把 AppID 與 AppSecret 填入環境設定並重啟 server；本地 server 透過 Gateway WebSocket 收訊，不需要公開 webhook。
+- 使用者私訊時直接對話，不需要 QQ 指令。該 OpenID 尚未開始故事時，會自動使用網頁目前選中的角色卡或助手；完全未選卡時才提示回網頁選擇。
+- 每個 OpenID 使用獨立 `qq:c2c:*` context，分開保存對話、回合、時間、壓縮內容、角色 runtime、AI logs 與 API Key 租用狀態；網頁的故事選擇器可切換或刪除，已建立存檔不受影響。
+- 支援私聊文字與 PNG、JPEG、WebP、GIF 圖片附件；背景跑圖屬於該次私聊回覆。QQ Bot 不支援 Discord Slash 指令、存檔瀏覽按鈕、玩家座位或反應回饋。
+- `QQ_ALLOWED_USER_OPENID` 留空時接受所有能私訊 Bot 的使用者；設定後，其他 OpenID 的訊息會直接忽略。
+
+QQ 私聊文字指令同時接受半形 `!` 與全形 `！`；`!開始` 與 `!开始` 均可使用。指令會先被 Bot 攔截，不會保存成對話回合或送進模型，說明與回覆會依全局 `uiLanguage` 統一字形：
+
+| 指令 | 說明 |
+| --- | --- |
+| `!help` | 顯示全部 QQ 私聊指令。 |
+| `!開始` | 使用目前角色卡的第一個開場開始，等同 `!ai_start 0 1`；簡體 `!开始` 亦可。 |
+| `!ai_start [角色卡編號] [開場編號]` | 開始或重新開始故事；未填角色卡編號時使用目前角色或助手。 |
+| `!ai_status 1` | 查看目前角色、故事狀態與回合。 |
+| `!ai_status 2 [頁數]` | 每頁列出 10 張角色卡及開場數量。 |
+| `!stop` | 停止目前 QQ 故事的生成。 |
+| `!close` | 刪除目前 QQ 故事並釋放 Key；已建立存檔保留。 |
+| `!archive 0 [名稱]` | 保存目前 QQ 對話。 |
+| `!archive 1 [存檔編號]` | 查看指定存檔的資料及最後五回合；未填編號時查看最新一份。 |
+| `!archive_return <0\|1> <存檔編號>` | 載入存檔末端；`0` 顯示開頭五回合，`1` 顯示最後五回合，之後都可直接繼續。 |
 
 ## 預設與發佈
 
@@ -262,7 +290,7 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 不保存：
 
 - AI 呼叫紀錄
-- Discord Bot Token
+- Discord 與 QQ Bot 憑證
 - 對話 API key
 - NovelAI API token
 - 目前對話正文
@@ -333,13 +361,13 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 
 | 檔案或目錄 | 說明 |
 | --- | --- |
-| `data/app-state.json` | 全域 runtime 設定、目前網頁故事 ID、Discord 頻道輕量索引、目前 Prompt 與對話存檔摘要；不保存完整對話、AI logs、角色卡或完整存檔。 |
+| `data/app-state.json` | 全域 runtime 設定、目前網頁故事 ID、Discord／QQ 輕量索引、目前 Prompt 與對話存檔摘要；不保存完整對話、AI logs、角色卡或完整存檔。 |
 | `data/app-defaults.json` | 使用者本機主功能、角色卡與 Prompt 預設。 |
 | `data/novelai-defaults.json` | 使用者本機 NovelAI 預設。 |
 | `data/environment.env` | 根目錄 `.env` 的完整本機備份，包含 Token 與 API Key。 |
 | `data/cardstate.json` | 角色卡、助手與全局世界書的獨立資料檔；內容未變更時不重複寫入。 |
 | `data/saved-sessions/` | 每個網頁對話存檔各自一份對話專屬快照；只保存對話、回合、時間進度、壓縮內容、該角色 runtime 與 AI logs，不保存角色卡、助手、Prompt 或全域設定。 |
-| `data/conversation-contexts/` | 本地故事及每個 Discord 頻道／私訊各自一份 runtime；保存對話、回合、時間進度、壓縮內容、角色 runtime、玩家分配及去重 AI logs。舊共享對話首次升級時會移入原 `lastDiscordChannelId`。 |
+| `data/conversation-contexts/` | 本地故事、每個 Discord 頻道／私訊及每個 QQ C2C OpenID 各自一份 runtime；保存對話、回合、時間進度、壓縮內容、角色 runtime 及去重 AI logs。舊共享對話首次升級時會移入原 `lastDiscordChannelId`。QQ 檔名只使用 OpenID 雜湊。 |
 | `data/conversation-images/` | 目前對話跑圖暫存；未被目前對話引用時自動清除。 |
 | `data/saved-session-images/` | 各對話存檔引用的跑圖；刪除該存檔時一併刪除。 |
 | `data/novelai-album/` | NovelAI 收藏圖片與 index。 |
@@ -350,7 +378,7 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 
 舊版對話存檔會在首次啟動新版時轉成對話專屬的分離式格式。主狀態只保留名稱、角色、訊息數等清單資料，因此角色卡與存檔增加時，打開存檔清單不會逐一解析所有完整存檔。AI 呼叫紀錄最多保留最近 200 筆，會把完全相同的長文字或重複的 4 KB 文字區塊保存一次，再由各筆紀錄引用；舊存檔首次升級會自動改寫成分塊格式。網頁只在展開單筆紀錄時建立完整內容。載入時會依保存的角色卡或助手 ID 連接目前全域版本；若該 ID 已不存在，仍載入對話，但不自動啟用角色或助手。時間位置與自動切換進度會恢復，時間功能開關、輪數與關鍵字設定則保留載入前的全域值。
 
-每個故事與對話存檔的完整訊息都會保留，不再於 500 則訊息時裁掉舊內容。主聊天預設顯示現在，點擊一本對話存檔後則由開場及第 1 則訊息開始預覽。兩者都使用固定 20 則訊息的 DOM 視窗，到達上方或下方邊界時會移動 10 則並保留另外 10 則作定位；在最新區段時可用 `⇈` 直達開場，到達最早區段後按鈕會變成 `⇊` 並可跳回現在。向兩個方向捲動都能恢復全部歷史，但 DOM 不會隨回合數累積。只供後端重算使用的回合 checkpoint 不會送到瀏覽器。暫存對話圖片的引用會在啟動時建立輕量索引，之後保存單一故事不會重新解析其他所有 context。以 4 個故事、每個 1000 回合、每則 user／assistant 約 1000 字及 200 筆 AI logs 的隔離測試計算，總 context 檔約 56.9 MiB，單一故事讀取及 JSON 解析約 41 至 45 ms；實際大小會依正文、模型內容與圖片引用而變化。
+每個故事與對話存檔的完整訊息都會保留，程式不設回合數上限，也不會於 500 或 1000 回合時裁掉舊內容；實際容量只受本機磁碟與可用記憶體限制。主聊天預設顯示現在，點擊一本對話存檔後則由開場及第 1 則訊息開始預覽。兩者都使用固定 20 則訊息的 DOM 視窗，到達上方或下方邊界時會移動 10 則並保留另外 10 則作定位；在最新區段時可用 `⇈` 直達開場，到達最早區段後按鈕會變成 `⇊` 並可跳回現在。向兩個方向捲動都能恢復全部歷史，但 DOM 不會隨回合數累積。只供後端重算使用的回合 checkpoint 不會送到瀏覽器。暫存對話圖片的引用會在啟動時建立輕量索引，之後保存單一故事不會重新解析其他所有 context。以 4 個故事、每個 1000 回合、每則 user／assistant 約 1000 字及 200 筆 AI logs 的隔離測試計算，總 context 檔約 56.9 MiB，單一故事讀取及 JSON 解析約 41 至 45 ms；這只是效能範例而非保存上限，實際大小會依正文、模型內容與圖片引用而變化。
 
 ## 開發檢查
 
@@ -358,6 +386,7 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 npm start
 npm test
 node --check src/index.js
+node --check src/qq-bot.js
 node --check src/public/app.js
 node --check src/public/novelai.js
 ```

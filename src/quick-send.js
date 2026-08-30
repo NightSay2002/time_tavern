@@ -1,3 +1,5 @@
+import { localizeSystemText, UI_LANGUAGE_TRADITIONAL } from "./ui-language.js";
+
 function safeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -11,14 +13,14 @@ export const QUICK_SEND_TEMPLATES = [
   },
   {
     id: "next_scene",
-    label: "｛推进剧情到下一个场景｝",
-    prefix: "｛推进剧情到下一个场景",
+    label: "｛推進劇情到下一個場景｝",
+    prefix: "｛推進劇情到下一個場景",
     suffix: "｝"
   },
   {
     id: "time_passes",
-    label: "｛时间流逝——｝",
-    prefix: "｛时间流逝——",
+    label: "｛時間流逝——｝",
+    prefix: "｛時間流逝——",
     suffix: "｝"
   },
   {
@@ -34,7 +36,12 @@ export function getQuickSendTemplate(templateId = "") {
   return QUICK_SEND_TEMPLATES.find((template) => template.id === normalizedId) || null;
 }
 
-export function buildQuickSendContent(templateId = "", inside = "", message = "") {
+export function buildQuickSendContent(
+  templateId = "",
+  inside = "",
+  message = "",
+  language = UI_LANGUAGE_TRADITIONAL
+) {
   const template = getQuickSendTemplate(templateId);
   if (!template) {
     return { ok: false, error: "未知的快速發送模板。" };
@@ -42,7 +49,10 @@ export function buildQuickSendContent(templateId = "", inside = "", message = ""
 
   const insideText = safeText(inside);
   const messageText = safeText(message);
-  const commandText = `${template.prefix}${insideText}${template.suffix}`;
+  const commandText = localizeSystemText(
+    `${template.prefix}${insideText}${template.suffix}`,
+    language
+  );
   return {
     ok: true,
     template,

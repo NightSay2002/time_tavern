@@ -44,11 +44,14 @@ import {
   LEGACY_DISCORD_TEXT_COMMAND_NOTICE
 } from "./discord-message.js";
 import { isAllowedDiscordUser } from "./discord-access.js";
+import { createQqBotClient, isAllowedQqUser } from "./qq-bot.js";
+import { buildQqHelpText, parseQqTextCommand } from "./qq-command.js";
 import {
   buildDiscordArchiveBrowserPayload,
   buildDiscordArchiveContinueComponents,
   buildDiscordArchiveLatestPage,
   buildDiscordArchiveReplayPage,
+  buildDiscordArchiveTranscript,
   getDiscordArchiveByNumber,
   getDiscordArchiveSessionsNewestFirst,
   parseDiscordArchiveBrowserCustomId,
@@ -108,6 +111,7 @@ import {
   mergeTimeTrackingProgress
 } from "./narrative-state.js";
 import {
+  localizeChatApiMessages,
   localizeSystemText,
   normalizeChineseTextForMatch,
   normalizeUiLanguage,
@@ -127,6 +131,15 @@ const OPENCC_BROWSER_MODULE_FILE = path.join(
   "dist",
   "esm",
   "t2cn.js"
+);
+const OPENCC_BROWSER_TRADITIONAL_MODULE_FILE = path.join(
+  __dirname,
+  "..",
+  "node_modules",
+  "opencc-js",
+  "dist",
+  "esm",
+  "cn2t.js"
 );
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DEFAULTS_DIR = path.join(__dirname, "..", "defaults");
@@ -156,6 +169,9 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "DISCORD_BOT_TOKEN",
   "DISCORD_CLIENT_ID",
   "DISCORD_ALLOWED_USER_ID",
+  "QQ_BOT_APP_ID",
+  "QQ_BOT_APP_SECRET",
+  "QQ_ALLOWED_USER_OPENID",
   "CHAT_API_KEY",
   "CONVERSATION_API_KEY",
   "DEEPSEEK_API_KEY",
@@ -182,6 +198,9 @@ const PORT = Number(process.env.PORT || 3234);
 const DISCORD_BOT_TOKEN = safeText(process.env.DISCORD_BOT_TOKEN);
 const DISCORD_PUBLIC_KEY = safeText(process.env.DISCORD_PUBLIC_KEY);
 const DISCORD_ALLOWED_USER_ID = safeText(process.env.DISCORD_ALLOWED_USER_ID);
+const QQ_BOT_APP_ID = safeText(process.env.QQ_BOT_APP_ID);
+const QQ_BOT_APP_SECRET = safeText(process.env.QQ_BOT_APP_SECRET);
+const QQ_ALLOWED_USER_OPENID = safeText(process.env.QQ_ALLOWED_USER_OPENID);
 const DEFAULT_CHAT_API_PROVIDER = "deepseek";
 const DEFAULT_CHAT_API_MODEL = "deepseek-v4-pro";
 const DEFAULT_MIN_REPLY_CHARS = 600;
@@ -520,7 +539,7 @@ function buildEnvContentFromDefaultEnvironment(values = {}) {
   }
   return [
     "# 由本機預設載入的環境設定。",
-    "# Discord Bot Token、Client ID 與對話 API Key 不會寫入預設。",
+    "# Discord、QQ Bot 憑證與對話 API Key 不會寫入預設。",
     ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
 }
@@ -541,7 +560,7 @@ function buildImportedEnvironmentContent(values = {}, currentContent = "") {
   }
   return [
     "# 由匯入的全局設定產生。",
-    "# 這台裝置原有的 Token、Client ID 與 API Key 已保留。",
+    "# 這台裝置原有的 Discord、QQ Bot 憑證與 API Key 已保留。",
     ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
 }
@@ -2549,12 +2568,24 @@ function normalizeConversationContextId(value = "") {
   if (normalized === LOCAL_CONVERSATION_CONTEXT_ID) {
     return normalized;
   }
-  return /^discord:\d+$/u.test(normalized) ? normalized : "";
+  if (/^discord:\d+$/u.test(normalized) || /^qq:c2c:[a-f0-9]{32}$/u.test(normalized)) {
+    return normalized;
+  }
+  return "";
 }
 
 function getDiscordConversationContextId(channelId = "") {
   const normalizedChannelId = safeText(channelId);
   return /^\d+$/u.test(normalizedChannelId) ? `discord:${normalizedChannelId}` : "";
+}
+
+function getQqConversationContextId(userOpenId = "") {
+  const normalizedOpenId = safeText(userOpenId);
+  if (!normalizedOpenId) {
+    return "";
+  }
+  const digest = crypto.createHash("sha256").update(normalizedOpenId).digest("hex").slice(0, 32);
+  return `qq:c2c:${digest}`;
 }
 
 function getConversationContextChannelId(contextId = "") {
@@ -2565,7 +2596,11 @@ function normalizeConversationContextMetadata(input = {}, contextId = "") {
   const source = input && typeof input === "object" ? input : {};
   const normalizedContextId = normalizeConversationContextId(contextId || source.id);
   const channelId = getConversationContextChannelId(normalizedContextId);
-  const type = normalizedContextId === LOCAL_CONVERSATION_CONTEXT_ID ? "local" : "discord";
+  const type = normalizedContextId === LOCAL_CONVERSATION_CONTEXT_ID
+    ? "local"
+    : normalizedContextId.startsWith("qq:c2c:")
+      ? "qq"
+      : "discord";
   return {
     id: normalizedContextId || LOCAL_CONVERSATION_CONTEXT_ID,
     type,
@@ -2573,7 +2608,8 @@ function normalizeConversationContextMetadata(input = {}, contextId = "") {
     guildId: type === "discord" ? safeText(source.guildId) : "",
     guildName: type === "discord" ? safeText(source.guildName) : "",
     channelName: type === "discord" ? safeText(source.channelName) : "",
-    userName: type === "discord" ? safeText(source.userName) : "",
+    qqUserOpenId: type === "qq" ? safeText(source.qqUserOpenId) : "",
+    userName: ["discord", "qq"].includes(type) ? safeText(source.userName) : "",
     updatedAt: safeText(source.updatedAt) || nowIso()
   };
 }
@@ -2593,7 +2629,9 @@ function getConversationContextFilePath(contextId = "") {
   const normalizedId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
   const fileName = normalizedId === LOCAL_CONVERSATION_CONTEXT_ID
     ? "local.json"
-    : `discord-${getConversationContextChannelId(normalizedId)}.json`;
+    : normalizedId.startsWith("qq:c2c:")
+      ? `qq-c2c-${normalizedId.slice("qq:c2c:".length)}.json`
+      : `discord-${getConversationContextChannelId(normalizedId)}.json`;
   return path.join(CONVERSATION_CONTEXTS_DIR, fileName);
 }
 
@@ -2733,6 +2771,10 @@ function getConversationContextLabel(metadata = {}, language = UI_LANGUAGE_TRADI
   if (metadata.id === LOCAL_CONVERSATION_CONTEXT_ID || metadata.type === "local") {
     return text("本地對話");
   }
+  if (metadata.type === "qq") {
+    const userLabel = metadata.userName || safeText(metadata.qqUserOpenId).slice(0, 8) || text("未知使用者");
+    return `${text("QQ 私聊")} · ${userLabel}`;
+  }
   if (metadata.guildName && metadata.channelName) {
     return `${metadata.guildName} #${metadata.channelName}`;
   }
@@ -2746,9 +2788,9 @@ function listConversationContexts(currentState) {
   const language = normalizeUiLanguage(currentState.uiLanguage);
   const assignments = normalizeConversationApiKeyAssignments(currentState.conversationApiKeyAssignments);
   const localMetadata = normalizeConversationContextMetadata({}, LOCAL_CONVERSATION_CONTEXT_ID);
-  const discordContexts = Object.values(normalizeConversationContextIndex(currentState.conversationContextIndex))
+  const remoteContexts = Object.values(normalizeConversationContextIndex(currentState.conversationContextIndex))
     .sort((left, right) => safeText(right.updatedAt).localeCompare(safeText(left.updatedAt)));
-  return [localMetadata, ...discordContexts].map((metadata) => {
+  return [localMetadata, ...remoteContexts].map((metadata) => {
     const assignment = assignments[metadata.id];
     return {
       ...metadata,
@@ -2768,7 +2810,7 @@ function switchSelectedConversationContext(currentState, requestedContextId = ""
     contextId !== LOCAL_CONVERSATION_CONTEXT_ID &&
     !currentState.conversationContextIndex?.[contextId]
   ) {
-    return { ok: false, error: "找不到這個 Discord 頻道故事。" };
+    return { ok: false, error: "找不到這個對話故事。" };
   }
   const currentContextId = normalizeConversationContextId(currentState.selectedConversationContextId) ||
     LOCAL_CONVERSATION_CONTEXT_ID;
@@ -2812,7 +2854,7 @@ function deleteConversationContext(currentState, requestedContextId = "") {
     return { ok: false, status: 400, error: "本地對話不可刪除。" };
   }
   if (!hasStoredConversationContext(currentState, contextId)) {
-    return { ok: false, status: 404, error: "找不到這個 Discord 頻道故事。" };
+    return { ok: false, status: 404, error: "找不到這個對話故事。" };
   }
 
   const selectedContextId = normalizeConversationContextId(currentState.selectedConversationContextId) ||
@@ -8302,13 +8344,48 @@ async function sendDiscordModelImageMessage(turnExtra = {}, imageMessage = null,
       })
       .filter(Boolean);
     const sent = await channel.send({
-      content: safeText(imageMessage.content) || "圖片生成完成",
+      content: discordSystemText(safeText(imageMessage.content) || "圖片生成完成"),
       ...(files.length > 0 ? { files } : {})
     });
     rememberDiscordReplyMessageIds(imageMessage, sent ? [sent] : []);
     return sent ? [sent] : [];
   } catch (error) {
     console.warn(`Discord 圖片訊息發送失敗：${safeText(error?.message) || error}`);
+    return [];
+  }
+}
+
+async function sendQqModelImageMessage(turnExtra = {}, imageMessage = null, generatedImages = []) {
+  const userOpenId = safeText(turnExtra.qqUserOpenId);
+  if (!userOpenId || !activeQqBotClient || !imageMessage) {
+    return [];
+  }
+  const replyToMessageId = safeText(turnExtra.qqMessageId);
+  try {
+    const sent = [];
+    const content = qqSystemText(safeText(imageMessage.content));
+    if (content) {
+      sent.push(...await activeQqBotClient.sendText({
+        userOpenId,
+        content,
+        replyToMessageId
+      }));
+    }
+    for (const image of Array.isArray(generatedImages) ? generatedImages : []) {
+      const parsed = parseImageDataUrl(image?.dataUrl || "");
+      if (!parsed) {
+        continue;
+      }
+      sent.push(await activeQqBotClient.sendImage({
+        userOpenId,
+        buffer: parsed.buffer,
+        fileName: safeText(image.fileName) || `novelai-${Date.now()}.${getImageExtensionFromMime(parsed.mimeType)}`,
+        replyToMessageId
+      }));
+    }
+    return sent.filter(Boolean);
+  } catch (error) {
+    console.warn(`QQ Bot 圖片訊息發送失敗：${safeText(error?.message) || error}`);
     return [];
   }
 }
@@ -8402,6 +8479,7 @@ async function appendModelImageGenerationMessage(result = {}, context = {}) {
   appendConversationMessage(message);
   saveState(state);
   await sendDiscordModelImageMessage(context.turnExtra, message, result.generatedImages || []);
+  await sendQqModelImageMessage(context.turnExtra, message, result.generatedImages || []);
   saveState(state);
   return message;
 }
@@ -9890,7 +9968,7 @@ function finalizeAssistantOutputContent(content = "", options = {}) {
     ? removeRepeatedOpeningUserEcho(unlabeledContent, userInput)
     : unlabeledContent;
   return {
-    content: stripLeadingContextRoundLabels(cleanedContent)
+    content: localizeSystemText(stripLeadingContextRoundLabels(cleanedContent), getUiLanguage())
   };
 }
 
@@ -9905,13 +9983,22 @@ function getAssistantAutoTimeWarning(message) {
 function formatAssistantMessageForUserDisplay(message) {
   let content = safeText(message?.content);
   if (!shouldDisplayCompressionNotice(message)) {
-    return [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n");
+    return localizeSystemText(
+      [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n"),
+      getUiLanguage()
+    );
   }
   if (content.startsWith(COMPRESSION_USER_NOTICE_TEXT)) {
-    return [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n");
+    return localizeSystemText(
+      [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n"),
+      getUiLanguage()
+    );
   }
   content = [COMPRESSION_USER_NOTICE_TEXT, content].filter(Boolean).join("\n\n");
-  return [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n");
+  return localizeSystemText(
+    [content, getAssistantAutoTimeWarning(message)].filter(Boolean).join("\n\n"),
+    getUiLanguage()
+  );
 }
 
 function hasUsageTokens(usage) {
@@ -10224,7 +10311,8 @@ async function callChatApiCompletionRaw({
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
-  const requestMessages = sanitizeChatApiMessagesForLog(messages);
+  const localizedMessages = localizeChatApiMessages(messages, getUiLanguage());
+  const requestMessages = sanitizeChatApiMessagesForLog(localizedMessages);
   if (!apiKey) {
     const placeholder = getMissingChatApiKeyPlaceholder(purpose);
     appendAiLog({
@@ -10270,7 +10358,7 @@ async function callChatApiCompletionRaw({
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,
-    messages,
+    messages: localizedMessages,
     responseFormat
   });
   let response;
@@ -10577,7 +10665,8 @@ async function callChatApiCompletionStreamRaw({
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
-  const requestMessages = sanitizeChatApiMessagesForLog(messages);
+  const localizedMessages = localizeChatApiMessages(messages, getUiLanguage());
+  const requestMessages = sanitizeChatApiMessagesForLog(localizedMessages);
 
   if (!apiKey) {
     const placeholder = getMissingChatApiKeyPlaceholder(purpose);
@@ -10629,7 +10718,7 @@ async function callChatApiCompletionStreamRaw({
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,
-    messages,
+    messages: localizedMessages,
     stream: true
   });
 
@@ -11219,6 +11308,10 @@ function statePayload(currentState) {
       clientId: getDiscordClientId(),
       authorizeUrl: getDiscordAuthorizeUrl()
     },
+    qqBot: {
+      enabled: Boolean(QQ_BOT_APP_ID && QQ_BOT_APP_SECRET),
+      connected: qqBotConnected
+    },
     conversationContexts: {
       selectedContextId: payloadState.selectedConversationContextId,
       items: listConversationContexts(payloadState)
@@ -11245,6 +11338,8 @@ if (
 let discordConnected = false;
 let activeDiscordClient = null;
 let discordLoginRetryTimer = null;
+let qqBotConnected = false;
+let activeQqBotClient = null;
 const activeDiscordArchiveReplays = new Map();
 const DISCORD_ARCHIVE_REPLAY_TTL_MS = 30 * 60 * 1000;
 let restartScheduled = false;
@@ -11295,6 +11390,12 @@ function scheduleServerRestart() {
       activeDiscordClient?.destroy?.();
     } catch (error) {
       console.warn(`Discord bot 關閉失敗：${safeText(error?.message) || "未知錯誤"}`);
+    }
+
+    try {
+      activeQqBotClient?.stop?.();
+    } catch (error) {
+      console.warn(`QQ Bot 關閉失敗：${safeText(error?.message) || "未知錯誤"}`);
     }
 
     try {
@@ -11389,6 +11490,17 @@ function getDiscordConversationContextOptions(source = {}) {
       userName: isDirectMessage
         ? safeText(user?.globalName || user?.displayName || user?.username)
         : ""
+    }
+  };
+}
+
+function getQqConversationContextOptions(source = {}) {
+  const userOpenId = safeText(source.userOpenId || source.author?.user_openid);
+  return {
+    contextId: getQqConversationContextId(userOpenId),
+    contextMetadata: {
+      qqUserOpenId: userOpenId,
+      userName: safeText(source.userName) || (userOpenId ? `QQ ${userOpenId.slice(0, 8)}` : "QQ 使用者")
     }
   };
 }
@@ -12171,7 +12283,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/env" && method === "GET") {
       sendJson(res, 200, {
         content: readEnvFileContentForEditor(),
-        restartHint: "對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
+        restartHint: "對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord／QQ Bot 憑證、Port、Slash 指令註冊等啟動期設定需要重啟 npm start。"
       });
       return;
     }
@@ -12207,7 +12319,7 @@ const server = http.createServer(async (req, res) => {
         chatApiKeyAssignmentsReset,
         promptImageActions,
         state: statePayload(state),
-        restartHint: "已保存 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord Bot Token、Port、Slash 指令註冊等啟動期設定仍建議重啟 npm start。"
+        restartHint: "已保存 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord／QQ Bot 憑證、Port、Slash 指令註冊等啟動期設定需要重啟 npm start。"
       });
       return;
     }
@@ -13325,16 +13437,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "GET") {
-      if (pathname === "/vendor/opencc-t2cn.js") {
-        if (!fs.existsSync(OPENCC_BROWSER_MODULE_FILE)) {
+      if (pathname === "/vendor/opencc-t2cn.js" || pathname === "/vendor/opencc-cn2t.js") {
+        const moduleFile = pathname === "/vendor/opencc-cn2t.js"
+          ? OPENCC_BROWSER_TRADITIONAL_MODULE_FILE
+          : OPENCC_BROWSER_MODULE_FILE;
+        if (!fs.existsSync(moduleFile)) {
           sendJson(res, 404, { error: "OpenCC browser module is unavailable." });
           return;
         }
-        const stat = fs.statSync(OPENCC_BROWSER_MODULE_FILE);
-        const headers = getStaticHeaders(OPENCC_BROWSER_MODULE_FILE, stat);
+        const stat = fs.statSync(moduleFile);
+        const headers = getStaticHeaders(moduleFile, stat);
         headers["Content-Length"] = String(stat.size);
         res.writeHead(200, headers);
-        fs.createReadStream(OPENCC_BROWSER_MODULE_FILE).pipe(res);
+        fs.createReadStream(moduleFile).pipe(res);
         return;
       }
       const relativePath = pathname === "/"
@@ -14106,7 +14221,7 @@ function buildDiscordStatusText() {
     `${discordSystemText("生成狀態: ")}${discordSystemText(isActiveGenerationRunning(getCurrentConversationContextId()) ? "生成中，可用 /stop 停止" : "閒置")}`,
     `${discordSystemText("自動對話頻道: ")}${state.lastDiscordChannelId ? `<#${state.lastDiscordChannelId}>` : discordSystemText("未指定")}`,
     `${discordSystemText("對話設定: 正式模式（API輸出模型=")}${getChatApiModel("reasoner_history_chat")}${discordSystemText("｜目前模式上下文=")}${normalizeDialogueContextRounds(activeConfig?.dialogueContextRounds)}${discordSystemText(" 輪｜模型內容=")}${discordSystemText(isContextCompressionEnabled(state) ? "啟用" : "停用")}${discordSystemText("）")}`,
-    `${discordSystemText("目前模式: ")}${getCurrentConversationTargetLabel(state)}`,
+    `${discordSystemText("目前模式: ")}${discordSystemText(getCurrentConversationTargetLabel(state))}`,
     `${discordSystemText("待播開場: ")}${discordSystemText(state.pendingOpeningBroadcast ? "是" : "否")}`,
     `${discordSystemText("玩家分配: ")}${playerLines.length > 0 ? playerLines.join("｜") : discordSystemText("尚未分配")}`
   ];
@@ -14264,8 +14379,11 @@ function loadDiscordArchiveIntoCurrentChannel(sessionId, archiveNumber, channelI
 }
 
 function buildDiscordArchiveLoadedHeader(result, mode) {
+  const sessionName = safeText(result.session?.name)
+    ? discordSystemText(result.session.name)
+    : discordSystemText("未命名存檔");
   const lines = [
-    `**${discordSystemText("已載入對話存檔")} ${result.number}：${safeText(result.session?.name) || discordSystemText("未命名存檔")}**`,
+    `**${discordSystemText("已載入對話存檔")} ${result.number}：${sessionName}**`,
     discordSystemText(mode === 0
       ? "以下從開場開始回放；實際對話狀態已位於存檔末端。"
       : "以下是存檔最後五回合，可以直接繼續對話。")
@@ -14462,11 +14580,480 @@ async function processDiscordChatTurn({
     });
 
     return {
-      pendingOpening,
+      pendingOpening: discordSystemText(pendingOpening),
       replyText: formatAssistantMessageForUserDisplay(result.assistantMessage),
       assistantMessage: result.assistantMessage,
       failed: result.failed
     };
+  } finally {
+    stopTyping();
+  }
+}
+
+function resolveQqStartTarget(requestedRoleCardNumber = 0) {
+  const roleCardNumber = normalizeDiscordRoleCardNumber(requestedRoleCardNumber, { allowCurrent: true });
+  if (roleCardNumber === null) {
+    return { error: "角色卡編號必須是 0 或正整數。" };
+  }
+  if (roleCardNumber > 0) {
+    const card = getDiscordRoleCardByNumber(state.roleCards, roleCardNumber);
+    if (!card) {
+      return {
+        error: state.roleCards.length > 0
+          ? `找不到角色卡 ${roleCardNumber}，目前可用編號為 1 至 ${state.roleCards.length}。`
+          : "目前沒有可使用的角色卡。"
+      };
+    }
+    return { card, assistant: null };
+  }
+
+  let card = getActiveRoleCard(state);
+  let assistant = getActiveAssistantCard(state);
+  if (!card && !assistant && displacedWebConversationContext?.snapshot) {
+    const webSnapshot = displacedWebConversationContext.snapshot;
+    assistant = getAssistantCardById(state, normalizeAssistantMode(webSnapshot.activeAssistantMode));
+    card = assistant
+      ? null
+      : state.roleCards.find((item) => item.id === safeText(webSnapshot.activeRoleCardId)) || null;
+  }
+  if (!card && !assistant) {
+    return { error: "尚未選擇角色卡或助手。請先到網頁選擇，或輸入 !ai_start 角色卡編號。" };
+  }
+  return { card, assistant };
+}
+
+function startQqSessionLocked({
+  contextId,
+  userOpenId,
+  userName,
+  requestedRoleCardNumber = 0,
+  requestedOpeningNumber = null
+} = {}) {
+  const target = resolveQqStartTarget(requestedRoleCardNumber);
+  if (target.error) {
+    return { ok: false, error: target.error };
+  }
+  const { card, assistant } = target;
+  const hasRequestedOpening = requestedOpeningNumber !== null && requestedOpeningNumber !== undefined;
+  if (assistant && hasRequestedOpening) {
+    return { ok: false, error: "助手模式沒有角色卡開場，請不要輸入開場編號。" };
+  }
+
+  let selectedOpening = null;
+  if (card) {
+    const openings = normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue)
+      .filter((entry) => safeText(entry.content));
+    if (openings.length > 0) {
+      const openingNumber = hasRequestedOpening
+        ? normalizeDiscordRoleCardNumber(requestedOpeningNumber)
+        : 1;
+      if (!openingNumber || !openings[openingNumber - 1]) {
+        return {
+          ok: false,
+          error: `找不到開場 ${requestedOpeningNumber || 1}，這張角色卡可用開場為 1 至 ${openings.length}。`
+        };
+      }
+      selectedOpening = openings[openingNumber - 1];
+    } else if (hasRequestedOpening) {
+      return { ok: false, error: "這張角色卡沒有可選擇的開場內容。" };
+    }
+  }
+
+  const keyAssignment = assignConversationApiKeyGroup(state, { contextId, forceNew: true });
+  if (!keyAssignment.ok) {
+    return { ok: false, error: keyAssignment.error };
+  }
+
+  state.activeRoleCardId = card?.id || null;
+  state.activeAssistantMode = assistant?.id || null;
+  state.aiSessionStarted = true;
+  state.pendingOpeningBroadcast = false;
+  state.selectedOpeningDialogueId = selectedOpening?.id || "";
+  state.lastDiscordChannelId = "";
+  state.activeSavedSessionId = null;
+  resetDiscordPlayerAssignments(state, "");
+  resetConversationProgress(state, { resetTimeTracking: !assistant });
+  state.roleCardRuntimeState = {};
+  resetGeneratedBackendContextPreservingManual(state);
+
+  if (assistant) {
+    const openingMessage = appendAssistantOpeningMessage(state, assistant, {
+      platform: "qq",
+      qqUserOpenId: userOpenId,
+      qqUserName: userName
+    });
+    saveState(state);
+    return {
+      ok: true,
+      openingDialogue: openingMessage?.content || "",
+      targetName: assistant.name
+    };
+  }
+
+  const resolvedUserName = resolveUserDisplayName(state.userProfile, userName);
+  const openingDialogue = injectUserPlaceholder(selectedOpening?.content, resolvedUserName, card.name);
+  if (openingDialogue) {
+    updateTimeTrackingFromText(state, openingDialogue, { allowBareTimeExpressions: true });
+    appendConversationMessage(createMessageRecord({
+      role: "assistant",
+      content: openingDialogue,
+      source: "opening",
+      extra: {
+        roleCardId: card.id,
+        platform: "qq",
+        qqUserOpenId: userOpenId,
+        qqUserName: userName,
+        stateAfterTurnSnapshot: captureNarrativeCheckpoint(state)
+      }
+    }));
+  }
+  saveState(state);
+  return { ok: true, openingDialogue, targetName: card.name };
+}
+
+async function startQqSession(options = {}) {
+  const contextId = getQqConversationContextId(options.userOpenId);
+  return withStateLock(() => startQqSessionLocked({ ...options, contextId }), {
+    ...options.contextOptions,
+    contextId
+  });
+}
+
+async function ensureQqConversationStarted({ userOpenId, userName, contextOptions = {} } = {}) {
+  const contextId = getQqConversationContextId(userOpenId);
+  return withStateLock(() => {
+    if (state.aiSessionStarted && hasActiveConversationTarget(state)) {
+      return { ok: true, openingDialogue: "" };
+    }
+    return startQqSessionLocked({ contextId, userOpenId, userName });
+  }, {
+    ...contextOptions,
+    contextId
+  });
+}
+
+async function readQqImageAttachments(attachments = []) {
+  const normalized = (Array.isArray(attachments) ? attachments : [])
+    .filter((attachment) => isSupportedChatImageAttachment(attachment))
+    .map((attachment, index) => ({
+      url: safeText(attachment.url),
+      name: safeText(attachment.filename || attachment.name) || `qq-image-${index + 1}`,
+      filename: safeText(attachment.filename || attachment.name),
+      contentType: safeText(attachment.content_type || attachment.contentType),
+      size: Number(attachment.size || 0)
+    }));
+  return readDiscordImageAttachments(normalized);
+}
+
+function startQqTypingIndicator(client, userOpenId, replyToMessageId) {
+  if (!client || !userOpenId || !replyToMessageId) {
+    return () => {};
+  }
+  const tick = () => client.sendTyping({ userOpenId, replyToMessageId }).catch(() => {});
+  void tick();
+  const timer = setInterval(tick, 50_000);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+function qqSystemText(value = "") {
+  return localizeSystemText(value, getUiLanguage());
+}
+
+function parseQqPositiveInteger(value, fallback = null) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function buildQqCurrentStatusText() {
+  const targetName = getCurrentConversationTargetLabel(state);
+  const totalTurns = normalizeTurnState(state.turnState, state).totalUserTurns;
+  return [
+    `${qqSystemText("目前角色：")}${qqSystemText(targetName)}`,
+    `${qqSystemText("故事狀態：")}${qqSystemText(state.aiSessionStarted ? "已開始" : "未開始")}`,
+    `${qqSystemText("目前回合：")}${totalTurns}`
+  ].join("\n");
+}
+
+function buildQqRoleCardListText(pageInput = 1) {
+  const pageSize = 10;
+  const cards = Array.isArray(state.roleCards) ? state.roleCards : [];
+  if (cards.length === 0) {
+    return qqSystemText("目前沒有角色卡，請先到網頁建立或匯入角色卡。");
+  }
+  const pageCount = Math.max(1, Math.ceil(cards.length / pageSize));
+  const page = Math.min(Math.max(1, pageInput), pageCount);
+  const start = (page - 1) * pageSize;
+  const lines = [
+    `${qqSystemText("角色卡列表")} ${page} / ${pageCount}`,
+    ...cards.slice(start, start + pageSize).map((card, index) => {
+      const number = start + index + 1;
+      const openingCount = normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue)
+        .filter((entry) => safeText(entry.content)).length;
+      const current = card.id === state.activeRoleCardId ? ` ${qqSystemText("（目前使用）")}` : "";
+      const cardName = safeText(card.name) ? qqSystemText(card.name) : qqSystemText("未命名角色卡");
+      return `${number}. ${cardName}${current} · ${qqSystemText("開場")} ${openingCount}`;
+    }),
+    qqSystemText("開始方式：!ai_start 角色卡編號 開場編號")
+  ];
+  if (pageCount > 1) {
+    lines.push(`${qqSystemText("換頁：!ai_status 2 頁數（1 至")} ${pageCount}）`);
+  }
+  return lines.join("\n");
+}
+
+function buildQqArchivePageText(conversation = [], { latest = false } = {}) {
+  const transcript = buildDiscordArchiveTranscript(conversation);
+  const startOffset = latest ? Math.max(0, transcript.rounds.length - 5) : 0;
+  const rounds = transcript.rounds.slice(startOffset, startOffset + 5);
+  const blocks = [];
+  if (!latest) {
+    transcript.openings.forEach((message) => {
+      blocks.push(`${qqSystemText("開場白")}\n${safeText(message.content) ? qqSystemText(message.content) : qqSystemText("（空白訊息）")}`);
+    });
+  }
+  rounds.forEach((round, index) => {
+    const turnNumber = Number(round.user?.turnNumber ?? round.user?.extra?.turnNumber) || startOffset + index + 1;
+    const messages = [
+      `${qqSystemText(`使用者｜第 ${turnNumber} 回合`)}\n${safeText(round.user?.content) ? qqSystemText(round.user.content) : qqSystemText("（空白訊息）")}`
+    ];
+    if (round.assistant) {
+      messages.push(`${qqSystemText("AI")}\n${safeText(round.assistant.content) ? qqSystemText(round.assistant.content) : qqSystemText("（空白訊息）")}`);
+    }
+    blocks.push(messages.join("\n\n"));
+  });
+  return blocks.join("\n\n────────\n\n") || qqSystemText("這個存檔沒有可回放的文字對話。");
+}
+
+function buildQqArchivePreviewText(archiveNumber = 1) {
+  const resolved = getDiscordArchiveByNumber(state.savedSessions, archiveNumber);
+  if (!resolved) {
+    const total = Array.isArray(state.savedSessions) ? state.savedSessions.length : 0;
+    return {
+      ok: false,
+      error: total > 0
+        ? `${qqSystemText("找不到存檔")} ${archiveNumber}，${qqSystemText("目前可用編號為 1 至")} ${total}。`
+        : qqSystemText("目前沒有對話存檔。")
+    };
+  }
+  const detail = buildSavedSessionDetail(resolved.session);
+  return {
+    ok: true,
+    text: [
+      `${qqSystemText("對話存檔")} ${resolved.number} / ${state.savedSessions.length}`,
+      `${qqSystemText("名稱：")}${safeText(detail.name) ? qqSystemText(detail.name) : qqSystemText("未命名存檔")}`,
+      `${qqSystemText("角色：")}${safeText(detail.roleCardName) ? qqSystemText(detail.roleCardName) : qqSystemText("未指定角色")}`,
+      `${qqSystemText("最後對話：")}\n${buildQqArchivePageText(detail.conversation, { latest: true })}`,
+      `${qqSystemText("從最後繼續：")}!archive_return 1 ${resolved.number}`,
+      `${qqSystemText("查看開頭：")}!archive_return 0 ${resolved.number}`
+    ].join("\n\n")
+  };
+}
+
+async function handleQqTextCommand(command, { userOpenId, userName, qqMessageId, contextOptions }) {
+  const reply = (content) => activeQqBotClient.sendText({
+    userOpenId,
+    content,
+    replyToMessageId: qqMessageId
+  });
+  if (!command.known) {
+    await reply(`${qqSystemText("未知的 QQ 指令。")}\n\n${qqSystemText(buildQqHelpText())}`);
+    return;
+  }
+  if (command.name === "help") {
+    await reply(qqSystemText(buildQqHelpText()));
+    return;
+  }
+
+  const contextId = getQqConversationContextId(userOpenId);
+  if (command.name === "stop") {
+    const stopped = requestStopActiveGeneration(contextId);
+    await reply(qqSystemText(stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"));
+    return;
+  }
+  if (command.name === "close") {
+    requestStopActiveGeneration(contextId);
+    const result = await withStateLock(() => deleteConversationContext(state, contextId));
+    await reply(qqSystemText(result.ok
+      ? "已關閉並刪除目前 QQ 故事；已建立的對話存檔仍然保留。"
+      : result.error));
+    return;
+  }
+  if (command.name === "ai_start") {
+    const roleCardNumber = command.args[0] === undefined ? 0 : Number(command.args[0]);
+    const openingNumber = command.args[1] === undefined ? null : Number(command.args[1]);
+    requestStopActiveGeneration(contextId);
+    const result = await startQqSession({
+      userOpenId,
+      userName,
+      requestedRoleCardNumber: roleCardNumber,
+      requestedOpeningNumber: openingNumber,
+      contextOptions
+    });
+    if (!result.ok) {
+      await reply(qqSystemText(result.error));
+      return;
+    }
+    await reply(result.openingDialogue
+      ? qqSystemText(result.openingDialogue)
+      : `${qqSystemText("已開始：")}${qqSystemText(result.targetName)}`);
+    return;
+  }
+  if (command.name === "ai_status") {
+    const mode = Number(command.args[0] ?? 1);
+    if (![1, 2].includes(mode)) {
+      await reply(qqSystemText("請輸入 !ai_status 1 查看狀態，或 !ai_status 2 [頁數] 查看角色卡。"));
+      return;
+    }
+    const text = await withStateLock(() => mode === 1
+      ? buildQqCurrentStatusText()
+      : buildQqRoleCardListText(parseQqPositiveInteger(command.args[1], 1) || 1), contextOptions);
+    await reply(text);
+    return;
+  }
+  if (command.name === "archive") {
+    const action = Number(command.args[0]);
+    if (![0, 1].includes(action)) {
+      await reply(qqSystemText("請輸入 !archive 0 [名稱] 保存，或 !archive 1 [存檔編號] 查看存檔。"));
+      return;
+    }
+    if (action === 0) {
+      const inputName = safeText(command.rawArguments.replace(/^\S+\s*/u, ""));
+      const defaultName = `${qqSystemText("對話存檔")} ${new Date().toLocaleString(getUiLanguage() === "zh-Hans" ? "zh-CN" : "zh-Hant")}`;
+      const created = await withStateLock(() => {
+        const session = createSavedSessionFromCurrentState(state, inputName || defaultName);
+        saveState(state);
+        return buildSavedSessionSummary(session);
+      }, contextOptions);
+      await reply(`${qqSystemText("已保存對話存檔：")}${qqSystemText(created.name)}`);
+      return;
+    }
+    const archiveNumber = parseQqPositiveInteger(command.args[1], 1);
+    if (!archiveNumber) {
+      await reply(qqSystemText("存檔編號必須是 1 以上的整數。"));
+      return;
+    }
+    const preview = await withStateLock(() => buildQqArchivePreviewText(archiveNumber), contextOptions);
+    await reply(preview.ok ? preview.text : preview.error);
+    return;
+  }
+  if (command.name === "archive_return") {
+    const mode = Number(command.args[0]);
+    const archiveNumber = parseQqPositiveInteger(command.args[1]);
+    if (![0, 1].includes(mode) || !archiveNumber) {
+      await reply(qqSystemText("請輸入 !archive_return <0|1> <存檔編號>。"));
+      return;
+    }
+    requestStopActiveGeneration(contextId);
+    const loaded = await withStateLock(() => {
+      const resolved = getDiscordArchiveByNumber(state.savedSessions, archiveNumber);
+      if (!resolved) {
+        return null;
+      }
+      const detail = buildSavedSessionDetail(resolved.session);
+      const session = loadSavedSessionIntoRuntime(state, resolved.session.id);
+      if (!session) {
+        return null;
+      }
+      state.lastDiscordChannelId = "";
+      resetDiscordPlayerAssignments(state, "");
+      saveState(state);
+      return {
+        session: buildSavedSessionSummary(session),
+        conversation: detail.conversation,
+        canContinue: Boolean(state.aiSessionStarted && hasActiveConversationTarget(state))
+      };
+    }, contextOptions);
+    if (!loaded) {
+      await reply(qqSystemText("找不到指定的對話存檔。"));
+      return;
+    }
+    const lines = [
+      `${qqSystemText("已載入對話存檔：")}${qqSystemText(loaded.session.name)}`,
+      qqSystemText(mode === 0
+        ? "以下顯示開場及最初五回合；故事狀態已位於存檔末端。"
+        : "以下顯示最後五回合，可以直接繼續對話。"),
+      buildQqArchivePageText(loaded.conversation, { latest: mode === 1 })
+    ];
+    if (!loaded.canContinue) {
+      lines.push(qqSystemText("原角色卡或助手已不存在；請先使用 !ai_start 選擇角色。"));
+    }
+    await reply(lines.filter(Boolean).join("\n\n"));
+  }
+}
+
+async function handleQqC2cMessage(message = {}) {
+  const userOpenId = safeText(message.author?.user_openid);
+  const qqMessageId = safeText(message.id);
+  if (!userOpenId || !qqMessageId || !activeQqBotClient) {
+    return;
+  }
+  const userName = `QQ ${userOpenId.slice(0, 8)}`;
+  const contextOptions = getQqConversationContextOptions({ userOpenId, userName });
+  const command = parseQqTextCommand(message.content);
+  if (command) {
+    await handleQqTextCommand(command, {
+      userOpenId,
+      userName,
+      qqMessageId,
+      contextOptions
+    });
+    return;
+  }
+  const images = await readQqImageAttachments(message.attachments);
+  const content = safeText(message.content) || (images.length > 0 ? DEFAULT_IMAGE_ONLY_USER_CONTENT : "");
+  if (!content) {
+    await activeQqBotClient.sendText({
+      userOpenId,
+      content: qqSystemText("請輸入對話內容，或附加 PNG、JPEG、WebP、GIF 圖片。"),
+      replyToMessageId: qqMessageId
+    });
+    return;
+  }
+
+  const stopTyping = startQqTypingIndicator(activeQqBotClient, userOpenId, qqMessageId);
+  try {
+    const started = await ensureQqConversationStarted({ userOpenId, userName, contextOptions });
+    if (!started.ok) {
+      await activeQqBotClient.sendText({
+        userOpenId,
+        content: qqSystemText(started.error),
+        replyToMessageId: qqMessageId
+      });
+      return;
+    }
+    if (started.openingDialogue) {
+      await activeQqBotClient.sendText({
+        userOpenId,
+        content: qqSystemText(started.openingDialogue),
+        replyToMessageId: qqMessageId
+      });
+    }
+
+    const result = await runConversationTurn({
+      content,
+      images,
+      source: "qq",
+      contextOptions,
+      extra: {
+        platform: "qq",
+        qqUserOpenId: userOpenId,
+        qqUserName: userName,
+        qqMessageId
+      }
+    });
+    const failureText = getFailedConversationReplyText(result);
+    const replyText = failureText || formatAssistantMessageForUserDisplay(result.assistantMessage);
+    if (replyText) {
+      await activeQqBotClient.sendText({
+        userOpenId,
+        content: qqSystemText(replyText),
+        replyToMessageId: qqMessageId
+      });
+    }
   } finally {
     stopTyping();
   }
@@ -14655,7 +15242,7 @@ async function handleSlashCommand(interaction) {
         return buildSavedSessionSummary(session);
       }, getDiscordConversationContextOptions(interaction));
       await interaction.editReply({
-        content: `${discordSystemText("已保存對話存檔：")}${created.name}`,
+        content: `${discordSystemText("已保存對話存檔：")}${discordSystemText(created.name)}`,
         allowedMentions: { parse: [] }
       });
       return;
@@ -14827,7 +15414,7 @@ async function handleSlashCommand(interaction) {
     const templateId = interaction.options.getString("template") || "";
     const inside = interaction.options.getString("inside") || "";
     const message = interaction.options.getString("message") || "";
-    const built = buildQuickSendContent(templateId, inside, message);
+    const built = buildQuickSendContent(templateId, inside, message, getUiLanguage());
     if (!built.ok) {
       await safeSendInteractionText(interaction, discordSystemText(built.error), { ephemeral: true });
       return;
@@ -14883,7 +15470,7 @@ async function handleSlashCommand(interaction) {
       await interaction.editReply(discordSystemText(result.error));
       return;
     }
-    await sendInteractionPublicLongReply(interaction, result.openingDialogue);
+    await sendInteractionPublicLongReply(interaction, discordSystemText(result.openingDialogue));
     return;
   }
 
@@ -14985,6 +15572,56 @@ function startDiscordLoginWithRetry(discordClient) {
   };
 
   void login();
+}
+
+function setupQqBot() {
+  if (!QQ_BOT_APP_ID && !QQ_BOT_APP_SECRET) {
+    console.log("QQ Bot 未啟用：未設定 QQ_BOT_APP_ID 與 QQ_BOT_APP_SECRET。");
+    return;
+  }
+  if (!QQ_BOT_APP_ID || !QQ_BOT_APP_SECRET) {
+    console.error("QQ Bot 設定不完整：QQ_BOT_APP_ID 與 QQ_BOT_APP_SECRET 必須同時填寫。");
+    return;
+  }
+
+  const qqClient = createQqBotClient({
+    appId: QQ_BOT_APP_ID,
+    appSecret: QQ_BOT_APP_SECRET,
+    onStatus({ connected, detail }) {
+      const changed = qqBotConnected !== connected;
+      qqBotConnected = connected;
+      if (changed || detail) {
+        console.log(`QQ Bot ${connected ? "已連線" : "未連線"}${detail ? `：${detail}` : ""}`);
+      }
+    },
+    async onMessage(message) {
+      const userOpenId = safeText(message.author?.user_openid);
+      if (!isAllowedQqUser(userOpenId, QQ_ALLOWED_USER_OPENID)) {
+        return;
+      }
+      try {
+        await handleQqC2cMessage(message);
+      } catch (error) {
+        console.error(`QQ Bot 私聊處理失敗（user=${userOpenId || "unknown"}）：${error.message || error}`);
+        if (userOpenId && safeText(message.id)) {
+          try {
+            await qqClient.sendText({
+              userOpenId,
+              content: `處理失敗：${error.message || "未知錯誤"}`,
+              replyToMessageId: message.id
+            });
+          } catch (sendError) {
+            console.warn(`QQ Bot 私聊錯誤回覆失敗：${sendError.message || sendError}`);
+          }
+        }
+      }
+    }
+  });
+  activeQqBotClient = qqClient;
+  void qqClient.start().catch((error) => {
+    qqBotConnected = false;
+    console.error(`QQ Bot 啟動失敗：${error.message || error}`);
+  });
 }
 
 function setupDiscordBot() {
@@ -15239,4 +15876,5 @@ server.listen(PORT, () => {
   ];
   console.log(lines.join("\n"));
   setupDiscordBot();
+  setupQqBot();
 });

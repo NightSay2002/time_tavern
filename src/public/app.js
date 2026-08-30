@@ -323,19 +323,19 @@ const CHAT_COMMAND_MENU_ITEMS = [
   },
   {
     id: "quick-next-scene",
-    command: "｛推进剧情到下一个场景｝",
-    title: "推进剧情到下一个场景",
+    command: "｛推進劇情到下一個場景｝",
+    title: "推進劇情到下一個場景",
     description: "填入快捷劇情指令到輸入欄，不會立即送出。",
     hint: "填入",
-    insert: "｛推进剧情到下一个场景｝"
+    insert: "｛推進劇情到下一個場景｝"
   },
   {
     id: "quick-time-passes",
-    command: "｛时间流逝——｝",
-    title: "时间流逝——",
+    command: "｛時間流逝——｝",
+    title: "時間流逝——",
     description: "填入時間流逝快捷指令到輸入欄，不會立即送出。",
     hint: "填入",
-    insert: "｛时间流逝——｝"
+    insert: "｛時間流逝——｝"
   },
   {
     id: "quick-continue",
@@ -454,6 +454,34 @@ const ENV_FIELD_GROUPS = [
         type: "number",
         placeholder: "1048576",
         help: "單位 bytes。1048576 = 1 MB。"
+      }
+    ]
+  },
+  {
+    title: "QQ 官方 Bot",
+    description: "只處理 QQ 私聊 C2C；不處理群聊、頻道或主動通知。AppID 或 AppSecret 變更後需要重啟。",
+    fields: [
+      {
+        key: "QQ_BOT_APP_ID",
+        label: "QQ Bot AppID",
+        type: "text",
+        autocomplete: "off",
+        help: "QQ 開放平台機器人的 AppID。"
+      },
+      {
+        key: "QQ_BOT_APP_SECRET",
+        label: "QQ Bot AppSecret",
+        type: "password",
+        autocomplete: "off",
+        help: "QQ 開放平台機器人的 AppSecret；只保存於本機 .env。"
+      },
+      {
+        key: "QQ_ALLOWED_USER_OPENID",
+        label: "指定 OpenID only",
+        type: "text",
+        autocomplete: "off",
+        placeholder: "QQ user_openid",
+        help: "選填。設定後只回應此 QQ OpenID 的私聊訊息。"
       }
     ]
   },
@@ -3455,7 +3483,7 @@ function onCoverCropPointerUp(event) {
 }
 
 function showToast(message, type = "ok") {
-  el.toast.textContent = message;
+  el.toast.textContent = getUiLanguageText(message);
   el.toast.className = `toast show${type === "error" ? " error" : ""}`;
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => {
@@ -3959,7 +3987,7 @@ async function runChatCommandMenuItem(item) {
     return;
   }
   if (item.insert) {
-    insertChatCommandTemplate(item.insert);
+    insertChatCommandTemplate(getUiLanguageText(item.insert));
     return;
   }
   await runChatCommandAction(item.action);
@@ -4246,8 +4274,7 @@ function createAssistantPickerTile(assistantCard, state) {
   const title = document.createElement("h4");
   const assistantName = getAssistantCardName(assistantCard);
   const assistantNameText = document.createElement("span");
-  assistantNameText.dataset.uiLanguageSkip = "true";
-  assistantNameText.textContent = assistantName;
+  assistantNameText.textContent = getUiLanguageText(assistantName);
   title.appendChild(assistantNameText);
   if (state.activeAssistantMode === assistantCard?.id) {
     title.append("（目前使用）");
@@ -4257,8 +4284,9 @@ function createAssistantPickerTile(assistantCard, state) {
   intro.className = "role-picker-intro";
   intro.append("簡介：");
   const assistantDescription = document.createElement("span");
-  assistantDescription.dataset.uiLanguageSkip = "true";
-  assistantDescription.textContent = assistantCard?.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION;
+  assistantDescription.textContent = getUiLanguageText(
+    assistantCard?.description || DEFAULT_ASSISTANT_CARD_DESCRIPTION
+  );
   intro.appendChild(assistantDescription);
 
   const content = document.createElement("p");
@@ -4309,8 +4337,7 @@ function createRoleCardPickerTile(card, state) {
 
   const title = document.createElement("h4");
   const roleCardName = document.createElement("span");
-  roleCardName.dataset.uiLanguageSkip = "true";
-  roleCardName.textContent = card.name || getUiLanguageText("未命名角色卡");
+  roleCardName.textContent = getUiLanguageText(card.name || "未命名角色卡");
   title.appendChild(roleCardName);
   if (state.activeRoleCardId === card.id) {
     title.append("（目前使用）");
@@ -4320,16 +4347,17 @@ function createRoleCardPickerTile(card, state) {
   intro.className = "role-picker-intro";
   intro.append("簡介：");
   const roleCardIntro = document.createElement("span");
-  roleCardIntro.dataset.uiLanguageSkip = "true";
-  roleCardIntro.textContent = truncateText(buildRoleCardIntro(card, state) || getUiLanguageText("未填簡介"), 120);
+  roleCardIntro.textContent = truncateText(
+    getUiLanguageText(buildRoleCardIntro(card, state) || "未填簡介"),
+    120
+  );
   intro.appendChild(roleCardIntro);
 
   const content = document.createElement("p");
   content.className = "role-picker-content";
   content.append("內容：");
   const roleCardContent = document.createElement("span");
-  roleCardContent.dataset.uiLanguageSkip = "true";
-  roleCardContent.textContent = truncateText(buildRoleCardContent(card, state), 190);
+  roleCardContent.textContent = truncateText(getUiLanguageText(buildRoleCardContent(card, state)), 190);
   content.appendChild(roleCardContent);
 
   const actions = document.createElement("div");
@@ -4370,7 +4398,12 @@ function createRoleCardPickerTile(card, state) {
   deleteBtn.addEventListener("click", () => removeRoleCard(card));
 
   actions.append(startBtn, editBtn, exportBtn, deleteBtn);
-  tile.append(createPickerCover(card.coverImage, card.name || "封面", card.coverPosition), title, intro, actions);
+  tile.append(
+    createPickerCover(card.coverImage, getUiLanguageText(card.name || "封面"), card.coverPosition),
+    title,
+    intro,
+    actions
+  );
   return tile;
 }
 
@@ -4457,7 +4490,7 @@ function createSessionBook(session, index) {
   if (selectedSessionPreviewId === session.id) {
     item.classList.add("previewing");
   }
-  item.title = `預覽「${session.name || "未命名存檔"}」`;
+  item.title = getUiLanguageText(`預覽「${session.name || "未命名存檔"}」`);
   item.setAttribute("aria-label", item.title);
   item.addEventListener("click", () => previewSession(session.id));
 
@@ -4466,8 +4499,7 @@ function createSessionBook(session, index) {
 
   const title = document.createElement("strong");
   title.className = "session-book-title";
-  title.dataset.uiLanguageSkip = "true";
-  title.textContent = session.name || "未命名存檔";
+  title.textContent = getUiLanguageText(session.name || "未命名存檔");
 
   const meta = document.createElement("span");
   meta.className = "session-book-meta";
@@ -4494,16 +4526,15 @@ function renderSessionPreview(session = {}, options = {}) {
     conversation.length
   );
   if (el.sessionPreviewTitle) {
-    el.sessionPreviewTitle.dataset.uiLanguageSkip = "true";
-    el.sessionPreviewTitle.textContent = session.name || "存檔預覽";
+    delete el.sessionPreviewTitle.dataset.uiLanguageSkip;
+    el.sessionPreviewTitle.textContent = getUiLanguageText(session.name || "存檔預覽");
   }
   if (el.sessionPreviewMeta) {
     const updatedText = session.updatedAt
-      ? new Date(session.updatedAt).toLocaleString("zh-Hant")
-      : "未知時間";
+      ? new Date(session.updatedAt).toLocaleString(uiLanguageController.isSimplified() ? "zh-CN" : "zh-Hant")
+      : getUiLanguageText("未知時間");
     const roleName = document.createElement("span");
-    roleName.dataset.uiLanguageSkip = "true";
-    roleName.textContent = getSessionRoleCardLabel(session);
+    roleName.textContent = getUiLanguageText(getSessionRoleCardLabel(session));
     el.sessionPreviewMeta.replaceChildren(
       roleName,
       `｜${conversation.length} 則訊息｜${updatedText}`
@@ -4539,8 +4570,7 @@ function renderSessionPreview(session = {}, options = {}) {
     author.append(`#${actualIndex + 1} `);
     if (message.role === "assistant") {
       const authorName = document.createElement("span");
-      authorName.dataset.uiLanguageSkip = "true";
-      authorName.textContent = getSessionRoleCardLabel(session);
+      authorName.textContent = getUiLanguageText(getSessionRoleCardLabel(session));
       author.appendChild(authorName);
     } else {
       author.append("使用者");
@@ -4551,7 +4581,7 @@ function renderSessionPreview(session = {}, options = {}) {
 
     const body = document.createElement("div");
     body.className = "session-preview-message-body markdown-body";
-    body.innerHTML = renderMarkdownToHtml(message.content || "", {
+    body.innerHTML = renderMarkdownToHtml(getUiLanguageText(message.content || ""), {
       allowHtml: message.role === "assistant"
     });
 
@@ -4932,7 +4962,7 @@ function getMessageAuthorInfo(message = {}, state = appState) {
   return {
     name: display.userName,
     avatar: display.userAvatar,
-    badge: message.source === "discord" ? "Discord" : ""
+    badge: message.source === "discord" ? "Discord" : message.source === "qq" ? "QQ" : ""
   };
 }
 
@@ -5137,22 +5167,30 @@ function getChatInputPlaceholder(state = appState, display = getWebDisplayConfig
   if (!hasConversationTarget) {
     return isMobileLayout() ? "請先選擇卡" : "請先選擇卡或啟用助手";
   }
-  return isMobileLayout() ? "輸入訊息" : `傳送訊息給 ${display.aiName || "AI"}`;
+  return getUiLanguageText(
+    isMobileLayout() ? "輸入訊息" : `傳送訊息給 ${display.aiName || "AI"}`
+  );
 }
 
 function renderChatHeader(state = appState) {
   const display = getWebDisplayConfig(state);
   const activeCard = getActiveRoleCardFromState(state);
+  const selectedContextId = String(
+    state?.conversationContexts?.selectedContextId || state?.selectedConversationContextId || "local"
+  );
+  const selectedContext = (state?.conversationContexts?.items || [])
+    .find((context) => String(context?.id || "") === selectedContextId);
   if (el.chatHeaderTitle) {
-    el.chatHeaderTitle.textContent = display.aiName || "時分居酒屋";
+    el.chatHeaderTitle.textContent = getUiLanguageText(display.aiName || "時分居酒屋");
   }
   if (el.chatHeaderSubtitle) {
-    el.chatHeaderSubtitle.textContent = state?.aiSessionStarted
+    const subtitle = state?.aiSessionStarted
       ? [
           activeCard?.name ? `角色卡：${activeCard.name}` : isAssistantActive(state) ? getActiveAssistantName(state) : "對話已開始",
-          state?.discord?.connected ? "Discord 已連線" : "本地對話"
+          selectedContext?.label || "本地對話"
         ].filter(Boolean).join("｜")
       : "選擇卡後開始對話";
+    el.chatHeaderSubtitle.textContent = getUiLanguageText(subtitle);
   }
   if (el.chatHeaderAvatar) {
     el.chatHeaderAvatar.innerHTML = "";
@@ -5216,7 +5254,8 @@ function renderMessages(state, options = {}) {
       wrapper.dataset.messageId = message.id;
     }
 
-    const avatar = createAvatarElement(author.avatar, author.name, message.role);
+    const localizedAuthorName = getUiLanguageText(author.name);
+    const avatar = createAvatarElement(author.avatar, localizedAuthorName, message.role);
 
     const body = document.createElement("div");
     body.className = "discord-message-body";
@@ -5226,8 +5265,7 @@ function renderMessages(state, options = {}) {
 
     const name = document.createElement("span");
     name.className = "discord-message-author";
-    name.dataset.uiLanguageSkip = "true";
-    name.textContent = author.name;
+    name.textContent = localizedAuthorName;
 
     header.appendChild(name);
     if (author.badge) {
@@ -5273,7 +5311,7 @@ function renderMessages(state, options = {}) {
     );
     const fullContentBody = document.createElement("div");
     fullContentBody.className = "markdown-body";
-    fullContentBody.innerHTML = renderMarkdownToHtml(fullContent, {
+    fullContentBody.innerHTML = renderMarkdownToHtml(getUiLanguageText(fullContent), {
       allowHtml: message.role === "assistant"
     });
     if (message.role === "assistant" && (message.compressionNotice || message.extra?.compressionNotice)) {
@@ -5291,7 +5329,7 @@ function renderMessages(state, options = {}) {
     if (message.role === "assistant" && autoTimeWarning) {
       const timeWarningNotice = document.createElement("div");
       timeWarningNotice.className = "auto-time-warning-notice";
-      timeWarningNotice.textContent = autoTimeWarning;
+      timeWarningNotice.textContent = getUiLanguageText(autoTimeWarning);
       content.appendChild(timeWarningNotice);
     }
     const imageAttachments = getMessageImageAttachments(message);
@@ -5529,7 +5567,10 @@ function populateAiLogBody(body, log, contentStore, usageText) {
   requestLabel.textContent = "送給 AI 的內容";
   const requestArea = document.createElement("pre");
   requestArea.className = "ai-log-block";
-  requestArea.textContent = formatAiLogMessages(log.requestMessages || [], contentStore);
+  requestArea.dataset.uiLanguageForce = "true";
+  requestArea.textContent = getUiLanguageText(
+    formatAiLogMessages(log.requestMessages || [], contentStore)
+  );
   requestLabel.appendChild(requestArea);
   body.append(requestLabel);
 
@@ -5539,7 +5580,8 @@ function populateAiLogBody(body, log, contentStore, usageText) {
     reasoningLabel.textContent = "模型思考過程";
     const reasoningArea = document.createElement("pre");
     reasoningArea.className = "ai-log-block reasoning";
-    reasoningArea.textContent = reasoningContent;
+    reasoningArea.dataset.uiLanguageForce = "true";
+    reasoningArea.textContent = getUiLanguageText(reasoningContent);
     reasoningLabel.appendChild(reasoningArea);
     body.append(reasoningLabel);
   }
@@ -5549,7 +5591,10 @@ function populateAiLogBody(body, log, contentStore, usageText) {
   responseLabel.textContent = log.error ? "AI 輸出 / 錯誤內容" : "AI 輸出";
   const responseArea = document.createElement("pre");
   responseArea.className = "ai-log-block";
-  responseArea.textContent = log.error ? `${responseText}\n\n[Error]\n${log.error}` : responseText;
+  responseArea.dataset.uiLanguageForce = "true";
+  responseArea.textContent = getUiLanguageText(
+    log.error ? `${responseText}\n\n[Error]\n${log.error}` : responseText
+  );
   responseLabel.appendChild(responseArea);
   body.append(responseLabel);
 }
@@ -5690,7 +5735,9 @@ function renderConversationContextPicker(state = appState) {
     const option = document.createElement("option");
     option.value = String(context.id || "");
     const keyGroupLabel = Number(context.keyGroup) > 0 ? ` · Key ${Number(context.keyGroup)}` : "";
-    option.textContent = `${String(context.label || context.id || "未命名故事")}${keyGroupLabel}`;
+    option.textContent = getUiLanguageText(
+      `${String(context.label || context.id || "未命名故事")}${keyGroupLabel}`
+    );
     option.selected = option.value === selectedContextId;
     return option;
   });
@@ -5750,7 +5797,7 @@ async function deleteSelectedConversationContext() {
     });
     appState = payload?.state || appState;
     await refresh();
-    showToast(getUiLanguageText("Discord 頻道故事已刪除；對話存檔仍然保留。"));
+    showToast(getUiLanguageText("對話故事已刪除；對話存檔仍然保留。"));
   } catch (error) {
     showToast(error.message, "error");
   } finally {
@@ -7979,6 +8026,7 @@ async function refresh() {
   applyMobilePage();
   resizeChatInput();
   playDailyWelcomeAudio(state);
+  applyUiLanguage();
 }
 
 function scheduleBackgroundImageRefresh(previousImageCount = 0) {

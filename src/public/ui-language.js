@@ -1,4 +1,5 @@
 import { Converter } from "/vendor/opencc-t2cn.js";
+import { Converter as SimplifiedConverter } from "/vendor/opencc-cn2t.js";
 
 export const UI_LANGUAGE_TRADITIONAL = "zh-Hant";
 export const UI_LANGUAGE_SIMPLIFIED = "zh-Hans";
@@ -13,9 +14,6 @@ const DEFAULT_TEXT_SKIP_SELECTOR = [
   "textarea",
   "pre",
   "code",
-  ".markdown-body",
-  ".message-preview",
-  ".message-reasoning-content",
   "[data-ui-language-skip]"
 ].join(",");
 const DEFAULT_ATTRIBUTE_SKIP_SELECTOR = [
@@ -24,12 +22,10 @@ const DEFAULT_ATTRIBUTE_SKIP_SELECTOR = [
   "template",
   "pre",
   "code",
-  ".markdown-body",
-  ".message-preview",
-  ".message-reasoning-content",
   "[data-ui-language-skip]"
 ].join(",");
 const convertTraditionalToSimplified = Converter({ from: "twp", to: "cn" });
+const convertSimplifiedToTraditional = SimplifiedConverter({ from: "cn", to: "twp" });
 
 function convertSystemText(value = "") {
   return convertTraditionalToSimplified(value).replaceAll("存盘", "存档");
@@ -63,12 +59,15 @@ export function createUiLanguageController({
     const text = String(value ?? "");
     return language === UI_LANGUAGE_SIMPLIFIED
       ? convertSystemText(text)
-      : text;
+      : convertSimplifiedToTraditional(text);
   }
 
   function shouldSkip(node, selector) {
     const element = node instanceof Element ? node : node?.parentElement;
-    return !element || Boolean(element.closest(selector));
+    if (!element || element.closest("[data-ui-language-force]")) {
+      return !element;
+    }
+    return Boolean(element.closest(selector));
   }
 
   function shouldTranslateValue(element) {

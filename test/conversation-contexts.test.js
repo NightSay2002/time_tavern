@@ -71,6 +71,17 @@ test("Discord channel deletion and startup reconciliation release abandoned stor
   assert.match(serverSource, /await cleanupDeletedDiscordChannelContexts\(discordClient\)/u);
 });
 
+test("QQ private chats use isolated hashed conversation contexts", () => {
+  assert.match(serverSource, /function getQqConversationContextId/u);
+  assert.match(serverSource, /createHash\("sha256"\)[\s\S]*?`qq:c2c:\$\{digest\}`/u);
+  assert.match(serverSource, /\^qq:c2c:\[a-f0-9\]\{32\}\$/u);
+  assert.match(serverSource, /qq-c2c-\$\{normalizedId\.slice/u);
+  assert.match(serverSource, /function getQqConversationContextOptions/u);
+  assert.match(serverSource, /source: "qq"[\s\S]*?qqUserOpenId/u);
+  assert.match(serverSource, /displacedWebConversationContext\?\.snapshot[\s\S]*?activeRoleCardId/u);
+  assert.match(serverSource, /parseQqTextCommand\(message\.content\)[\s\S]*?handleQqTextCommand/u);
+});
+
 test("conversation contexts lease independent chat API key groups", () => {
   assert.match(serverSource, /conversationApiKeyAssignments: normalizeConversationApiKeyAssignments/u);
   assert.match(serverSource, /assignConversationApiKeyGroup\(state, \{ forceNew: true \}\)/u);

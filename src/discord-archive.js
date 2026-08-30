@@ -36,7 +36,9 @@ function getArchiveTurnNumber(message = {}, fallback = 1) {
 }
 
 function formatArchiveMessage(label, message = {}, language) {
-  const content = safeText(message?.content) || localizeSystemText("（空白訊息）", language);
+  const content = safeText(message?.content)
+    ? localizeSystemText(safeText(message.content), language)
+    : localizeSystemText("（空白訊息）", language);
   return `**${localizeSystemText(label, language)}**\n${content}`;
 }
 
@@ -202,8 +204,8 @@ export function buildDiscordArchiveBrowserPayload({
   const content = [
     `**${text("對話存檔")} ${number} / ${ordered.length}**`,
     `${text("編號：")}${number}`,
-    `${text("名稱：")}${safeText(session?.name) || text("未命名存檔")}`,
-    `${text("角色：")}${safeText(session?.roleCardName) || text("未指定角色卡")}`,
+    `${text("名稱：")}${safeText(session?.name) ? text(safeText(session.name)) : text("未命名存檔")}`,
+    `${text("角色：")}${safeText(session?.roleCardName) ? text(safeText(session.roleCardName)) : text("未指定角色卡")}`,
     `${text("更新：")}${updatedText}`,
     "",
     `**${text("最後的對話")}**`,

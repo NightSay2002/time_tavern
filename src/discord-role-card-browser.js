@@ -123,11 +123,11 @@ export function buildDiscordRoleCardBrowserPayload(
   const content = [
     `**${text("角色卡")} ${number} / ${cards.length}${isActive ? text("（目前使用）") : ""}**`,
     `${text("編號：")}${number}`,
-    `${text("名稱：")}${safeText(card?.name) || text("未命名角色卡")}`,
+    `${text("名稱：")}${safeText(card?.name) ? text(safeText(card.name)) : text("未命名角色卡")}`,
     `${text("模式：")}${formatRoleCardMode(card?.mode, language)}`,
     "",
     preview
-      ? `**${text("預覽")}（${openingNumber}/${openings.length}）：**${preview}`
+      ? `**${text("預覽")}（${openingNumber}/${openings.length}）：**${text(preview)}`
       : `**${text("預覽")}（0/0）：**${text("尚無開場內容。")}`,
     "",
     `${text("使用")} \`${startCommand}\` ${text("開始這張角色卡。")}`

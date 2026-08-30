@@ -172,7 +172,7 @@ function truncate(value = "", maxLength = 160) {
 }
 
 function showToast(message, type = "") {
-  el.toast.textContent = message;
+  el.toast.textContent = uiLanguageController.translate(message);
   el.toast.className = `toast show${type ? ` ${type}` : ""}`;
   window.clearTimeout(showToast.timer);
   showToast.timer = window.setTimeout(() => { el.toast.className = "toast"; }, 3200);
@@ -1513,6 +1513,7 @@ async function init() {
   bindEvents();
   await Promise.all([refreshStatus(), refreshStoryboards()]);
   if (!storyboardList.length) await createNewStoryboard();
+  uiLanguageController.apply();
 }
 
 init().catch((error) => {

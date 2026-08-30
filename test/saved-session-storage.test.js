@@ -44,6 +44,7 @@ test("app state stores cards separately and saved sessions contain conversation 
   assert.match(contextWriterSource, /captureConversationContextSnapshot/);
   assert.match(contextWriterSource, /compactAiLogsForStorage/);
   assert.match(sessionCaptureSource, /conversation: cloneData/);
+  assert.doesNotMatch(sessionCaptureSource, /conversation[^\n]*(?:slice|splice)/u);
   assert.match(sessionCaptureSource, /contextCompression: normalizeContextCompressionState/);
   assert.match(sessionCaptureSource, /timeTracking: normalizeTimeTrackingState/);
   assert.doesNotMatch(sessionCaptureSource, /userProfile:/);
@@ -54,6 +55,7 @@ test("app state stores cards separately and saved sessions contain conversation 
   assert.doesNotMatch(sessionWriterSource, /roleCards/);
   assert.match(sessionWriterSource, /compactAiLogsForStorage/);
   assert.match(sessionWriterSource, /snapshot: snapshotForStorage/);
+  assert.doesNotMatch(sessionWriterSource, /conversation[^\n]*(?:slice|splice)/u);
 });
 
 test("loading a saved session preserves global cards, prompts, and settings", () => {

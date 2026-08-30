@@ -419,7 +419,7 @@ function showToast(message, type = "ok") {
   if (!el.toast) {
     return;
   }
-  el.toast.textContent = message;
+  el.toast.textContent = uiLanguageController.translate(message);
   el.toast.className = `toast show${type === "error" ? " error" : ""}`;
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => {
@@ -4446,6 +4446,7 @@ async function boot() {
   renderMainImage(null);
   bindEvents();
   await Promise.allSettled([refreshStatus(), renderHistory()]);
+  uiLanguageController.apply();
 }
 
 boot();

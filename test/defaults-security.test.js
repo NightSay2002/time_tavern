@@ -7,12 +7,15 @@ const publishedDefaults = JSON.parse(
 );
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
-test("published defaults exclude Discord credentials and identifiers", () => {
+test("published defaults exclude bot credentials and identifiers", () => {
   const environmentValues = publishedDefaults?.environment?.values || {};
 
   assert.equal(Object.hasOwn(environmentValues, "DISCORD_BOT_TOKEN"), false);
   assert.equal(Object.hasOwn(environmentValues, "DISCORD_CLIENT_ID"), false);
   assert.equal(Object.hasOwn(environmentValues, "DISCORD_ALLOWED_USER_ID"), false);
+  assert.equal(Object.hasOwn(environmentValues, "QQ_BOT_APP_ID"), false);
+  assert.equal(Object.hasOwn(environmentValues, "QQ_BOT_APP_SECRET"), false);
+  assert.equal(Object.hasOwn(environmentValues, "QQ_ALLOWED_USER_OPENID"), false);
   assert.deepEqual(
     Object.keys(environmentValues).filter((key) => /(?:^|_)API_KEY$/u.test(key)),
     []
