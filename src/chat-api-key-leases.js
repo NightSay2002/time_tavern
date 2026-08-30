@@ -41,7 +41,7 @@ export function claimConversationApiKeySlot(assignmentsInput = {}, options = {})
     .filter(Boolean))].sort((left, right) => left - right);
   const assignments = normalizeConversationApiKeyAssignments(assignmentsInput);
   if (!contextId || availableSlots.length === 0) {
-    return { ok: false, assignments, error: "沒有已設定的對話 API Key 組。" };
+    return { ok: false, assignments, error: "目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。" };
   }
 
   const activeAfter = now - CHAT_API_KEY_LEASE_MS;

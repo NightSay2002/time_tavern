@@ -90,6 +90,12 @@ import {
   releaseConversationApiKeySlot
 } from "./chat-api-key-leases.js";
 import {
+  getChatApiProviderKeyAliases,
+  listConfiguredChatApiKeyGroupSlots,
+  resolveChatApiKeyGroupPrimaryKey,
+  shouldResetConversationApiKeyAssignments
+} from "./chat-api-key-config.js";
+import {
   buildMultimodalMessageContent,
   getMessageChatImages,
   isSupportedChatImageAttachment,
@@ -9375,17 +9381,7 @@ function getChatApiKeyGroupPrimaryKey(slot = 1, envSource = process.env) {
   const provider = normalizeChatApiProvider(
     envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
-  const providerKeys = getChatApiProviderKeyAliases(provider);
-  const baseKeys = [
-    "CHAT_API_KEY",
-    "CONVERSATION_API_KEY",
-    ...providerKeys,
-    ...(provider === "zhipu" ? [] : ["DEEPSEEK_API_KEY"])
-  ];
-  const keys = groupSlot === 1
-    ? baseKeys
-    : baseKeys.map((key) => `${key}_GROUP${groupSlot}`);
-  return envObjectFirstText(envSource, keys);
+  return resolveChatApiKeyGroupPrimaryKey(envSource, provider, groupSlot);
 }
 
 function getPrimaryChatApiKey(slot = 1, envSource = process.env) {
@@ -9432,17 +9428,10 @@ function getChatApiProcessingKeyEntries(envSource = process.env, slot = 1) {
 }
 
 function getConfiguredChatApiKeyGroupSlots(envSource = process.env) {
-  const groupNumbers = new Set([1]);
-  Object.keys(envSource || {}).forEach((key) => {
-    const match = key.match(/_GROUP([2-9]\d*)(?:_|$)/u);
-    if (match) {
-      groupNumbers.add(Number(match[1]));
-    }
-  });
-  const configured = [...groupNumbers]
-    .sort((left, right) => left - right)
-    .filter((slot) => Boolean(getChatApiKeyGroupPrimaryKey(slot, envSource)));
-  return configured.length > 0 ? configured : [1];
+  const provider = normalizeChatApiProvider(
+    envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
+  );
+  return listConfiguredChatApiKeyGroupSlots(envSource, provider);
 }
 
 function getChatApiKeyGroupFingerprints(envSource = process.env) {
@@ -9454,10 +9443,6 @@ function getChatApiKeyGroupFingerprints(envSource = process.env) {
       .digest("hex");
     return [slot, fingerprint];
   }));
-}
-
-function didExistingChatApiKeyGroupsChange(previousGroups = {}, nextGroups = {}) {
-  return Object.entries(previousGroups).some(([slot, fingerprint]) => nextGroups[slot] !== fingerprint);
 }
 
 function assignConversationApiKeyGroup(currentState = state, options = {}) {
@@ -10074,26 +10059,6 @@ function getChatApiMaxTokensParamName() {
   return normalizeChatApiMaxTokensParamName(
     envFirstText(["CHAT_API_MAX_TOKENS_PARAM", "CONVERSATION_API_MAX_TOKENS_PARAM"], "max_tokens")
   );
-}
-
-function getChatApiProviderKeyAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
-  const normalizedProvider = normalizeChatApiProvider(provider);
-  if (normalizedProvider === "openai") {
-    return ["OPENAI_API_KEY"];
-  }
-  if (normalizedProvider === "gemini") {
-    return ["GEMINI_API_KEY"];
-  }
-  if (normalizedProvider === "deepseek") {
-    return ["DEEPSEEK_API_KEY"];
-  }
-  if (normalizedProvider === "zhipu") {
-    return ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"];
-  }
-  if (normalizedProvider === "custom") {
-    return ["CUSTOM_API_KEY"];
-  }
-  return [];
 }
 
 function getChatApiProviderModelAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
@@ -12291,14 +12256,18 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/env" && method === "PUT") {
       const body = await readBody(req);
       const previousNovelAiConfigured = Boolean(getNovelAiToken());
+      const previousChatApiProvider = getChatApiProvider();
       const previousChatApiKeyGroups = getChatApiKeyGroupFingerprints(process.env);
       const content = saveEnvFileContent(body?.content);
       const novelAiConfigured = Boolean(getNovelAiToken());
+      const nextChatApiProvider = getChatApiProvider();
       const nextChatApiKeyGroups = getChatApiKeyGroupFingerprints(process.env);
-      const chatApiKeyAssignmentsReset = didExistingChatApiKeyGroupsChange(
-        previousChatApiKeyGroups,
-        nextChatApiKeyGroups
-      );
+      const chatApiKeyAssignmentsReset = shouldResetConversationApiKeyAssignments({
+        previousProvider: previousChatApiProvider,
+        nextProvider: nextChatApiProvider,
+        previousGroups: previousChatApiKeyGroups,
+        nextGroups: nextChatApiKeyGroups
+      });
       if (chatApiKeyAssignmentsReset) {
         state.conversationApiKeyAssignments = {};
         saveState(state);

@@ -131,6 +131,34 @@ test("provider drafts preserve multiple general-purpose key groups", () => {
   assert.equal(entries.DEEPSEEK_API_KEY_GROUP2_2, "model-key-2");
 });
 
+test("provider key groups remain isolated after saving and switching providers", () => {
+  const initial = createChatApiProviderDrafts({
+    CHAT_API_PROVIDER: "deepseek",
+    CHAT_API_KEY: "deepseek-active-1",
+    CHAT_API_KEY_GROUP2: "deepseek-active-2",
+    DEEPSEEK_API_KEY: "deepseek-saved-1",
+    DEEPSEEK_API_KEY_GROUP2: "deepseek-saved-2",
+    ZHIPU_API_KEY: "zhipu-saved-1",
+    ZHIPU_API_KEY_GROUP2: "zhipu-saved-2"
+  });
+  const providerEntries = Object.fromEntries(getChatApiProviderEnvEntries(initial.drafts));
+  const switched = createChatApiProviderDrafts({
+    ...providerEntries,
+    CHAT_API_PROVIDER: "zhipu",
+    CHAT_API_KEY: "zhipu-active-1",
+    CHAT_API_KEY_GROUP2: "zhipu-active-2"
+  });
+
+  assert.deepEqual(switched.drafts.deepseek.keyGroups.map((group) => group.key), [
+    "deepseek-active-1",
+    "deepseek-active-2"
+  ]);
+  assert.deepEqual(switched.drafts.zhipu.keyGroups.map((group) => group.key), [
+    "zhipu-active-1",
+    "zhipu-active-2"
+  ]);
+});
+
 test("web reasoning controls use the same provider and model capability matrix", () => {
   assert.equal(canDisableChatApiReasoning("deepseek", "deepseek-v4-pro"), true);
   assert.equal(canDisableChatApiReasoning("zhipu", "glm-5.3-flash"), true);

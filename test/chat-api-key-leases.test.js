@@ -91,3 +91,16 @@ test("deleting a story releases its key group immediately", () => {
   assert.equal(claimed.ok, true);
   assert.equal(claimed.slot, 1);
 });
+
+test("a provider without keys requires configuration instead of borrowing a slot", () => {
+  const result = claimConversationApiKeySlot({
+    local: { slot: 1, lastUsedAt: new Date(NOW).toISOString() }
+  }, {
+    contextId: "local",
+    availableSlots: [],
+    now: NOW + 1000
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /目前對話 API 供應商沒有已設定的 Key/u);
+});

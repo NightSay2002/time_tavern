@@ -66,7 +66,7 @@ CHAT_API_MODEL=deepseek-v4-pro
 
 也可把 provider 改為 `zhipu` 並選用 `glm-5.3` 或原生多模態的 `glm-5.3-flash`；系統始終使用 `CHAT_API_MODEL` 指定的模型，不會因上傳圖片自動換模型。完整 provider 設定見 [細節文件](docs/DETAILS.md)。
 
-環境設定的對話 API Key 可用 `Key 1`、`Key 2...` 分頁管理，每組同時包含主對話 Key 與大模型處理 Key。新故事自動租用最前面的閒置組，任何 AI 呼叫都會續期；24 小時沒有 AI 活動後才供其他故事使用，刪除故事或 Discord 頻道則立即釋放。切換供應商時會保留各供應商自己的 Key 組、輸出模型與 Base URL。
+環境設定的對話 API Key 可用 `Key 1`、`Key 2...` 分頁管理，每組同時包含主對話 Key 與大模型處理 Key。新故事自動租用最前面的閒置組，任何 AI 呼叫都會續期；24 小時沒有 AI 活動後才供其他故事使用，刪除故事或 Discord 頻道則立即釋放。切換供應商時會保留各供應商自己的 Key 組、輸出模型與 Base URL，並讓現有故事改用新供應商重新分配；若新供應商沒有 Key，系統會要求先設定，不會回退到其他供應商。
 
 NovelAI 圖片功能另外填：
 
