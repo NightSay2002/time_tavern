@@ -25,9 +25,9 @@ export function getChatApiProviderKeyAliases(provider = "deepseek") {
 export function getChatApiKeyGroupPrimaryKeyNames(provider = "deepseek", slot = 1) {
   const groupSlot = Math.max(1, Number.parseInt(slot, 10) || 1);
   const baseNames = [
+    ...getChatApiProviderKeyAliases(provider),
     "CHAT_API_KEY",
-    "CONVERSATION_API_KEY",
-    ...getChatApiProviderKeyAliases(provider)
+    "CONVERSATION_API_KEY"
   ];
   return groupSlot === 1
     ? baseNames

@@ -9407,13 +9407,6 @@ function getChatApiProcessingKeyEntries(envSource = process.env, slot = 1) {
     .sort((a, b) => a.index - b.index);
 
   const groupSlot = Math.max(1, Number.parseInt(slot, 10) || 1);
-  const genericPrefixes = groupSlot === 1
-    ? ["CHAT_API_KEY", "CONVERSATION_API_KEY"]
-    : [`CHAT_API_KEY_GROUP${groupSlot}_`, `CONVERSATION_API_KEY_GROUP${groupSlot}_`];
-  const genericEntries = collectEntries(genericPrefixes);
-  if (genericEntries.length > 0) {
-    return genericEntries;
-  }
   const provider = normalizeChatApiProvider(
     envObjectFirstText(source, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
@@ -9424,7 +9417,14 @@ function getChatApiProcessingKeyEntries(envSource = process.env, slot = 1) {
   if (groupSlot > 1) {
     providerPrefixes = providerPrefixes.map((prefix) => `${prefix}_GROUP${groupSlot}_`);
   }
-  return collectEntries(providerPrefixes);
+  const providerEntries = collectEntries(providerPrefixes);
+  if (providerEntries.length > 0) {
+    return providerEntries;
+  }
+  const genericPrefixes = groupSlot === 1
+    ? ["CHAT_API_KEY", "CONVERSATION_API_KEY"]
+    : [`CHAT_API_KEY_GROUP${groupSlot}_`, `CONVERSATION_API_KEY_GROUP${groupSlot}_`];
+  return collectEntries(genericPrefixes);
 }
 
 function getConfiguredChatApiKeyGroupSlots(envSource = process.env) {

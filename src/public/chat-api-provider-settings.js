@@ -164,9 +164,12 @@ export function createChatApiProviderDrafts(parsedEnv = {}) {
     ["CHAT_API_KEY", "CONVERSATION_API_KEY"],
     ["CHAT_API_KEY", "CONVERSATION_API_KEY"]
   );
-  activeDraft.keyGroups = genericKeyGroups.some((group) => group.key || group.processingKeys.some(Boolean))
-    ? genericKeyGroups
-    : activeDraft.keyGroups;
+  const hasProviderKeyGroups = activeDraft.keyGroups.some(
+    (group) => group.key || group.processingKeys.some(Boolean)
+  );
+  if (!hasProviderKeyGroups) {
+    activeDraft.keyGroups = genericKeyGroups;
+  }
   activeDraft.model = text(source.CHAT_API_MODEL || source.CONVERSATION_API_MODEL) || activeDraft.model;
   activeDraft.baseUrl = text(source.CHAT_API_BASE_URL || source.CONVERSATION_API_BASE_URL) || activeDraft.baseUrl;
   Object.values(drafts).forEach((draft) => {

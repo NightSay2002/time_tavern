@@ -677,6 +677,7 @@ const ENV_ALIAS_KEYS = {
   NOVELAI_API_TOKEN: ["NOVELAI_ACCESS_TOKEN", "NOVELAI_TOKEN", "NAI_API_TOKEN"]
 };
 const ENV_KNOWN_KEYS = new Set(ENV_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key)));
+Object.keys(ENV_ALIAS_KEYS).forEach((key) => ENV_KNOWN_KEYS.add(key));
 Object.values(ENV_ALIAS_KEYS).flat().forEach((key) => ENV_KNOWN_KEYS.add(key));
 const ENV_DROPPED_KEYS = new Set([
   "AI_REPLY_LENGTH_RULE",

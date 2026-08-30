@@ -16,9 +16,9 @@ test("chat API key lookup never falls back to another provider", () => {
   };
 
   assert.deepEqual(getChatApiKeyGroupPrimaryKeyNames("openai", 2), [
+    "OPENAI_API_KEY_GROUP2",
     "CHAT_API_KEY_GROUP2",
-    "CONVERSATION_API_KEY_GROUP2",
-    "OPENAI_API_KEY_GROUP2"
+    "CONVERSATION_API_KEY_GROUP2"
   ]);
   assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openai", 1), "");
   assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openai", 2), "");
@@ -33,13 +33,13 @@ test("configured key groups only include the active provider", () => {
     ZHIPU_API_KEY_GROUP3: "inactive-zhipu-3"
   };
 
-  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openai", 1), "active-openai-1");
+  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openai", 1), "saved-openai-1");
   assert.deepEqual(listConfiguredChatApiKeyGroupSlots(env, "openai"), [1]);
   assert.deepEqual(listConfiguredChatApiKeyGroupSlots(env, "deepseek"), [1, 2]);
   assert.deepEqual(listConfiguredChatApiKeyGroupSlots(env, "zhipu"), [1, 3]);
 });
 
-test("generic group keys take priority without crossing provider-specific keys", () => {
+test("provider-specific group keys take priority over stale generic keys", () => {
   const env = {
     CHAT_API_KEY: "active-zhipu-1",
     CHAT_API_KEY_GROUP2: "active-zhipu-2",
@@ -49,9 +49,19 @@ test("generic group keys take priority without crossing provider-specific keys",
     DEEPSEEK_API_KEY_GROUP2: "deepseek-2"
   };
 
-  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "zhipu", 1), "active-zhipu-1");
-  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "zhipu", 2), "active-zhipu-2");
+  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "zhipu", 1), "saved-zhipu-1");
+  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "zhipu", 2), "saved-zhipu-2");
   assert.deepEqual(listConfiguredChatApiKeyGroupSlots(env, "zhipu"), [1, 2]);
+});
+
+test("generic keys remain a backward-compatible fallback for the active provider", () => {
+  const env = {
+    CHAT_API_KEY: "legacy-openai-1",
+    CHAT_API_KEY_GROUP2: "legacy-openai-2"
+  };
+
+  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openai", 1), "legacy-openai-1");
+  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openai", 2), "legacy-openai-2");
 });
 
 test("switching provider resets every story key lease even when fingerprints match", () => {

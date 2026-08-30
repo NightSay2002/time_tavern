@@ -86,11 +86,11 @@ test("provider drafts keep separate large-model processing keys", () => {
     CHAT_API_KEY2: "active-glm-processing-2",
     DEEPSEEK_API_KEY2: "saved-deepseek-processing-2",
     OPENAI_API_KEY2: "saved-openai-processing-2",
-    ZHIPU_API_KEY2: "stale-glm-processing-2"
+    ZHIPU_API_KEY2: "saved-glm-processing-2"
   });
 
   assert.equal(activeProvider, "zhipu");
-  assert.deepEqual(drafts.zhipu.processingKeys, ["active-glm-processing-2"]);
+  assert.deepEqual(drafts.zhipu.processingKeys, ["saved-glm-processing-2"]);
   assert.deepEqual(drafts.deepseek.processingKeys, ["saved-deepseek-processing-2"]);
   assert.deepEqual(drafts.openai.processingKeys, ["saved-openai-processing-2"]);
 });
@@ -109,6 +109,7 @@ test("one reasoning field migrates the old provider-specific values", () => {
   assert.match(webSource, /processingKeys:\s*collectChatApiProcessingKeyValues\(\)/u);
   assert.match(webSource, /renderChatApiKeyGroupControls\(\)/u);
   assert.match(webSource, /getChatApiProviderEnvEntries\(chatApiProviderDrafts\)/u);
+  assert.match(webSource, /Object\.keys\(ENV_ALIAS_KEYS\)\.forEach\(\(key\) => ENV_KNOWN_KEYS\.add\(key\)\)/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT"/u);
   assert.match(serverSource, /getChatApiProviderKeyAliases\(provider\)/u);
@@ -134,10 +135,10 @@ test("provider drafts preserve multiple general-purpose key groups", () => {
 test("provider key groups remain isolated after saving and switching providers", () => {
   const initial = createChatApiProviderDrafts({
     CHAT_API_PROVIDER: "deepseek",
-    CHAT_API_KEY: "deepseek-active-1",
-    CHAT_API_KEY_GROUP2: "deepseek-active-2",
-    DEEPSEEK_API_KEY: "deepseek-saved-1",
-    DEEPSEEK_API_KEY_GROUP2: "deepseek-saved-2",
+    CHAT_API_KEY: "stale-generic-1",
+    CHAT_API_KEY_GROUP2: "stale-generic-2",
+    DEEPSEEK_API_KEY: "deepseek-active-1",
+    DEEPSEEK_API_KEY_GROUP2: "deepseek-active-2",
     ZHIPU_API_KEY: "zhipu-saved-1",
     ZHIPU_API_KEY_GROUP2: "zhipu-saved-2"
   });
@@ -145,8 +146,8 @@ test("provider key groups remain isolated after saving and switching providers",
   const switched = createChatApiProviderDrafts({
     ...providerEntries,
     CHAT_API_PROVIDER: "zhipu",
-    CHAT_API_KEY: "zhipu-active-1",
-    CHAT_API_KEY_GROUP2: "zhipu-active-2"
+    CHAT_API_KEY: "another-stale-generic-1",
+    CHAT_API_KEY_GROUP2: "another-stale-generic-2"
   });
 
   assert.deepEqual(switched.drafts.deepseek.keyGroups.map((group) => group.key), [
@@ -154,8 +155,8 @@ test("provider key groups remain isolated after saving and switching providers",
     "deepseek-active-2"
   ]);
   assert.deepEqual(switched.drafts.zhipu.keyGroups.map((group) => group.key), [
-    "zhipu-active-1",
-    "zhipu-active-2"
+    "zhipu-saved-1",
+    "zhipu-saved-2"
   ]);
 });
 

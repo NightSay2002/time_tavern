@@ -32,7 +32,7 @@
 | `CHAT_API_KEY` | 空 | Key 1 的主聊天、補寫及角色卡助手 Key。舊設定直接沿用，不需遷移。 |
 | `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
-| `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前選中的值仍同步寫入上述 `CHAT_API_*` 欄位，執行時不讀取其他供應商的 Key。 |
+| `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前供應商的專屬 Key 優先，`CHAT_API_KEY` 只作舊設定後備，執行時不讀取其他供應商的 Key。 |
 | `CHAT_API_REASONING_EFFORT` | `high` | 共用思考欄位。DeepSeek 空值使用 `high`；GLM 4.5+、Gemini 2.5 Flash／Flash-Lite，以及支援 `none` 的 GPT-5.1+ 非 Pro 模型可選 `none`。模型不支援時不送關閉參數。關閉後啟用 temperature，且不附帶使用者自訂補充。舊版 provider 專用變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
