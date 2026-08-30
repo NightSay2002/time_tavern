@@ -188,7 +188,7 @@ Random Prompt：
 - 沒有可用 metadata 時會補寫 NovelAI 相容 `Comment`，並附 `TimeTavernNovelAIMetadata`。
 - 下載「純圖片」時會移除 `tEXt`、`iTXt`、`zTXt`，並清除 Alpha／RGB 最低位元中的 `stealth_pnginfo`、`stealth_pngcomp`、`stealth_rgbinfo`、`stealth_rgbcomp`。
 - 一般歷史存在瀏覽器 IndexedDB，每頁載入 20 張，支援逐張刪除與一鍵清空。新圖片以 Blob 與縮圖保存，避免同時載入大量原圖。
-- 收藏存在 server 端 `data/novelai-album/`；右側可切換歷史與收藏，取消收藏後圖片會回到歷史。
+- 收藏存在 server 端 `data/novelai-album/`；右側可切換歷史與收藏，生成、收藏或取消收藏後都保留目前分頁，取消收藏的圖片會回到歷史。使用上下方向鍵到達本頁邊界時會自動載入相鄰分頁並繼續選圖。
 - 點擊主圖會開啟圖片檢視器，支援拖曳移動與滾輪縮放。
 - Vibe Transfer、Image2Image 與 Precise Reference 圖片會保存在瀏覽器本地草稿，離開頁面後再返回仍會還原。
 

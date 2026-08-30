@@ -99,6 +99,7 @@ let novelAiSelectedHistoryId = "";
 let novelAiHistoryPage = 1;
 let novelAiHistoryTotal = 0;
 let novelAiHistoryRenderToken = 0;
+let novelAiHistoryNavigationPending = false;
 let novelAiHistoryObjectUrls = [];
 let novelAiMainImageObjectUrl = "";
 let novelAiImageViewerObjectUrl = "";
@@ -2738,15 +2739,46 @@ function selectHistoryItem(item = null, options = {}) {
   updateActiveHistoryItem(options);
 }
 
-function moveHistorySelection(direction = 1) {
-  if (!novelAiHistoryItems.length) {
+async function moveHistorySelection(direction = 1) {
+  if (!novelAiHistoryItems.length || novelAiHistoryNavigationPending) {
     return;
   }
+  const step = direction < 0 ? -1 : 1;
   const currentIndex = novelAiHistoryItems.findIndex((item) => item.id === novelAiSelectedHistoryId);
-  const fallbackIndex = direction > 0 ? -1 : novelAiHistoryItems.length;
-  const nextIndex = Math.min(novelAiHistoryItems.length - 1, Math.max(0, (currentIndex >= 0 ? currentIndex : fallbackIndex) + direction));
+  if (currentIndex < 0) {
+    selectHistoryItem(
+      step > 0 ? novelAiHistoryItems[0] : novelAiHistoryItems[novelAiHistoryItems.length - 1],
+      { scroll: true }
+    );
+    return;
+  }
+
+  const nextIndex = currentIndex + step;
   if (nextIndex >= 0 && nextIndex < novelAiHistoryItems.length) {
     selectHistoryItem(novelAiHistoryItems[nextIndex], { scroll: true });
+    return;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(novelAiHistoryTotal / NOVELAI_HISTORY_PAGE_SIZE));
+  const nextPage = novelAiHistoryPage + step;
+  if (nextPage < 1 || nextPage > totalPages) {
+    return;
+  }
+
+  const navigationView = novelAiLibraryView;
+  novelAiHistoryNavigationPending = true;
+  try {
+    novelAiHistoryPage = nextPage;
+    await renderHistory();
+    if (novelAiLibraryView !== navigationView || !novelAiHistoryItems.length) {
+      return;
+    }
+    const nextItem = step > 0
+      ? novelAiHistoryItems[0]
+      : novelAiHistoryItems[novelAiHistoryItems.length - 1];
+    selectHistoryItem(nextItem, { scroll: true });
+  } finally {
+    novelAiHistoryNavigationPending = false;
   }
 }
 
@@ -2769,7 +2801,7 @@ function onHistoryKeyboardNavigation(event) {
     return;
   }
   event.preventDefault();
-  moveHistorySelection(event.key === "ArrowUp" ? -1 : 1);
+  void moveHistorySelection(event.key === "ArrowUp" ? -1 : 1);
 }
 
 function renderHistoryList(items = []) {
@@ -3501,7 +3533,6 @@ async function favoriteImage(item = {}) {
     if (novelAiAlbumLoaded) {
       novelAiAlbumItems = [albumItem, ...novelAiAlbumItems.filter((entry) => entry.id !== albumItem.id)];
     }
-    novelAiHistoryPage = 1;
     await renderHistory();
     renderMainImage(albumItem);
     showToast(`已收藏：${albumItem.fileName || "NovelAI 圖片"}`);
@@ -3533,8 +3564,6 @@ async function unfavoriteImage(item = {}) {
       throw error;
     }
     novelAiAlbumItems = novelAiAlbumItems.filter((entry) => entry.id !== item.id);
-    novelAiLibraryView = "history";
-    novelAiHistoryPage = 1;
     await renderHistory();
     renderMainImage(historyItem);
     showToast("已取消收藏並移回歷史");
@@ -3989,8 +4018,6 @@ async function runNovelAiGenerationOnce(options = {}) {
     novelAiCurrentImages = generatedImages;
     renderMainImage(generatedImages[0] || null);
     await saveHistoryItems(generatedImages);
-    novelAiLibraryView = "history";
-    novelAiHistoryPage = 1;
     await renderHistory();
     await refreshStatus();
     if (showSuccessToast) {

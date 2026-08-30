@@ -110,7 +110,7 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 NovelAI：
 
 - 支援 NAI Diffusion V5、V4.5、V4 與 V3，並提供常用生成參數、Prompt 片段與參考圖功能。
-- 支援連續生成、圖片設定匯入、下載、收藏、本地歷史與放大檢視。
+- 支援連續生成、圖片設定匯入、下載、收藏、本地歷史與放大檢視；生成及收藏異動會保留目前圖片庫分頁，上下方向鍵可跨頁連續瀏覽。
 - 支援 NovelAI 預設的保存與啟用。
 - 純靜態版本：<https://nightsay2002.github.io/novelai-image-static/>；Token 與圖片只保存在使用者瀏覽器。
 
