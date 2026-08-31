@@ -2007,9 +2007,10 @@ function loadState() {
     const parsed = JSON.parse(raw);
     const persistedCardState = loadCardState();
     const defaults = createDefaultState();
+    const loadedUiLanguage = normalizeUiLanguage(parsed.uiLanguage);
     const merged = {
       ...defaults,
-      uiLanguage: normalizeUiLanguage(parsed.uiLanguage),
+      uiLanguage: loadedUiLanguage,
       userProfile: normalizeUserProfile({
         ...defaults.userProfile,
         ...(parsed.userProfile || {})
@@ -2031,7 +2032,8 @@ function loadState() {
       lastDiscordChannelId: safeText(parsed.lastDiscordChannelId),
       discordPlayers: normalizeDiscordPlayerState(parsed.discordPlayers),
       conversation: normalizeConversationForClient(cloneData(parsed.conversation, []), {
-        preserveInternalState: true
+        preserveInternalState: true,
+        language: loadedUiLanguage
       }),
       aiLogs: loadSharedAiLogs(parsed.aiLogs, parsed.aiLogContentStore),
       activeSavedSessionId: null,
@@ -2634,7 +2636,8 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.lastDiscordChannelId = safeText(source.lastDiscordChannelId);
   currentState.discordPlayers = normalizeDiscordPlayerState(source.discordPlayers);
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
-    preserveInternalState: true
+    preserveInternalState: true,
+    language: currentState.uiLanguage
   });
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
 }
@@ -2684,7 +2687,8 @@ function applySavedConversationSnapshot(currentState, snapshot) {
     ));
   }
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
-    preserveInternalState: true
+    preserveInternalState: true,
+    language: currentState.uiLanguage
   });
   currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
     .map((entry) => normalizeAiLog(entry));
@@ -2881,7 +2885,8 @@ function applyConversationContextSnapshot(currentState, snapshot = {}, contextId
     conversation: source.conversation
   });
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
-    preserveInternalState: true
+    preserveInternalState: true,
+    language: currentState.uiLanguage
   });
   currentState.lastDiscordChannelId = channelId;
   currentState.activeSavedSessionId = null;
@@ -3565,11 +3570,14 @@ function buildSavedSessionSummary(session) {
 
 function normalizeConversationForClient(conversation = [], options = {}) {
   const preserveInternalState = options.preserveInternalState === true;
+  const language = options.language
+    ? normalizeUiLanguage(options.language)
+    : getUiLanguage();
   return (Array.isArray(conversation) ? conversation : []).map((message) => {
     const normalizedMessage = message?.role === "assistant"
       ? {
           ...message,
-          content: finalizeAssistantOutputContent(message.content).content
+          content: finalizeAssistantOutputContent(message.content, { language }).content
         }
       : message;
     if (preserveInternalState || !normalizedMessage || typeof normalizedMessage !== "object") {
@@ -10230,12 +10238,15 @@ function removeRepeatedOpeningUserEcho(content = "", userInput = "") {
 
 function finalizeAssistantOutputContent(content = "", options = {}) {
   const userInput = safeText(options.userInput);
+  const language = options.language
+    ? normalizeUiLanguage(options.language)
+    : getUiLanguage();
   const unlabeledContent = stripLeadingContextRoundLabels(content);
   const cleanedContent = userInput
     ? removeRepeatedOpeningUserEcho(unlabeledContent, userInput)
     : unlabeledContent;
   return {
-    content: localizeSystemText(stripLeadingContextRoundLabels(cleanedContent), getUiLanguage())
+    content: localizeSystemText(stripLeadingContextRoundLabels(cleanedContent), language)
   };
 }
 
@@ -11552,7 +11563,9 @@ function statePayload(currentState) {
   } = payloadState;
   return {
     ...publicState,
-    conversation: normalizeConversationForClient(payloadState.conversation),
+    conversation: normalizeConversationForClient(payloadState.conversation, {
+      language: payloadState.uiLanguage
+    }),
     aiLogs: compactedAiLogs.logs,
     aiLogContentStore: compactedAiLogs.contentStore,
     modularPromptConfigs: getModularPromptConfigsPayload(),
@@ -11851,6 +11864,9 @@ function markTrailingFailedConversationTurnsInvalid(currentState) {
       !isSystemAssistantErrorContent(assistantMessage.content)
     ) {
       break;
+    }
+    if (userMessage.invalidConversation && assistantMessage.invalidConversation) {
+      continue;
     }
     earliestCheckpoint = getMessageStateBeforeTurnSnapshot(userMessage) || earliestCheckpoint;
     userMessage.excludeFromModel = true;
@@ -14156,7 +14172,10 @@ async function sendInteractionChannelFallback(interaction, text) {
   const sentMessages = [];
   const chunks = splitForDiscord(text, 1800);
   for (const chunk of chunks) {
-    const sent = await channel.send(chunk || " ");
+    const sent = await channel.send({
+      content: chunk || " ",
+      allowedMentions: { parse: [] }
+    });
     if (sent) {
       sentMessages.push(sent);
     }
@@ -14256,6 +14275,14 @@ function shouldDeferSlashCommandEarly(commandName = "") {
 }
 
 async function safeSendInteractionError(interaction, content) {
+  if (interaction?.guildId) {
+    const sentMessages = await sendInteractionChannelFallback(interaction, content);
+    if (sentMessages.length > 0) {
+      scheduleDiscordErrorMessageDeletion(sentMessages);
+      await discardDeferredInteractionReply(interaction);
+      return;
+    }
+  }
   await safeSendInteractionText(interaction, content, { ephemeral: true });
 }
 
@@ -14309,19 +14336,13 @@ function getFailedConversationReplyText(result = {}) {
   return safeText(result.assistantMessage?.content) || "模型呼叫失敗，請稍後再試。";
 }
 
-async function sendDiscordPrivateMessageError(message, content) {
+async function sendDiscordMessageError(message, content) {
   const text = discordSystemText(content);
-  if (!message?.guildId) {
-    await message.reply(text);
-    return;
+  const sentMessages = await sendDiscordLongMessage(message, text);
+  if (message?.guildId) {
+    scheduleDiscordErrorMessageDeletion(sentMessages);
   }
-  try {
-    await message.author.send(text);
-  } catch (error) {
-    console.warn(
-      `Discord 私密錯誤訊息發送失敗（user=${safeText(message.author?.id) || "unknown"}）：${error.message || error}`
-    );
-  }
+  return sentMessages;
 }
 
 function startTypingIndicator(channel) {
@@ -15390,8 +15411,7 @@ async function handleDiscordChat(message, userContent) {
   }
   const failureText = getFailedConversationReplyText(turn);
   if (failureText) {
-    const sentMessages = await sendDiscordLongMessage(message, discordSystemText(failureText));
-    scheduleDiscordErrorMessageDeletion(sentMessages);
+    await sendDiscordMessageError(message, failureText);
     return;
   }
   if (turn.replyText) {
@@ -15994,10 +16014,10 @@ function setupDiscordBot() {
       await handleDiscordChat(message, extractedInput);
     } catch (error) {
       if (isGenerationStoppedError(error)) {
-        await sendDiscordPrivateMessageError(message, GENERATION_STOPPED_MESSAGE);
+        await sendDiscordMessageError(message, GENERATION_STOPPED_MESSAGE);
         return;
       }
-      await sendDiscordPrivateMessageError(message, `處理失敗：${error.message || "未知錯誤"}`);
+      await sendDiscordMessageError(message, `處理失敗：${error.message || "未知錯誤"}`);
     }
   });
 
@@ -16050,7 +16070,7 @@ function setupDiscordBot() {
         }
         const failureText = getFailedConversationReplyText(result);
         if (failureText) {
-          await sendDiscordPrivateMessageError(message, `編輯後重算失敗：${failureText}`);
+          await sendDiscordMessageError(message, `編輯後重算失敗：${failureText}`);
           return;
         }
         const sentMessages = await sendDiscordLongMessage(
@@ -16074,10 +16094,10 @@ function setupDiscordBot() {
       }
     } catch (error) {
       if (isGenerationStoppedError(error)) {
-        await sendDiscordPrivateMessageError(message, GENERATION_STOPPED_MESSAGE);
+        await sendDiscordMessageError(message, GENERATION_STOPPED_MESSAGE);
         return;
       }
-      await sendDiscordPrivateMessageError(message, `編輯後重算失敗：${error.message || "未知錯誤"}`);
+      await sendDiscordMessageError(message, `編輯後重算失敗：${error.message || "未知錯誤"}`);
     }
   });
 

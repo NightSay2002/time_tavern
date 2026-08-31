@@ -49,6 +49,31 @@ test("invalid primary state stops startup instead of returning an empty state", 
   assert.match(serverSource, /let state = null;[\s\S]*state = loadState\(\)/u);
 });
 
+test("cold startup normalizes stored conversations without reading global state", () => {
+  const loaderSource = functionSource("loadState", "saveState");
+  const normalizerSource = functionSource("normalizeConversationForClient", "buildSavedSessionDetail");
+  const contextApplyStart = serverSource.indexOf("function applyConversationContextSnapshot");
+  const contextApplyEnd = serverSource.indexOf("function readConversationContextSnapshot", contextApplyStart);
+  const contextApplySource = serverSource.slice(contextApplyStart, contextApplyEnd);
+
+  assert.match(loaderSource, /const loadedUiLanguage = normalizeUiLanguage\(parsed\.uiLanguage\)/u);
+  assert.match(loaderSource, /language: loadedUiLanguage/u);
+  assert.match(contextApplySource, /language: currentState\.uiLanguage/u);
+  assert.match(normalizerSource, /finalizeAssistantOutputContent\(message\.content, \{ language \}\)/u);
+});
+
+test("startup failure cleanup does not rewrite already invalid turns", () => {
+  const cleanupSource = functionSource(
+    "markTrailingFailedConversationTurnsInvalid",
+    "clearInvalidConversationMessages"
+  );
+
+  assert.match(
+    cleanupSource,
+    /if \(userMessage\.invalidConversation && assistantMessage\.invalidConversation\) \{\s*continue;/u
+  );
+});
+
 test("app state stores cards separately and saved sessions contain conversation state only", () => {
   const saveStateSource = functionSource("saveState", "sendJson");
   const contextWriterSource = functionSource(
