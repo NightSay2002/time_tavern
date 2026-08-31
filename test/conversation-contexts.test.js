@@ -7,13 +7,27 @@ const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.ur
 const htmlSource = fs.readFileSync(new URL("../src/public/index.html", import.meta.url), "utf8");
 
 test("conversation contexts persist runtime separately from app state", () => {
+  const captureStart = serverSource.indexOf("function captureConversationContextSnapshot");
+  const captureEnd = serverSource.indexOf("function createEmptyConversationContextSnapshot", captureStart);
+  const captureSource = serverSource.slice(captureStart, captureEnd);
   assert.match(serverSource, /CONVERSATION_CONTEXTS_DIR/u);
   assert.match(serverSource, /function captureConversationContextSnapshot/u);
-  assert.match(serverSource, /conversation: cloneData\(currentState\.conversation/u);
-  assert.match(serverSource, /aiLogs: cloneData\(currentState\.aiLogs/u);
+  assert.match(captureSource, /conversation: cloneData\(currentState\.conversation/u);
+  assert.doesNotMatch(captureSource, /aiLogs/u);
   assert.match(serverSource, /writeConversationContextSnapshot/u);
   assert.match(serverSource, /conversation: _conversation/u);
   assert.match(serverSource, /aiLogs: _aiLogs/u);
+});
+
+test("AI logs are global and migrate out of channel context files", () => {
+  assert.match(serverSource, /const AI_LOGS_FILE = path\.join\(DATA_DIR, "ai-logs\.json"\)/u);
+  assert.match(serverSource, /function migrateConversationContextAiLogsToShared/u);
+  assert.match(serverSource, /delete snapshot\.aiLogs/u);
+  assert.match(serverSource, /persistSharedAiLogs\(state\.aiLogs\)/u);
+  assert.match(serverSource, /全局 AI 呼叫紀錄檔讀取失敗，已停止載入以避免覆蓋原資料/u);
+  const applyStart = serverSource.indexOf("function applyConversationContextSnapshot");
+  const applyEnd = serverSource.indexOf("function readConversationContextSnapshot", applyStart);
+  assert.doesNotMatch(serverSource.slice(applyStart, applyEnd), /currentState\.aiLogs\s*=/u);
 });
 
 test("legacy shared conversation migrates to its last Discord channel", () => {
@@ -63,12 +77,13 @@ test("deleting a Discord story preserves archives and releases its key group", (
   assert.match(serverSource, /requireExistingContext: true/u);
 });
 
-test("Discord channel deletion and startup reconciliation release abandoned stories", () => {
-  assert.match(serverSource, /async function cleanupDeletedDiscordChannelContexts/u);
-  assert.match(serverSource, /discordClient\.channels\.fetch\(metadata\.channelId, \{ force: true \}\)/u);
+test("Discord stories survive restart and only explicit deletion removes them", () => {
+  assert.match(serverSource, /function reconcileConversationContextIndexFromStorage/u);
+  assert.match(serverSource, /conversationContextIndexRecoveryCount = reconcileConversationContextIndexFromStorage\(state\)/u);
   assert.match(serverSource, /discordClient\.on\("channelDelete"/u);
   assert.match(serverSource, /deleteDiscordConversationContextForChannel\(channel\.id/u);
-  assert.match(serverSource, /await cleanupDeletedDiscordChannelContexts\(discordClient\)/u);
+  assert.doesNotMatch(serverSource, /cleanupDeletedDiscordChannelContexts/u);
+  assert.doesNotMatch(serverSource, /discordClient\.channels\.fetch\(metadata\.channelId/u);
 });
 
 test("QQ private chats use isolated hashed conversation contexts", () => {
@@ -89,6 +104,20 @@ test("conversation contexts lease independent chat API key groups", () => {
   assert.match(serverSource, /getChatApiKey\(purpose, targetState, conversationContextId\)/u);
   assert.match(webSource, /對話 API Key 組切換/u);
   assert.match(webSource, /CHAT_API_KEY_GROUP\$\{groupNumber\}/u);
+});
+
+test("stop releases only the current story key lease when generation is idle", () => {
+  assert.match(serverSource, /function stopGenerationOrReleaseKey/u);
+  assert.match(serverSource, /requestStopActiveGeneration\(normalizedContextId\)/u);
+  assert.match(serverSource, /releaseConversationApiKeyLease\(state, normalizedContextId\)/u);
+  assert.match(serverSource, /故事與頻道仍然保留/u);
+  assert.doesNotMatch(
+    serverSource.slice(
+      serverSource.indexOf("function releaseConversationApiKeyLease"),
+      serverSource.indexOf("function getStopActionMessage")
+    ),
+    /deleteConversationContext|rmSync/u
+  );
 });
 
 test("Discord start validates a free key group before changing the active story", () => {

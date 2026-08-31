@@ -154,12 +154,14 @@ const BUNDLED_APP_DEFAULTS_FILE = path.join(DEFAULTS_DIR, "app-defaults.json");
 const APP_DEFAULTS_FILE = path.join(DATA_DIR, "app-defaults.json");
 const STATE_FILE = path.join(DATA_DIR, "app-state.json");
 const CARD_STATE_FILE = path.join(DATA_DIR, "cardstate.json");
+const AI_LOGS_FILE = path.join(DATA_DIR, "ai-logs.json");
 const SAVED_SESSIONS_DIR = path.join(DATA_DIR, "saved-sessions");
 const CONVERSATION_CONTEXTS_DIR = path.join(DATA_DIR, "conversation-contexts");
 const CURRENT_CONVERSATION_IMAGES_DIR = path.join(DATA_DIR, "conversation-images");
 const SAVED_SESSION_IMAGES_DIR = path.join(DATA_DIR, "saved-session-images");
 const SAVED_SESSION_STORAGE_VERSION = 5;
 const CONVERSATION_CONTEXT_STORAGE_VERSION = 1;
+const SHARED_AI_LOG_STORAGE_VERSION = 1;
 const LOCAL_CONVERSATION_CONTEXT_ID = "local";
 const AI_LOG_CONTENT_REFERENCE_MIN_CHARS = 120;
 const AI_LOG_CONTENT_CHUNK_CHARS = 4096;
@@ -187,8 +189,10 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "BIGMODEL_API_KEY"
 ]);
 let lastPersistedCardStateContent = "";
+let lastPersistedAiLogsFingerprint = "";
 let savedSessionStorageMigrated = false;
 let conversationContextStorageMigrated = false;
+let state = null;
 let activeConversationExecutionContextId = "";
 let displacedWebConversationContext = null;
 const CHARACTER_CARD_CREATION_ASSISTANT_MODE = "CharacterCardCreationAssistant";
@@ -901,7 +905,7 @@ const DISCORD_SLASH_COMMANDS = [
   },
   {
     name: "stop",
-    description: "停止目前正在生成的 AI 回覆"
+    description: "停止目前生成；閒置時釋放目前故事租用的 Key"
   },
   {
     name: "close",
@@ -1211,6 +1215,7 @@ function createDefaultState() {
     conversationContextIndex: {},
     conversationApiKeyAssignments: {},
     conversationContextStorageVersion: 0,
+    sharedAiLogStorageVersion: 0,
     selectedOpeningDialogueId: "",
     updatedAt: nowIso()
   };
@@ -1712,8 +1717,11 @@ function readPersistedCardStateFile() {
 
   try {
     return JSON.parse(fs.readFileSync(CARD_STATE_FILE, "utf8"));
-  } catch {
-    return null;
+  } catch (error) {
+    throw new Error(
+      `角色卡狀態檔讀取失敗，已停止載入以避免覆蓋原資料：${safeText(error?.message) || "未知錯誤"}`,
+      { cause: error }
+    );
   }
 }
 
@@ -2017,14 +2025,14 @@ function loadState() {
       conversation: normalizeConversationForClient(cloneData(parsed.conversation, []), {
         preserveInternalState: true
       }),
-      aiLogs: expandAiLogsFromStorage(parsed.aiLogs, parsed.aiLogContentStore)
-        .map((entry) => normalizeAiLog(entry)),
+      aiLogs: loadSharedAiLogs(parsed.aiLogs, parsed.aiLogContentStore),
       activeSavedSessionId: null,
       selectedConversationContextId: normalizeConversationContextId(parsed.selectedConversationContextId) ||
         LOCAL_CONVERSATION_CONTEXT_ID,
       conversationContextIndex: normalizeConversationContextIndex(parsed.conversationContextIndex),
       conversationApiKeyAssignments: normalizeConversationApiKeyAssignments(parsed.conversationApiKeyAssignments),
       conversationContextStorageVersion: Math.max(0, Number.parseInt(parsed.conversationContextStorageVersion, 10) || 0),
+      sharedAiLogStorageVersion: Math.max(0, Number.parseInt(parsed.sharedAiLogStorageVersion, 10) || 0),
       selectedOpeningDialogueId: safeText(parsed.selectedOpeningDialogueId)
     };
     merged.turnState = normalizeTurnState(parsed.turnState, merged);
@@ -2073,6 +2081,17 @@ function loadState() {
       const storedContext = readConversationContextSnapshot(merged.selectedConversationContextId);
       if (storedContext?.snapshot) {
         applyConversationContextSnapshot(merged, storedContext.snapshot, merged.selectedConversationContextId);
+      } else if (merged.selectedConversationContextId !== LOCAL_CONVERSATION_CONTEXT_ID) {
+        const localContext = readConversationContextSnapshot(LOCAL_CONVERSATION_CONTEXT_ID);
+        merged.selectedConversationContextId = LOCAL_CONVERSATION_CONTEXT_ID;
+        applyConversationContextSnapshot(
+          merged,
+          localContext?.snapshot || createEmptyConversationContextSnapshot(
+            merged,
+            LOCAL_CONVERSATION_CONTEXT_ID
+          ),
+          LOCAL_CONVERSATION_CONTEXT_ID
+        );
       } else {
         const emptySnapshot = createEmptyConversationContextSnapshot(merged, merged.selectedConversationContextId);
         applyConversationContextSnapshot(merged, emptySnapshot, merged.selectedConversationContextId);
@@ -2080,8 +2099,11 @@ function loadState() {
       }
     }
     return merged;
-  } catch {
-    return createDefaultState();
+  } catch (error) {
+    throw new Error(
+      `主狀態檔讀取失敗，已停止啟動以避免用空白狀態覆蓋原資料：${safeText(error?.message) || "未知錯誤"}`,
+      { cause: error }
+    );
   }
 }
 
@@ -2104,6 +2126,7 @@ function saveState(state) {
   state.activeSavedSessionId = null;
   state.updatedAt = nowIso();
   persistCardState(state);
+  persistSharedAiLogs(state.aiLogs);
   const persistenceContextId = normalizeConversationContextId(activeConversationExecutionContextId) ||
     state.selectedConversationContextId;
   writeConversationContextSnapshot(
@@ -2356,6 +2379,100 @@ function expandAiLogsFromStorage(aiLogs = [], contentStore = {}) {
   });
 }
 
+function getAiLogsFingerprint(aiLogs = []) {
+  return (Array.isArray(aiLogs) ? aiLogs : []).map((entry) => [
+    safeText(entry?.id),
+    safeText(entry?.status),
+    safeText(entry?.createdAt),
+    Array.isArray(entry?.requestMessages) ? entry.requestMessages.length : 0,
+    typeof entry?.responseText === "string" ? entry.responseText.length : 0,
+    typeof entry?.debugReasoningContent === "string" ? entry.debugReasoningContent.length : 0,
+    safeText(entry?.error).length
+  ].join(":"));
+}
+
+function loadSharedAiLogs(fallbackLogs = [], fallbackContentStore = {}) {
+  const parsed = readJsonFile(AI_LOGS_FILE);
+  if (fs.existsSync(AI_LOGS_FILE) && parsed?.version !== SHARED_AI_LOG_STORAGE_VERSION) {
+    throw new Error("全局 AI 呼叫紀錄檔讀取失敗，已停止載入以避免覆蓋原資料。");
+  }
+  const sourceLogs = parsed?.version === SHARED_AI_LOG_STORAGE_VERSION
+    ? parsed.logs
+    : fallbackLogs;
+  const contentStore = parsed?.version === SHARED_AI_LOG_STORAGE_VERSION
+    ? parsed.contentStore
+    : fallbackContentStore;
+  const logs = expandAiLogsFromStorage(sourceLogs, contentStore)
+    .map((entry) => normalizeAiLog(entry))
+    .slice(-200);
+  if (parsed?.version === SHARED_AI_LOG_STORAGE_VERSION) {
+    lastPersistedAiLogsFingerprint = getAiLogsFingerprint(logs).join("|");
+  }
+  return logs;
+}
+
+function persistSharedAiLogs(aiLogs = []) {
+  const normalizedLogs = (Array.isArray(aiLogs) ? aiLogs : [])
+    .map((entry) => normalizeAiLog(entry))
+    .slice(-200);
+  const fingerprint = getAiLogsFingerprint(normalizedLogs).join("|");
+  if (fingerprint === lastPersistedAiLogsFingerprint && fs.existsSync(AI_LOGS_FILE)) {
+    return;
+  }
+  const compacted = compactAiLogsForStorage(normalizedLogs);
+  writeJsonFile(AI_LOGS_FILE, {
+    version: SHARED_AI_LOG_STORAGE_VERSION,
+    logs: compacted.logs,
+    contentStore: compacted.contentStore,
+    updatedAt: nowIso()
+  });
+  lastPersistedAiLogsFingerprint = fingerprint;
+}
+
+function migrateConversationContextAiLogsToShared(currentState) {
+  if (currentState.sharedAiLogStorageVersion >= SHARED_AI_LOG_STORAGE_VERSION) {
+    return 0;
+  }
+  const mergedLogs = Array.isArray(currentState.aiLogs)
+    ? currentState.aiLogs.map((entry) => normalizeAiLog(entry))
+    : [];
+  const existingIds = new Set(mergedLogs.map((entry) => safeText(entry.id)).filter(Boolean));
+  let migratedCount = 0;
+  if (fs.existsSync(CONVERSATION_CONTEXTS_DIR)) {
+    fs.readdirSync(CONVERSATION_CONTEXTS_DIR, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isFile() || !/^[a-zA-Z0-9_-]+\.json$/u.test(entry.name)) {
+        return;
+      }
+      const filePath = path.join(CONVERSATION_CONTEXTS_DIR, entry.name);
+      const parsed = readJsonFile(filePath);
+      if (!parsed?.snapshot) {
+        return;
+      }
+      const snapshot = cloneData(parsed.snapshot, {});
+      expandAiLogsFromStorage(snapshot.aiLogs, snapshot.aiLogContentStore)
+        .map((item) => normalizeAiLog(item))
+        .forEach((item) => {
+          if (!existingIds.has(item.id)) {
+            mergedLogs.push(item);
+            existingIds.add(item.id);
+            migratedCount += 1;
+          }
+        });
+      if (Object.prototype.hasOwnProperty.call(snapshot, "aiLogs") ||
+        Object.prototype.hasOwnProperty.call(snapshot, "aiLogContentStore")) {
+        delete snapshot.aiLogs;
+        delete snapshot.aiLogContentStore;
+        writeJsonFile(filePath, { ...parsed, snapshot, updatedAt: nowIso() });
+      }
+    });
+  }
+  currentState.aiLogs = mergedLogs
+    .sort((left, right) => safeText(left.createdAt).localeCompare(safeText(right.createdAt)))
+    .slice(-200);
+  currentState.sharedAiLogStorageVersion = SHARED_AI_LOG_STORAGE_VERSION;
+  return migratedCount;
+}
+
 function captureRuntimeSnapshot(currentState) {
   return {
     userProfile: cloneData(currentState.userProfile, createDefaultState().userProfile),
@@ -2395,8 +2512,7 @@ function captureSavedConversationSnapshot(currentState) {
     ...(activeAssistantMode ? {} : { timeTracking: normalizeTimeTrackingState(currentState.timeTracking) }),
     discordPlayers: normalizeDiscordPlayerState(currentState.discordPlayers),
     turnState: normalizeTurnState(currentState.turnState, currentState),
-    conversation: cloneData(currentState.conversation, []),
-    aiLogs: cloneData(currentState.aiLogs, [])
+    conversation: cloneData(currentState.conversation, [])
   };
 }
 
@@ -2512,8 +2628,6 @@ function applyRuntimeSnapshot(currentState, snapshot) {
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
     preserveInternalState: true
   });
-  currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
-    .map((entry) => normalizeAiLog(entry));
   currentState.turnState = normalizeTurnState(source.turnState, currentState);
 }
 
@@ -2631,6 +2745,44 @@ function normalizeConversationContextIndex(input = {}) {
   }));
 }
 
+function reconcileConversationContextIndexFromStorage(currentState) {
+  if (!fs.existsSync(CONVERSATION_CONTEXTS_DIR)) {
+    return 0;
+  }
+  const originalIndex = normalizeConversationContextIndex(currentState.conversationContextIndex);
+  const recoveredIndex = { ...originalIndex };
+  try {
+    fs.readdirSync(CONVERSATION_CONTEXTS_DIR, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isFile() || !/^[a-zA-Z0-9_-]+\.json$/u.test(entry.name)) {
+        return;
+      }
+      const parsed = readJsonFile(path.join(CONVERSATION_CONTEXTS_DIR, entry.name));
+      const contextId = normalizeConversationContextId(parsed?.contextId);
+      if (
+        !contextId ||
+        contextId === LOCAL_CONVERSATION_CONTEXT_ID ||
+        !parsed?.snapshot
+      ) {
+        return;
+      }
+      const storedMetadata = normalizeConversationContextMetadata(parsed.metadata, contextId);
+      const existingMetadata = originalIndex[contextId] || {};
+      recoveredIndex[contextId] = normalizeConversationContextMetadata({
+        guildId: safeText(existingMetadata.guildId) || storedMetadata.guildId,
+        guildName: safeText(existingMetadata.guildName) || storedMetadata.guildName,
+        channelName: safeText(existingMetadata.channelName) || storedMetadata.channelName,
+        qqUserOpenId: safeText(existingMetadata.qqUserOpenId) || storedMetadata.qqUserOpenId,
+        userName: safeText(existingMetadata.userName) || storedMetadata.userName,
+        updatedAt: safeText(existingMetadata.updatedAt) || safeText(parsed.updatedAt) || storedMetadata.updatedAt
+      }, contextId);
+    });
+  } catch (error) {
+    console.warn(`重建對話故事索引失敗：${safeText(error?.message) || "未知錯誤"}`);
+  }
+  currentState.conversationContextIndex = recoveredIndex;
+  return Object.keys(recoveredIndex).filter((contextId) => !originalIndex[contextId]).length;
+}
+
 function getConversationContextFilePath(contextId = "") {
   const normalizedId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
   const fileName = normalizedId === LOCAL_CONVERSATION_CONTEXT_ID
@@ -2653,8 +2805,7 @@ function captureConversationContextSnapshot(currentState) {
     timeTracking: normalizeTimeTrackingState(currentState.timeTracking),
     discordPlayers: normalizeDiscordPlayerState(currentState.discordPlayers),
     turnState: normalizeTurnState(currentState.turnState, currentState),
-    conversation: cloneData(currentState.conversation, []),
-    aiLogs: cloneData(currentState.aiLogs, [])
+    conversation: cloneData(currentState.conversation, [])
   };
 }
 
@@ -2675,8 +2826,7 @@ function createEmptyConversationContextSnapshot(currentState, contextId = LOCAL_
     )),
     discordPlayers: createDefaultDiscordPlayerState(channelId),
     turnState: createDefaultTurnState(),
-    conversation: [],
-    aiLogs: []
+    conversation: []
   };
 }
 
@@ -2725,8 +2875,6 @@ function applyConversationContextSnapshot(currentState, snapshot = {}, contextId
   currentState.conversation = normalizeConversationForClient(cloneData(source.conversation, []), {
     preserveInternalState: true
   });
-  currentState.aiLogs = expandAiLogsFromStorage(source.aiLogs, source.aiLogContentStore)
-    .map((entry) => normalizeAiLog(entry));
   currentState.lastDiscordChannelId = channelId;
   currentState.activeSavedSessionId = null;
 }
@@ -2746,9 +2894,6 @@ function readConversationContextSnapshot(contextId = "") {
 function writeConversationContextSnapshot(currentState, contextId = "", metadata = null) {
   const normalizedId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
   const snapshot = captureConversationContextSnapshot(currentState);
-  const compactedAiLogs = compactAiLogsForStorage(snapshot.aiLogs);
-  snapshot.aiLogs = compactedAiLogs.logs;
-  snapshot.aiLogContentStore = compactedAiLogs.contentStore;
   updateConversationContextImageReferences(normalizedId, snapshot.conversation);
   writeJsonFile(getConversationContextFilePath(normalizedId), {
     version: CONVERSATION_CONTEXT_STORAGE_VERSION,
@@ -2829,6 +2974,9 @@ function switchSelectedConversationContext(currentState, requestedContextId = ""
     currentState.conversationContextIndex?.[currentContextId]
   );
   const stored = readConversationContextSnapshot(contextId);
+  if (!stored?.snapshot && contextId !== LOCAL_CONVERSATION_CONTEXT_ID) {
+    return { ok: false, error: "這個故事的資料檔不存在，未建立空白故事以免覆蓋原資料。" };
+  }
   applyConversationContextSnapshot(
     currentState,
     stored?.snapshot || createEmptyConversationContextSnapshot(currentState, contextId),
@@ -2890,10 +3038,6 @@ function deleteConversationContext(currentState, requestedContextId = "") {
   return { ok: true, contextId, selectedContextId: currentState.selectedConversationContextId };
 }
 
-function isDiscordUnknownChannelError(error) {
-  return Number(error?.code || error?.rawError?.code) === 10003;
-}
-
 async function deleteDiscordConversationContextForChannel(channelId = "", reason = "") {
   const contextId = getDiscordConversationContextId(channelId);
   if (!contextId || !hasStoredConversationContext(state, contextId)) {
@@ -2906,29 +3050,6 @@ async function deleteDiscordConversationContextForChannel(channelId = "", reason
     console.log(`[Discord] 已清除${reason ? `${reason}的` : ""}頻道故事並釋放 Key：${channelId}`);
   }
   return result.ok;
-}
-
-async function cleanupDeletedDiscordChannelContexts(discordClient) {
-  const contexts = Object.values(normalizeConversationContextIndex(state.conversationContextIndex))
-    .filter((metadata) => safeText(metadata.guildId) && safeText(metadata.channelId));
-  let removedCount = 0;
-  for (const metadata of contexts) {
-    try {
-      const channel = await discordClient.channels.fetch(metadata.channelId, { force: true });
-      if (channel) {
-        continue;
-      }
-    } catch (error) {
-      if (!isDiscordUnknownChannelError(error)) {
-        console.warn(`Discord 頻道狀態檢查失敗（${metadata.channelId}）：${error.message || error}`);
-        continue;
-      }
-    }
-    if (await deleteDiscordConversationContextForChannel(metadata.channelId, "已不存在")) {
-      removedCount += 1;
-    }
-  }
-  return removedCount;
 }
 
 function ensureSavedSessionsDir() {
@@ -3198,6 +3319,26 @@ function writeSavedSessionExternalData(sessionOrId, snapshot = {}) {
   snapshotForStorage.aiLogContentStore = compactedAiLogs.contentStore;
   const payload = {
     version: SAVED_SESSION_STORAGE_VERSION,
+    ...(typeof sessionOrId === "object" && sessionOrId
+      ? {
+          metadata: {
+            id: sessionId,
+            name: safeText(sessionOrId.name),
+            status: safeText(sessionOrId.status) === "archived" ? "archived" : "active",
+            roleCardId: safeText(sessionOrId.roleCardId) || null,
+            roleCardName: safeText(sessionOrId.roleCardName),
+            assistantMode: normalizeAssistantMode(sessionOrId.assistantMode),
+            messageCount: Array.isArray(snapshotForStorage.conversation)
+              ? snapshotForStorage.conversation.length
+              : Math.max(0, Number.parseInt(sessionOrId.messageCount, 10) || 0),
+            aiLogCount: Array.isArray(snapshotForStorage.aiLogs)
+              ? snapshotForStorage.aiLogs.length
+              : Math.max(0, Number.parseInt(sessionOrId.aiLogCount, 10) || 0),
+            createdAt: safeText(sessionOrId.createdAt),
+            updatedAt: safeText(sessionOrId.updatedAt) || nowIso()
+          }
+        }
+      : {}),
     snapshot: snapshotForStorage,
     updatedAt: nowIso()
   };
@@ -3234,6 +3375,97 @@ function migrateSavedSessionStorageFiles() {
   return migratedCount;
 }
 
+function inferSavedSessionRoleCardId(snapshot = {}) {
+  const directId = safeText(snapshot.activeRoleCardId);
+  if (directId) {
+    return directId;
+  }
+  const runtimeIds = Object.keys(normalizeRoleCardRuntimeStateMap(snapshot.roleCardRuntimeState));
+  if (runtimeIds.length === 1) {
+    return runtimeIds[0];
+  }
+  const conversation = Array.isArray(snapshot.conversation) ? snapshot.conversation : [];
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    const message = conversation[index];
+    const checkpointId = safeText(
+      message?.stateAfterTurnSnapshot?.activeRoleCardId ||
+      message?.stateBeforeTurnSnapshot?.activeRoleCardId ||
+      message?.extra?.stateAfterTurnSnapshot?.activeRoleCardId ||
+      message?.extra?.stateBeforeTurnSnapshot?.activeRoleCardId
+    );
+    if (checkpointId) {
+      return checkpointId;
+    }
+  }
+  return "";
+}
+
+function reconcileSavedSessionIndexFromStorage(currentState) {
+  ensureSavedSessionsDir();
+  const existingIds = new Set(
+    (Array.isArray(currentState.savedSessions) ? currentState.savedSessions : [])
+      .map((session) => safeText(session?.id))
+      .filter(Boolean)
+  );
+  let recoveredCount = 0;
+  try {
+    const entries = fs.readdirSync(SAVED_SESSIONS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^[a-zA-Z0-9_-]+\.json$/u.test(entry.name))
+      .map((entry) => {
+        const filePath = path.join(SAVED_SESSIONS_DIR, entry.name);
+        return { entry, filePath, stat: fs.statSync(filePath) };
+      })
+      .sort((left, right) => left.stat.mtimeMs - right.stat.mtimeMs);
+    entries.forEach(({ entry, filePath, stat }) => {
+      const sessionId = entry.name.slice(0, -".json".length);
+      if (existingIds.has(sessionId)) {
+        return;
+      }
+      const parsed = readJsonFile(filePath);
+      const snapshot = parsed?.snapshot && typeof parsed.snapshot === "object"
+        ? cloneData(parsed.snapshot, {})
+        : null;
+      if (!snapshot) {
+        console.warn(`略過無法辨識的對話存檔：${entry.name}`);
+        return;
+      }
+      snapshot.aiLogs = expandAiLogsFromStorage(snapshot.aiLogs, snapshot.aiLogContentStore)
+        .map((entry) => normalizeAiLog(entry));
+      delete snapshot.aiLogContentStore;
+      const storedMetadata = parsed.metadata && typeof parsed.metadata === "object"
+        ? parsed.metadata
+        : {};
+      const roleCardId = safeText(storedMetadata.roleCardId) || inferSavedSessionRoleCardId(snapshot);
+      const roleCard = currentState.roleCards.find((card) => safeText(card?.id) === roleCardId);
+      const assistantMode = normalizeAssistantMode(
+        storedMetadata.assistantMode || snapshot.activeAssistantMode
+      );
+      const assistantCard = getAssistantCardById(currentState, assistantMode);
+      const createdAt = safeText(storedMetadata.createdAt) || stat.birthtime.toISOString();
+      const updatedAt = safeText(storedMetadata.updatedAt) || safeText(parsed.updatedAt) || stat.mtime.toISOString();
+      const session = createSavedSessionMetadata({
+        ...storedMetadata,
+        id: sessionId,
+        roleCardId,
+        assistantMode,
+        roleCardName: safeText(storedMetadata.roleCardName) ||
+          safeText(assistantCard?.name) ||
+          safeText(roleCard?.name) ||
+          "未指定角色卡",
+        createdAt,
+        updatedAt
+      }, snapshot, currentState.savedSessions.length);
+      currentState.savedSessions.push(session);
+      existingIds.add(sessionId);
+      writeSavedSessionExternalData(session, snapshot);
+      recoveredCount += 1;
+    });
+  } catch (error) {
+    console.warn(`重建對話存檔索引失敗：${safeText(error?.message) || "未知錯誤"}`);
+  }
+  return recoveredCount;
+}
+
 function materializeSavedSessionSnapshot(session) {
   const externalData = readSavedSessionExternalData(session);
   if (externalData.snapshot) {
@@ -3247,11 +3479,11 @@ function materializeSavedSessionSnapshot(session) {
 
 function createSavedSessionMetadata(source, snapshot, index = 0) {
   const now = nowIso();
-  const roleCardId = safeText(snapshot?.activeRoleCardId) || null;
+  const roleCardId = safeText(source?.roleCardId) || safeText(snapshot?.activeRoleCardId) || null;
   const roleCard = Array.isArray(snapshot?.roleCards)
     ? snapshot.roleCards.find((card) => safeText(card?.id) === roleCardId)
     : null;
-  const assistantMode = normalizeAssistantMode(snapshot?.activeAssistantMode);
+  const assistantMode = normalizeAssistantMode(source?.assistantMode || snapshot?.activeAssistantMode);
   const assistantCard = assistantMode ? getAssistantCardById(snapshot, assistantMode) : null;
   const id = safeText(source?.id) || newId("session");
   return {
@@ -3400,7 +3632,7 @@ function createSavedSessionFromCurrentState(currentState, nameInput = "") {
   };
   const session = createSavedSessionMetadata(sessionSource, snapshotSource, currentState.savedSessions.length);
   try {
-    writeSavedSessionExternalData(sessionId, snapshotSource);
+    writeSavedSessionExternalData(session, snapshotSource);
   } catch (error) {
     deleteSavedSessionImages(sessionId);
     throw error;
@@ -9767,6 +9999,41 @@ function requestStopActiveGeneration(contextId = "") {
   return true;
 }
 
+function releaseConversationApiKeyLease(currentState, contextId = "") {
+  const normalizedContextId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
+  const assignments = normalizeConversationApiKeyAssignments(currentState.conversationApiKeyAssignments);
+  if (!assignments[normalizedContextId]) {
+    return false;
+  }
+  currentState.conversationApiKeyAssignments = releaseConversationApiKeySlot(
+    assignments,
+    normalizedContextId
+  );
+  saveState(currentState);
+  return true;
+}
+
+async function stopGenerationOrReleaseKey(contextId = "") {
+  const normalizedContextId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
+  if (requestStopActiveGeneration(normalizedContextId)) {
+    return { stopped: true, releasedKey: false };
+  }
+  const releasedKey = await withStateLock(
+    () => releaseConversationApiKeyLease(state, normalizedContextId)
+  );
+  return { stopped: false, releasedKey };
+}
+
+function getStopActionMessage(result = {}) {
+  if (result.stopped) {
+    return GENERATION_STOPPED_MESSAGE;
+  }
+  if (result.releasedKey) {
+    return "已釋放目前故事租用的對話 API Key；故事與頻道仍然保留。";
+  }
+  return "目前沒有正在生成的對話，也沒有租用中的 Key。";
+}
+
 function isActiveGenerationRunning(contextId = "") {
   const requestedContextId = normalizeConversationContextId(contextId);
   return Boolean(
@@ -11285,14 +11552,26 @@ function statePayload(currentState) {
 }
 
 const savedSessionStorageFileMigrationCount = migrateSavedSessionStorageFiles();
-let state = loadState();
+state = loadState();
+const savedSessionIndexRecoveryCount = reconcileSavedSessionIndexFromStorage(state);
+const conversationContextIndexRecoveryCount = reconcileConversationContextIndexFromStorage(state);
+const sharedAiLogStorageWasCurrent = state.sharedAiLogStorageVersion >= SHARED_AI_LOG_STORAGE_VERSION;
+const sharedAiLogMigrationCount = migrateConversationContextAiLogsToShared(state);
+const sharedAiLogStorageMigrated = !sharedAiLogStorageWasCurrent &&
+  state.sharedAiLogStorageVersion >= SHARED_AI_LOG_STORAGE_VERSION;
+const sharedAiLogFileMissing = !fs.existsSync(AI_LOGS_FILE);
 const trailingFailedConversationTurnsSanitized = markTrailingFailedConversationTurnsInvalid(state);
 cleanupCurrentConversationImagesAcrossContexts(state);
 const imageGenerationCompressionStateSanitized = sanitizeImageGenerationCompressionState(state);
 if (
   savedSessionStorageMigrated ||
   savedSessionStorageFileMigrationCount > 0 ||
+  savedSessionIndexRecoveryCount > 0 ||
   conversationContextStorageMigrated ||
+  conversationContextIndexRecoveryCount > 0 ||
+  sharedAiLogMigrationCount > 0 ||
+  sharedAiLogStorageMigrated ||
+  sharedAiLogFileMissing ||
   imageGenerationCompressionStateSanitized ||
   trailingFailedConversationTurnsSanitized > 0
 ) {
@@ -13333,10 +13612,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/chat/stop" && method === "POST") {
-      const stopped = requestStopActiveGeneration(state.selectedConversationContextId);
+      const result = await stopGenerationOrReleaseKey(state.selectedConversationContextId);
       sendJson(res, 200, {
-        stopped,
-        message: stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"
+        ...result,
+        message: getStopActionMessage(result)
       });
       return;
     }
@@ -14839,8 +15118,8 @@ async function handleQqTextCommand(command, { userOpenId, userName, qqMessageId,
 
   const contextId = getQqConversationContextId(userOpenId);
   if (command.name === "stop") {
-    const stopped = requestStopActiveGeneration(contextId);
-    await reply(qqSystemText(stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"));
+    const result = await stopGenerationOrReleaseKey(contextId);
+    await reply(qqSystemText(getStopActionMessage(result)));
     return;
   }
   if (command.name === "close") {
@@ -15296,10 +15575,12 @@ async function handleSlashCommand(interaction) {
   }
 
   if (name === "stop") {
-    const stopped = requestStopActiveGeneration(getDiscordConversationContextId(interaction.channelId));
+    const result = await stopGenerationOrReleaseKey(
+      getDiscordConversationContextId(interaction.channelId)
+    );
     await safeSendInteractionText(
       interaction,
-      discordSystemText(stopped ? GENERATION_STOPPED_MESSAGE : "目前沒有正在生成的對話。"),
+      discordSystemText(getStopActionMessage(result)),
       { ephemeral: true }
     );
     return;
@@ -15621,14 +15902,6 @@ function setupDiscordBot() {
     }
     discordConnected = true;
     console.log(`Discord bot 已上線：${discordClient.user?.tag || "unknown"}`);
-    try {
-      const removedContextCount = await cleanupDeletedDiscordChannelContexts(discordClient);
-      if (removedContextCount > 0) {
-        console.log(`[Discord] 啟動時清除了 ${removedContextCount} 個已刪除頻道的故事。`);
-      }
-    } catch (error) {
-      console.warn(`Discord 已刪除頻道故事清理失敗：${error.message || error}`);
-    }
     void registerSlashCommands(discordClient);
   });
 

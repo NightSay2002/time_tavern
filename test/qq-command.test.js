@@ -39,5 +39,6 @@ test("QQ help lists every supported private-chat command", () => {
   const help = buildQqHelpText();
   ["!help", "!開始", "!ai_start", "!ai_status", "!stop", "!close", "!archive", "!archive_return"]
     .forEach((command) => assert.equal(help.includes(command), true));
+  assert.match(help, /!stop - 停止目前生成；閒置時釋放目前故事租用的 Key/u);
   assert.match(localizeSystemText(help, UI_LANGUAGE_SIMPLIFIED), /!开始 - 使用目前角色卡的第一个开场开始/u);
 });
