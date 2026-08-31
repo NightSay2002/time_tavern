@@ -86,6 +86,16 @@ test("API default and non-DeepSeek providers preserve the existing request shape
   assert.equal(openAiBody.temperature, 0.5);
 });
 
+test("optional temperature is omitted when a caller needs the model default", () => {
+  const body = buildChatApiRequestBody({
+    ...baseRequest,
+    provider: "custom",
+    temperature: null
+  });
+
+  assert.equal(Object.hasOwn(body, "temperature"), false);
+});
+
 test("GLM 5.3 uses the selected model directly and keeps native thinking enabled", () => {
   assert.equal(normalizeGlmReasoningEffort(" HIGH "), "high");
   assert.equal(normalizeGlmReasoningEffort("none"), "none");

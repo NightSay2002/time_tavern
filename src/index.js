@@ -59,6 +59,7 @@ import {
 } from "./discord-archive.js";
 import {
   buildDiscordRoleCardBrowserPayload,
+  getDefaultDiscordOpeningNumber,
   getDiscordRoleCardByNumber,
   getInitialDiscordOpeningNumber,
   getInitialDiscordRoleCardNumber,
@@ -221,6 +222,7 @@ const DEFAULT_CHAT_API_PROVIDER = "deepseek";
 const DEFAULT_CHAT_API_MODEL = "deepseek-v4-pro";
 const DEFAULT_MIN_REPLY_CHARS = 600;
 const CHAT_API_LENGTH_RETRY_LIMIT = 1;
+const CHAT_API_EMPTY_RESPONSE_RETRY_LIMIT = 1;
 const CHAT_API_TEMPERATURE = 0.5;
 const CHARACTER_CARD_CREATION_ASSISTANT_TEMPERATURE = 0.9;
 const DEFAULT_DIALOGUE_CONTEXT_ROUNDS = 20;
@@ -883,12 +885,12 @@ const DISCORD_SLASH_COMMANDS = [
         name: "num",
         description: "0 使用目前角色卡；其他數字使用角色卡瀏覽器中的編號",
         type: ApplicationCommandOptionType.Integer,
-        required: true,
+        required: false,
         minValue: 0
       },
       {
         name: "opening",
-        description: "開場編號；未填時使用開場 1",
+        description: "開場編號；未填時使用角色卡設定的預設開場",
         type: ApplicationCommandOptionType.Integer,
         required: false,
         minValue: 1
@@ -9835,6 +9837,15 @@ function shouldRetryChatApiLength(purpose = "chat") {
   );
 }
 
+function shouldRetryChatApiEmptyResponse(content = "", emptyRetryCount = 0) {
+  return !safeText(content) && emptyRetryCount < CHAT_API_EMPTY_RESPONSE_RETRY_LIMIT;
+}
+
+function getChatApiEmptyResponseError(finishReason = "") {
+  const suffix = finishReason ? `（finish_reason: ${finishReason}）` : "";
+  return `對話 API 連續兩次回傳空白內容${suffix}。請確認 Base URL 指向可輸出文字的 deployment，並檢查模型或內容安全設定。`;
+}
+
 function buildChatApiLengthRetryMessages(messages, partialContent = "", purpose = "chat") {
   if (isModelImagePromptPurpose(purpose)) {
     return [
@@ -10443,7 +10454,6 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
     provider: config.provider,
     reasoningEffort: config.reasoningEffort,
     model: config.model,
-    temperature: 0,
     maxTokens: ["deepseek", "zhipu"].includes(config.provider) && config.reasoningEffort !== "none" ? 1024 : 8,
     maxTokensParamName: config.maxTokensParamName,
     messages: [
@@ -10536,6 +10546,7 @@ async function callChatApiCompletionRaw({
   maxTokens,
   purpose = "chat",
   retryCount = 0,
+  emptyRetryCount = 0,
   responseFormat = null,
   aiLogTargetState = null,
   conversationContextId = ""
@@ -10700,6 +10711,20 @@ async function callChatApiCompletionRaw({
   const trimmedReasoning = safeText(reasoningContent).trim();
   const usage = normalizeAiUsage(payload?.usage);
 
+  if (shouldRetryChatApiEmptyResponse(trimmed, emptyRetryCount)) {
+    return callChatApiCompletionRaw({
+      messages,
+      temperature: resolvedTemperature,
+      maxTokens: resolvedMaxTokens,
+      purpose,
+      retryCount,
+      emptyRetryCount: emptyRetryCount + 1,
+      responseFormat,
+      aiLogTargetState,
+      conversationContextId
+    });
+  }
+
   if (
     finishReason === "length" &&
     shouldRetryChatApiLength(purpose) &&
@@ -10755,7 +10780,8 @@ async function callChatApiCompletionRaw({
     throw new Error(errorMessage);
   }
 
-  if (!content || typeof content !== "string") {
+  if (!trimmed) {
+    const errorMessage = getChatApiEmptyResponseError(finishReason);
     appendAiLog({
       purpose,
       model,
@@ -10764,13 +10790,11 @@ async function callChatApiCompletionRaw({
       requestMessages,
       responseText: JSON.stringify(payload),
       usage,
-      error: `對話 API 回傳格式不完整${finishReason ? `（finish_reason: ${finishReason}）` : ""}`,
+      error: errorMessage,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(
-      `對話 API 回傳格式不完整${finishReason ? `（finish_reason: ${finishReason}）` : ""}`
-    );
+    throw new Error(errorMessage);
   }
   appendAiLog({
     purpose,
@@ -10889,6 +10913,7 @@ async function callChatApiCompletionStreamRaw({
   maxTokens,
   purpose = "chat",
   retryCount = 0,
+  emptyRetryCount = 0,
   suppressLog = false,
   onReasoningDelta,
   onContentDelta
@@ -11064,6 +11089,20 @@ async function callChatApiCompletionStreamRaw({
   cleanup();
   throwIfGenerationStopped(generationEntry);
 
+  if (shouldRetryChatApiEmptyResponse(streamed.content, emptyRetryCount)) {
+    return callChatApiCompletionStreamRaw({
+      messages,
+      temperature: resolvedTemperature,
+      maxTokens: resolvedMaxTokens,
+      purpose,
+      retryCount,
+      emptyRetryCount: emptyRetryCount + 1,
+      suppressLog,
+      onReasoningDelta,
+      onContentDelta
+    });
+  }
+
   if (
     streamed.finishReason === "length" &&
     shouldRetryChatApiLength(purpose) &&
@@ -11148,6 +11187,7 @@ async function callChatApiCompletionStreamRaw({
   }
 
   if (!streamed.content) {
+    const errorMessage = getChatApiEmptyResponseError(streamed.finishReason);
     if (!suppressLog) {
       appendAiLog({
         purpose,
@@ -11157,14 +11197,12 @@ async function callChatApiCompletionStreamRaw({
         requestMessages,
         responseText: "",
         usage: streamed.usage || null,
-        error: `對話 API 回傳格式不完整${streamed.finishReason ? `（finish_reason: ${streamed.finishReason}）` : ""}`,
+        error: errorMessage,
         status: "error",
         createdAt: nowIso()
       });
     }
-    throw new Error(
-      `對話 API 回傳格式不完整${streamed.finishReason ? `（finish_reason: ${streamed.finishReason}）` : ""}`
-    );
+    throw new Error(errorMessage);
   }
 
   if (!suppressLog) {
@@ -13926,6 +13964,28 @@ async function sendDiscordLongMessage(message, text) {
   return sentMessages;
 }
 
+function scheduleDiscordErrorMessageDeletion(sentMessages = []) {
+  const messages = (Array.isArray(sentMessages) ? sentMessages : []).filter((item) => item?.delete);
+  if (messages.length === 0) {
+    return;
+  }
+  const delayMs = Math.min(
+    envFirstNumber(["DISCORD_ERROR_AUTO_DELETE_SECONDS"], 15),
+    300
+  ) * 1000;
+  const timer = setTimeout(() => {
+    messages.forEach((item) => {
+      void item.delete().catch((error) => {
+        const code = String(error?.code || error?.rawError?.code || "");
+        if (code !== "10008") {
+          console.warn(`Discord 頻道錯誤訊息自動刪除失敗：${error?.message || error}`);
+        }
+      });
+    });
+  }, delayMs);
+  timer.unref?.();
+}
+
 function getDiscordReplyMessageIds(record = {}) {
   const source = record && typeof record === "object" ? record : {};
   const value = source.discordReplyMessageIds || source.extra?.discordReplyMessageIds;
@@ -14365,16 +14425,16 @@ async function startSessionFromDiscord(
 
     let selectedOpening = null;
     if (card) {
-      const openingNumber = hasRequestedOpening
-        ? normalizeDiscordRoleCardNumber(requestedOpeningNumber)
-        : 1;
       const openings = normalizeRoleCardOpeningDialogues(card.openingDialogues, card.openingDialogue)
         .filter((entry) => safeText(entry.content));
+      const openingNumber = hasRequestedOpening
+        ? normalizeDiscordRoleCardNumber(requestedOpeningNumber)
+        : getDefaultDiscordOpeningNumber(card);
       if (!openingNumber || !openings[openingNumber - 1]) {
         return {
           ok: false,
           error: openings.length > 0
-            ? `找不到開場 ${requestedOpeningNumber || 1}，這張角色卡可用開場為 1 至 ${openings.length}。`
+            ? `找不到開場 ${hasRequestedOpening ? requestedOpeningNumber : openingNumber}，這張角色卡可用開場為 1 至 ${openings.length}。`
             : "這張角色卡沒有可使用的開場內容。"
         };
       }
@@ -14891,11 +14951,11 @@ function startQqSessionLocked({
     if (openings.length > 0) {
       const openingNumber = hasRequestedOpening
         ? normalizeDiscordRoleCardNumber(requestedOpeningNumber)
-        : 1;
+        : getDefaultDiscordOpeningNumber(card);
       if (!openingNumber || !openings[openingNumber - 1]) {
         return {
           ok: false,
-          error: `找不到開場 ${requestedOpeningNumber || 1}，這張角色卡可用開場為 1 至 ${openings.length}。`
+          error: `找不到開場 ${hasRequestedOpening ? requestedOpeningNumber : openingNumber}，這張角色卡可用開場為 1 至 ${openings.length}。`
         };
       }
       selectedOpening = openings[openingNumber - 1];
@@ -15330,7 +15390,8 @@ async function handleDiscordChat(message, userContent) {
   }
   const failureText = getFailedConversationReplyText(turn);
   if (failureText) {
-    await sendDiscordPrivateMessageError(message, failureText);
+    const sentMessages = await sendDiscordLongMessage(message, discordSystemText(failureText));
+    scheduleDiscordErrorMessageDeletion(sentMessages);
     return;
   }
   if (turn.replyText) {
@@ -15707,7 +15768,7 @@ async function handleSlashCommand(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
-    const roleCardNumber = interaction.options.getInteger("num");
+    const roleCardNumber = interaction.options.getInteger("num") ?? 0;
     const openingNumber = interaction.options.getInteger("opening");
     const result = await startSessionFromDiscord(interaction.channelId, {
       userId: interaction.user.id,

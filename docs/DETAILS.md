@@ -49,6 +49,7 @@
 | `DISCORD_ALLOWED_USER_ID` | 空 | 設定後只接受該 Discord User ID 的指令、訊息、編輯與反應。 |
 | `DISCORD_PUBLIC_KEY` | 自動取得 | 驗證 Discord Application Authorized Webhook；Bot 未連線時可填 Developer Portal Public Key 作備援。 |
 | `DISCORD_TEXT_ATTACHMENT_MAX_BYTES` | `1048576` | Discord `.txt` 附件輸入大小上限。 |
+| `DISCORD_ERROR_AUTO_DELETE_SECONDS` | `15` | 頻道一般對話的模型錯誤回覆保留秒數，範圍 1 至 300。 |
 | `DISCORD_LOGIN_RETRY_INITIAL_MS` | `15000` | Discord 登入第一次重試等待時間。 |
 | `DISCORD_LOGIN_RETRY_MAX_MS` | `300000` | Discord 登入退避上限。 |
 | `DISCORD_LOGIN_RETRY_MAX_ATTEMPTS` | `0` | `0` 代表不限次數。 |
@@ -77,6 +78,10 @@ Provider 預設 base URL：
 | `custom` | 必須自行設定 `CHAT_API_BASE_URL` |
 
 一般 Base URL 使用 `{base}/chat/completions` 與 Bearer Token。若 Base URL 已是完整的 `/deployments/{deployment}/chat/completions?...` 路線，系統會原樣使用、改用 `api-key` header，並省略 request body 的 `model`；API 輸出模型可留空。系統不會推測 deployment 名稱或自動加入 API version。
+
+環境設定的「測試連線」不傳 `temperature`，由 deployment 使用模型預設值；正式對話仍依 `CHAT_API_TEMPERATURE` 設定送出溫度。
+
+API 回應成功但 `content` 空白時，正文請求會原樣重試一次，不會重新執行該回合的壓縮、跑圖或其他前置動作。第二次仍空白才標記該回合無效。Discord 一般頻道對話的模型失敗會回覆在原訊息旁並自動刪除；其他未預期錯誤仍使用私人通知。
 
 舊變數如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY` 與 provider 專用 Base URL 仍會讀取；新設定建議統一用 `CHAT_API_*`。
 
@@ -208,7 +213,7 @@ Slash 指令：
 
 | 指令 | 參數 | 說明 |
 | --- | --- | --- |
-| `/ai_start` | `num`、選填 `opening` | `0` 使用該頻道目前角色卡或助手；`1...N` 使用角色卡編號。`opening` 從 `1` 開始，未填固定使用開場 1。 |
+| `/ai_start` | 選填 `num`、選填 `opening` | `num` 未填時等同 `0`，使用該頻道目前角色卡或助手；`1...N` 使用角色卡編號。`opening` 從 `1` 開始，未填時使用角色卡設定的預設開場。 |
 | `/ai_status` | `num` | 只接受數字 `1` 或 `2`：`1` 查看目前頻道狀態；`2` 使用四個按鈕分別切換角色卡及其開場預覽。 |
 | `/stop` | 無 | 生成中停止目前生成；閒置時釋放目前故事租用的 Key，故事仍保留。 |
 | `/close` | 無 | 關閉並刪除目前 Discord 頻道或私訊的故事；已建立的對話存檔不受影響。 |
@@ -226,7 +231,7 @@ Discord 行為：
 - 每個伺服器頻道與 Bot 私訊各自保存角色、對話、回合、時間、壓縮內容、模型狀態及玩家分配；在不同頻道使用 `/ai_start` 或 `/archive_return` 不會覆蓋其他頻道故事。AI 呼叫紀錄不按頻道拆分，所有故事共用同一份最近 200 筆紀錄。
 - 每個新故事自動租用目前對話 API 供應商最前面的閒置 Key 組，Key 1 優先；切換供應商會清除舊租用，現有故事在下一次呼叫時改用新供應商重新分配。其他供應商保存的 Key 與分頁不會加入租用，也不會作為失敗回退；新供應商沒有 Key 時會要求先到環境設定填寫。每次實際 AI 呼叫會延長 24 小時，超過 24 小時沒有 AI 活動的組可由新故事接手。所有已設定組都忙碌時會要求新增 Key 組，不會讓兩個活躍故事偷偷共用。
 - 使用網頁刪除或 `/close` 會立即釋放該故事的 Key 組；直接刪除 Discord 頻道也會由 Bot 收到的 `channelDelete` 事件釋放。Bot 重啟不會因頻道查詢失敗或暫時不可見而刪除故事。已建立的對話存檔不受影響。
-- `/ai_start num:22` 固定使用第 22 張角色卡的開場 1；`/ai_start num:22 opening:2` 使用開場 2。開場選擇只屬於目前頻道，不修改角色卡的全域預設。
+- `/ai_start` 使用目前角色卡及其預設開場；`/ai_start num:22` 使用第 22 張角色卡設定的預設開場；`/ai_start num:22 opening:2` 明確使用開場 2。明確指定的開場只屬於目前頻道，不修改角色卡的全域預設。
 - `/ai_status num:2` 顯示 `預覽（目前開場/開場總數）`；上一張／下一張會回到該卡開場 1，另外兩個按鈕只切換目前角色卡的開場。
 - 角色卡預覽的四個按鈕各自使用唯一 ID；即使位於第一張、最後一張或角色卡沒有多個開場，Discord 也不會因停用按鈕的 ID 重複而拒絕回覆。
 - 模型呼叫失敗與缺少 API Key 時，該次使用者輸入及系統通知會在網頁標示為「無效對話」，不成為正式回合；時間、壓縮及模型狀態回復到輸入前，兩則訊息也不進入正文、壓縮或大模型上下文。下一次對話成功後會自動移除先前所有無效對話；啟動時會把舊版本留在故事尾端的失敗回合補上無效標記。Discord Slash 指令會以 ephemeral 私密訊息顯示生成錯誤，成功正文直接送到原頻道，不依賴可能過期的 Interaction token；伺服器中的普通訊息則改以私訊通知，避免錯誤文字進入公開故事頻道。

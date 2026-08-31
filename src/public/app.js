@@ -454,6 +454,13 @@ const ENV_FIELD_GROUPS = [
         type: "number",
         placeholder: "1048576",
         help: "單位 bytes。1048576 = 1 MB。"
+      },
+      {
+        key: "DISCORD_ERROR_AUTO_DELETE_SECONDS",
+        label: "頻道錯誤訊息保留秒數",
+        type: "number",
+        placeholder: "15",
+        help: "一般頻道對話失敗時，錯誤會回覆在原訊息旁並於指定秒數後刪除；範圍 1 至 300 秒。"
       }
     ]
   },

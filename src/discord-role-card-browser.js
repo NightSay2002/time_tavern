@@ -70,12 +70,25 @@ function getRoleCardOpenings(card = {}) {
   return entries;
 }
 
+export function getDefaultDiscordOpeningNumber(card = {}) {
+  const openings = getRoleCardOpenings(card);
+  const activeOpeningId = safeText(card?.activeOpeningDialogueId);
+  const activeIndex = openings.findIndex((entry) => entry.id === activeOpeningId);
+  if (activeIndex >= 0) {
+    return activeIndex + 1;
+  }
+  const activeContent = safeText(card?.openingDialogue);
+  const contentIndex = openings.findIndex((entry) => entry.content === activeContent);
+  return contentIndex >= 0 ? contentIndex + 1 : 1;
+}
+
 export function getInitialDiscordOpeningNumber(currentState = {}, roleCardNumber = 1) {
   const card = getDiscordRoleCardByNumber(currentState.roleCards, roleCardNumber);
   const openings = getRoleCardOpenings(card);
-  const selectedId = safeText(currentState.selectedOpeningDialogueId);
+  const isActiveCard = safeText(card?.id) === safeText(currentState.activeRoleCardId);
+  const selectedId = isActiveCard ? safeText(currentState.selectedOpeningDialogueId) : "";
   const selectedIndex = openings.findIndex((entry) => entry.id === selectedId);
-  return selectedIndex >= 0 ? selectedIndex + 1 : 1;
+  return selectedIndex >= 0 ? selectedIndex + 1 : getDefaultDiscordOpeningNumber(card);
 }
 
 export function parseDiscordRoleCardBrowserCustomId(customId = "") {
@@ -117,9 +130,14 @@ export function buildDiscordRoleCardBrowserPayload(
   const preview = openings.length > 0
     ? truncateRoleCardPreview(openings[openingNumber - 1]?.content)
     : "";
-  const startCommand = openingNumber > 1
-    ? `/ai_start num:${number} opening:${openingNumber}`
-    : `/ai_start num:${number}`;
+  const defaultOpeningNumber = getDefaultDiscordOpeningNumber(card);
+  const startCommand = openingNumber === defaultOpeningNumber
+    ? `/ai_start num:${number}`
+    : `/ai_start num:${number} opening:${openingNumber}`;
+  const previousCardNumber = Math.max(1, number - 1);
+  const nextCardNumber = Math.min(cards.length, number + 1);
+  const previousCardOpeningNumber = getInitialDiscordOpeningNumber(currentState, previousCardNumber);
+  const nextCardOpeningNumber = getInitialDiscordOpeningNumber(currentState, nextCardNumber);
   const content = [
     `**${text("角色卡")} ${number} / ${cards.length}${isActive ? text("（目前使用）") : ""}**`,
     `${text("編號：")}${number}`,
@@ -134,7 +152,7 @@ export function buildDiscordRoleCardBrowserPayload(
   ].join("\n");
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.max(1, number - 1)}:1:previous_card`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${previousCardNumber}:${previousCardOpeningNumber}:previous_card`)
       .setLabel(text("上一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number <= 1),
@@ -149,7 +167,7 @@ export function buildDiscordRoleCardBrowserPayload(
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(openings.length <= 1 || openingNumber >= openings.length),
     new ButtonBuilder()
-      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${Math.min(cards.length, number + 1)}:1:next_card`)
+      .setCustomId(`${ROLE_CARD_BROWSER_PREFIX}${nextCardNumber}:${nextCardOpeningNumber}:next_card`)
       .setLabel(text("下一張"))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(number >= cards.length)

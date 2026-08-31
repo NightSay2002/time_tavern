@@ -14,8 +14,17 @@ test("Discord generation commands defer privately and publish only successful ou
   assert.match(serverSource, /sent = await channel\.send\(\{/u);
 });
 
-test("Discord normal-message failures stay out of public guild channels", () => {
+test("Discord model failures appear beside the original message and auto-delete", () => {
   assert.match(serverSource, /async function sendDiscordPrivateMessageError/u);
+  assert.match(
+    serverSource,
+    /const sentMessages = await sendDiscordLongMessage\(message, discordSystemText\(failureText\)\);[\s\S]*?scheduleDiscordErrorMessageDeletion\(sentMessages\)/u
+  );
+  assert.match(serverSource, /DISCORD_ERROR_AUTO_DELETE_SECONDS/u);
+  assert.match(serverSource, /void item\.delete\(\)\.catch/u);
+});
+
+test("unexpected normal-message errors still use private delivery", () => {
   assert.match(serverSource, /await message\.author\.send\(text\)/u);
-  assert.match(serverSource, /await sendDiscordPrivateMessageError\(message, failureText\)/u);
+  assert.match(serverSource, /await sendDiscordPrivateMessageError\(message, `處理失敗：/u);
 });

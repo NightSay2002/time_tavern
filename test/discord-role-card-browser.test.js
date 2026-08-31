@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildDiscordRoleCardBrowserPayload,
+  getDefaultDiscordOpeningNumber,
   getDiscordRoleCardByNumber,
   getInitialDiscordOpeningNumber,
   getInitialDiscordRoleCardNumber,
@@ -20,7 +21,9 @@ const roleCards = [
       { id: "b-1", content: "開場 B1" },
       { id: "b-2", content: "開場 B2" },
       { id: "b-3", content: "開場 B3" }
-    ]
+    ],
+    activeOpeningDialogueId: "b-2",
+    openingDialogue: "開場 B2"
   },
   { id: "card-c", name: "角色 C", mode: "no_role", description: "第三張卡" },
   { id: "card-d", name: "角色 D", mode: "custom_mode", description: "第四張卡" }
@@ -40,8 +43,10 @@ test("Discord role card browser opens on the active card", () => {
   assert.equal(getInitialDiscordRoleCardNumber({ roleCards, activeRoleCardId: "missing" }), 1);
   assert.equal(getInitialDiscordOpeningNumber({
     roleCards,
+    activeRoleCardId: "card-b",
     selectedOpeningDialogueId: "b-2"
   }, 2), 2);
+  assert.equal(getDefaultDiscordOpeningNumber(roleCards[1]), 2);
 });
 
 test("Discord role card browser provides bounded card and opening buttons", () => {
@@ -52,7 +57,8 @@ test("Discord role card browser provides bounded card and opening buttons", () =
   assert.match(payload.content, /名稱：角色 B/u);
   assert.match(payload.content, /模式：多角色/u);
   assert.match(payload.content, /預覽（2\/3）：.*開場 B2/u);
-  assert.match(payload.content, /\/ai_start num:2 opening:2/u);
+  assert.match(payload.content, /\/ai_start num:2/u);
+  assert.doesNotMatch(payload.content, /opening:2/u);
   assert.equal(buttons.length, 4);
   assert.equal(buttons[0].custom_id, "role_card_browser:1:1:previous_card");
   assert.equal(buttons[1].custom_id, "role_card_browser:2:1:previous_opening");
@@ -70,6 +76,11 @@ test("Discord role card browser provides bounded card and opening buttons", () =
     openingNumber: 3
   });
   assert.equal(parseDiscordRoleCardBrowserCustomId("other:3"), null);
+});
+
+test("Discord role card browser includes opening only for a non-default preview", () => {
+  const payload = buildDiscordRoleCardBrowserPayload({ roleCards }, 2, 1);
+  assert.match(payload.content, /\/ai_start num:2 opening:1/u);
 });
 
 test("Discord role card browser handles empty and final pages", () => {

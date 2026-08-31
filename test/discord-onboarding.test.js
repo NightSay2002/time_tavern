@@ -19,7 +19,7 @@ test("Discord guild welcome uses the plain client-id install link", () => {
     buildDiscordGuildWelcomeMessage("123456789012345678"),
     [
       "點我頭像>傳送訊息>開始私人聊天>我會對你說的任何話作出反應",
-      "伺服器先加到應用程式中> 用/ai_start num:0 >我會對這頻道說的任何話作出反應",
+      "伺服器先加到應用程式中> 用/ai_start >我會對這頻道說的任何話作出反應",
       "https://discord.com/oauth2/authorize?client_id=123456789012345678"
     ].join("\n")
   );
@@ -45,7 +45,7 @@ test("only a user installation authorization triggers the private welcome", () =
   assert.equal(getDiscordUserInstallAuthorization(payload), null);
   assert.equal(
     DISCORD_USER_INSTALL_WELCOME_MESSAGE,
-    "我會對你說的任何話作出反應 到網頁選角色卡 再輸入/ai_start num:0開始"
+    "我會對你說的任何話作出反應 到網頁選角色卡 再輸入/ai_start開始"
   );
 });
 

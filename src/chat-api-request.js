@@ -105,7 +105,10 @@ export function buildChatApiRequestBody({
     messages
   };
 
-  if (!explicitDeepSeekThinking || normalizedDeepSeekEffort === "none") {
+  if (
+    Number.isFinite(temperature) &&
+    (!explicitDeepSeekThinking || normalizedDeepSeekEffort === "none")
+  ) {
     requestBody.temperature = temperature;
   }
 
