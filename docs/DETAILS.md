@@ -30,8 +30,8 @@
 | `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`custom`。 |
 | `CHAT_API_KEY` | 空 | Key 1 的主聊天、補寫及角色卡助手 Key。舊設定直接沿用，不需遷移。 |
-| `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL。 |
-| `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型。 |
+| `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL，亦可直接填完整 Chat Completions 路線。 |
+| `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型；Base URL 是完整 deployment URL 時可留空。 |
 | `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前供應商的專屬 Key 優先，`CHAT_API_KEY` 只作舊設定後備，執行時不讀取其他供應商的 Key。 |
 | `CHAT_API_REASONING_EFFORT` | `high` | 共用思考欄位。DeepSeek 空值使用 `high`；GLM 4.5+、Gemini 2.5 Flash／Flash-Lite，以及支援 `none` 的 GPT-5.1+ 非 Pro 模型可選 `none`。模型不支援時不送關閉參數。關閉後啟用 temperature，且不附帶使用者自訂補充。舊版 provider 專用變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
@@ -75,6 +75,8 @@ Provider 預設 base URL：
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` |
 | `custom` | 必須自行設定 `CHAT_API_BASE_URL` |
+
+一般 Base URL 使用 `{base}/chat/completions` 與 Bearer Token。若 Base URL 已是完整的 `/deployments/{deployment}/chat/completions?...` 路線，系統會原樣使用、改用 `api-key` header，並省略 request body 的 `model`；API 輸出模型可留空。系統不會推測 deployment 名稱或自動加入 API version。
 
 舊變數如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY` 與 provider 專用 Base URL 仍會讀取；新設定建議統一用 `CHAT_API_*`。
 

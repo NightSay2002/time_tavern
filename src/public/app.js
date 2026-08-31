@@ -507,14 +507,14 @@ const ENV_FIELD_GROUPS = [
         label: "對話 API Base URL",
         type: "text",
         placeholder: "留空使用供應商預設",
-        help: "留空使用 provider 預設。智譜預設為 https://open.bigmodel.cn/api/paas/v4。"
+        help: "留空使用 provider 預設。可填一般 OpenAI-compatible Base URL，或包含 /chat/completions 與查詢參數的完整 deployment URL。"
       },
       {
         key: "CHAT_API_MODEL",
         label: "API輸出模型",
         type: "text",
         placeholder: "deepseek-v4-pro / glm-5.3-flash / gpt-4.1",
-        help: "主聊天、大模型處理、補寫與角色卡助手都使用此模型；系統不會因圖片自動切換模型。"
+        help: "使用一般 Base URL 時需填寫模型；完整 deployment URL 已包含模型時可留空。主聊天、大模型處理、補寫與角色卡助手共用此設定。"
       },
       {
         key: "CHAT_API_REASONING_EFFORT",

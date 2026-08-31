@@ -85,6 +85,12 @@ import {
   shouldIncludeUserCustomSupplement
 } from "./chat-api-request.js";
 import {
+  adaptChatApiRequestBody,
+  buildChatApiCompletionsUrl,
+  buildChatApiRequestHeaders,
+  resolveChatApiModelForEndpoint
+} from "./chat-api-endpoint.js";
+import {
   claimConversationApiKeySlot,
   normalizeConversationApiKeyAssignments,
   releaseConversationApiKeySlot
@@ -9586,14 +9592,7 @@ function getChatApiBaseUrl() {
 }
 
 function getChatApiCompletionsUrlFromBaseUrl(baseUrl = "") {
-  const normalizedBaseUrl = safeText(baseUrl).replace(/\/+$/u, "");
-  if (!normalizedBaseUrl) {
-    return "";
-  }
-  if (/\/chat\/completions$/u.test(normalizedBaseUrl)) {
-    return normalizedBaseUrl;
-  }
-  return `${normalizedBaseUrl}/chat/completions`;
+  return buildChatApiCompletionsUrl(baseUrl);
 }
 
 function getChatApiCompletionsUrl() {
@@ -9729,9 +9728,14 @@ function getContextCompressionChatApiKey(
 function getChatApiModel(purpose = "chat") {
   const settings = normalizeConversationSettings(state?.conversationSettings);
   const provider = getChatApiProvider();
-  return envFirstText(
+  const configuredModel = envFirstText(
     ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
-    settings.chatOutputModel || DEFAULT_CHAT_API_MODEL
+    ""
+  );
+  return resolveChatApiModelForEndpoint(
+    configuredModel,
+    settings.chatOutputModel || DEFAULT_CHAT_API_MODEL,
+    getChatApiCompletionsUrl()
   );
 }
 
@@ -10378,11 +10382,13 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
     getDefaultChatApiBaseUrl(provider)
   );
   const apiKey = getChatApiKeyGroupPrimaryKey(keyGroupSlot, envSource);
-  const model = envObjectFirstText(
+  const configuredModel = envObjectFirstText(
     envSource,
     ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
-    DEFAULT_CHAT_API_MODEL
+    ""
   );
+  const completionsUrl = getChatApiCompletionsUrlFromBaseUrl(baseUrl);
+  const model = resolveChatApiModelForEndpoint(configuredModel, DEFAULT_CHAT_API_MODEL, completionsUrl);
   const requestTimeoutMs = Math.min(
     envObjectFirstNumber(
       envSource,
@@ -10399,7 +10405,7 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
     provider,
     apiKey,
     baseUrl,
-    completionsUrl: getChatApiCompletionsUrlFromBaseUrl(baseUrl),
+    completionsUrl,
     model,
     requestTimeoutMs,
     maxTokensParamName,
@@ -10433,7 +10439,7 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
     };
   }
 
-  const requestBody = buildChatApiRequestBody({
+  const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: config.provider,
     reasoningEffort: config.reasoningEffort,
     model: config.model,
@@ -10446,17 +10452,14 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
         content: "Connection test. Reply with OK."
       }
     ]
-  });
+  }), config.completionsUrl);
 
   let response;
   const { controller, timeout } = createTimeoutController(config.requestTimeoutMs);
   try {
     response = await fetch(config.completionsUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`
-      },
+      headers: buildChatApiRequestHeaders(config.apiKey, config.completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
     });
@@ -10584,7 +10587,7 @@ async function callChatApiCompletionRaw({
     throw new Error(errorMessage);
   }
 
-  const requestBody = buildChatApiRequestBody({
+  const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: getChatApiProvider(),
     reasoningEffort: getChatApiReasoningEffort(),
     model,
@@ -10592,7 +10595,7 @@ async function callChatApiCompletionRaw({
     maxTokens: resolvedMaxTokens,
     messages: localizedMessages,
     responseFormat
-  });
+  }), completionsUrl);
   let response;
   const { controller, generationEntry, cleanup } = createTimeoutController(undefined, {
     trackGeneration: true,
@@ -10601,10 +10604,7 @@ async function callChatApiCompletionRaw({
   try {
     response = await fetch(completionsUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
+      headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
     });
@@ -10944,7 +10944,7 @@ async function callChatApiCompletionStreamRaw({
     throw new Error(errorMessage);
   }
 
-  const requestBody = buildChatApiRequestBody({
+  const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: getChatApiProvider(),
     reasoningEffort: getChatApiReasoningEffort(),
     model,
@@ -10952,7 +10952,7 @@ async function callChatApiCompletionStreamRaw({
     maxTokens: resolvedMaxTokens,
     messages: localizedMessages,
     stream: true
-  });
+  }), completionsUrl);
 
   let response;
   const { controller, generationEntry, cleanup } = createTimeoutController(undefined, {
@@ -10962,10 +10962,7 @@ async function callChatApiCompletionStreamRaw({
   try {
     response = await fetch(completionsUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
+      headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
     });
