@@ -318,3 +318,66 @@ test("a thrown streaming failure uses the same invalid-turn rollback", async () 
   assert.match(result.assistantMessage.content, /stream failed/u);
   assert.equal(events.filter((event) => event.type === "rollback-stream-failure").length, 1);
 });
+
+test("prepares specialist image context before calling the main model", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.prepareUserImagesForModel = async ({ userMessage }) => {
+    events.push({ type: "prepare-images" });
+    userMessage.modelContent = `${userMessage.modelContent}\n\n【圖片處理模型辨識結果】\n圖片描述`;
+  };
+  deps.generateAssistant = ({ userMessage }) => {
+    events.push({ type: "generate", content: userMessage.modelContent });
+    return { content: "assistant reply", modelProcessingResult: { skipReasoner: true } };
+  };
+
+  await runConversationTurnWorkflow(deps, {
+    state,
+    content: "看這張圖",
+    source: "web",
+    userExtra: { images: [{ imageUrl: "data:image/png;base64,AA==" }] }
+  });
+
+  assert.deepEqual(
+    events.filter((event) => ["prepare-images", "generate"].includes(event.type)).map((event) => event.type),
+    ["prepare-images", "generate"]
+  );
+  assert.match(events.find((event) => event.type === "generate")?.content || "", /圖片處理模型辨識結果/u);
+});
+
+test("a specialist image failure rolls back the turn without calling the main model", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.prepareUserImagesForModel = async () => {
+    events.push({ type: "prepare-images" });
+    throw new Error("圖片處理 API 回傳空白內容");
+  };
+  deps.generateAssistant = () => {
+    events.push({ type: "generate" });
+    return { content: "不應呼叫" };
+  };
+  deps.handleGenerationError = (error) => ({
+    content: `模型呼叫失敗，已改用錯誤訊息回覆：${error.message}`,
+    excludeFromModel: true,
+    modelProcessingResult: { skipReasoner: false }
+  });
+  deps.rollbackFailedTurn = (_state, { userMessage }) => {
+    userMessage.excludeFromModel = true;
+    userMessage.invalidConversation = true;
+    events.push({ type: "rollback" });
+  };
+  deps.shouldEnsureMinimumAssistantLength = () => false;
+
+  const result = await runConversationTurnWorkflow(deps, {
+    state,
+    content: "看圖",
+    source: "discord"
+  });
+
+  assert.equal(events.some((event) => event.type === "generate"), false);
+  assert.equal(events.filter((event) => event.type === "rollback").length, 1);
+  assert.equal(result.failed, true);
+  assert.match(result.assistantMessage.content, /圖片處理 API 回傳空白內容/u);
+});

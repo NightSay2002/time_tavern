@@ -328,7 +328,9 @@ html.is-mac-desktop .panel {
 
 .chat-primary,
 .chat-secondary {
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1605,6 +1607,7 @@ dialog.session-picker-dialog {
 }
 
 .compression-notice {
+  overflow-wrap: anywhere;
   margin: 0 0 12px;
   padding: 10px 12px;
   border: 1px solid rgba(255, 79, 200, 0.38);
@@ -1620,6 +1623,7 @@ dialog.session-picker-dialog {
 }
 
 .auto-time-warning-notice {
+  overflow-wrap: anywhere;
   margin: 14px 0 0;
   padding: 10px 12px;
   border: 1px solid rgba(255, 194, 97, 0.45);
@@ -1697,6 +1701,7 @@ dialog.session-picker-dialog {
 
 .discord-message-body {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .discord-message-header {
@@ -1869,6 +1874,7 @@ dialog.session-picker-dialog {
 
 .markdown-body {
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body p,
@@ -1933,6 +1939,8 @@ dialog.session-picker-dialog {
 
 .markdown-body pre,
 .message-reasoning-content pre {
+  min-width: 0;
+  max-width: 100%;
   margin: 0.65em 0;
   padding: 0.85em;
   overflow: auto;
@@ -1969,15 +1977,18 @@ dialog.session-picker-dialog {
 }
 
 .markdown-body table {
+  display: block;
   width: 100%;
+  max-width: 100%;
   margin: 0.75em 0;
   border-collapse: collapse;
-  overflow: hidden;
+  overflow: auto;
   border-radius: 8px;
 }
 
 .markdown-body th,
 .markdown-body td {
+  min-width: 8em;
   padding: 0.45em 0.6em;
   border: 1px solid rgba(255, 255, 255, 0.16);
   vertical-align: top;
@@ -3496,6 +3507,15 @@ body.novelai-studio-body .novelai-small-preview {
 
 .env-field {
   min-width: 0;
+}
+
+.env-field.is-disabled,
+.env-test-row.is-disabled {
+  opacity: 0.48;
+}
+
+.env-field.is-disabled {
+  cursor: not-allowed;
 }
 
 .env-field-wide {

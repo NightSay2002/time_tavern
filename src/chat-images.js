@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/gif",
   "image/jpeg",
@@ -71,10 +73,70 @@ export function getMessageChatImages(message = {}) {
   return Array.isArray(source) ? source.filter((item) => safeText(item?.imageUrl || item?.dataUrl || item?.url)) : [];
 }
 
+export function normalizeChatImageInputMode(value = "") {
+  return safeText(value).toLowerCase() === "specialist" ? "specialist" : "main";
+}
+
+export function getMessageImageAnalysis(message = {}) {
+  const source = message?.imageAnalysis || message?.extra?.imageAnalysis;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return null;
+  }
+  const content = safeText(source.content);
+  const fingerprint = safeText(source.fingerprint);
+  if (!content || !fingerprint) {
+    return null;
+  }
+  return {
+    content,
+    fingerprint,
+    provider: safeText(source.provider),
+    model: safeText(source.model),
+    createdAt: safeText(source.createdAt)
+  };
+}
+
+export function createChatImageAnalysisFingerprint(images = [], userContent = "") {
+  const hash = crypto.createHash("sha256");
+  const updatePart = (value = "") => {
+    const text = safeText(value);
+    hash.update(`${Buffer.byteLength(text, "utf8")}:`);
+    hash.update(text);
+  };
+  updatePart(userContent);
+  (Array.isArray(images) ? images : []).forEach((image) => {
+    updatePart(image?.imageUrl || image?.dataUrl || image?.url);
+    updatePart(normalizeImageContentType(image?.contentType || image?.content_type));
+  });
+  return hash.digest("hex");
+}
+
+export function appendChatImageAnalysisToModelContent(content = "", analysisContent = "") {
+  const base = safeText(content).replace(
+    /\n*【圖片處理模型辨識結果】\n[\s\S]*?(?=\n\n【使用者自訂補充】|$)/u,
+    ""
+  ).trim();
+  const analysis = safeText(analysisContent);
+  if (!analysis) {
+    return base;
+  }
+  const block = `【圖片處理模型辨識結果】\n${analysis}`;
+  const supplementMarker = "【使用者自訂補充】";
+  const supplementIndex = base.indexOf(supplementMarker);
+  if (supplementIndex < 0) {
+    return [base, block].filter(Boolean).join("\n\n");
+  }
+  return [
+    base.slice(0, supplementIndex).trim(),
+    block,
+    base.slice(supplementIndex).trim()
+  ].filter(Boolean).join("\n\n");
+}
+
 export function buildMultimodalMessageContent(content = "", message = {}) {
   const text = safeText(content);
   const images = getMessageChatImages(message);
-  if (images.length === 0) {
+  if (images.length === 0 || getMessageImageAnalysis(message)) {
     return text;
   }
   return [

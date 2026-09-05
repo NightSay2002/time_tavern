@@ -40,6 +40,13 @@
 | `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature，可設定 `0–2` 並支援小數；DeepSeek 思考模式開啟時不生效。 |
 | `CHAT_IMAGE_ATTACHMENT_MAX_COUNT` | `4` | 網頁與 Discord 每次最多附加圖片數。 |
 | `CHAT_IMAGE_ATTACHMENT_MAX_BYTES` | `5242880` | 每張聊天圖片大小上限，單位 bytes。 |
+| `CHAT_IMAGE_INPUT_MODE` | `main` | `main` 由主要模型直接讀圖；`specialist` 先由專用圖片模型轉成文字描述。 |
+| `CHAT_IMAGE_API_PROVIDER` | `deepseek` | 專用圖片 API provider；支援與對話 API 相同的 provider 類型。 |
+| `CHAT_IMAGE_API_BASE_URL` | 依 provider | 專用圖片 API 的 Base URL 或完整 deployment URL。 |
+| `CHAT_IMAGE_API_MODEL` | 空 | 專用圖片模型；完整 deployment URL 已包含模型時可留空。 |
+| `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，可設 `none`、`low`、`high`、`max`。 |
+| `CHAT_IMAGE_API_TEMPERATURE` | API 預設 | 圖片模型獨立 temperature，範圍 `0–2`；思考開啟時不送出。 |
+| `CHAT_IMAGE_API_KEY` | 空 | 專用圖片 API Key；只保存於 `.env` 與 `data/environment.env`。 |
 | `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | Key 1 組內的大模型內容處理 Key，按啟用的大模型順序使用；不足時沿用該組最後一把。 |
 | `CHAT_API_KEY_GROUP2` | 空 | Key 2 的主對話 Key；更多分頁依序使用 `CHAT_API_KEY_GROUP3...`。 |
 | `CHAT_API_KEY_GROUP2_2` / `CHAT_API_KEY_GROUP2_3` | 空 | Key 2 組內的大模型內容處理 Key；其他分頁使用相同命名規則。 |
@@ -104,18 +111,24 @@ GLM 與圖片輸入：
 - `glm-5.3` 是文字模型；`glm-5.3-flash` 原生支援文字與圖片。兩者都使用同一個 `CHAT_API_MODEL` 欄位，程式不會因附件自動切換模型。
 - 網頁切換 provider 時會保存目前 Key、模型與 Base URL 到該供應商的本機欄位，再帶入新供應商先前保存的值；切回 DeepSeek 會恢復原本的 DeepSeek Key 與模型。
 - 網頁與 Discord 支援 PNG、JPEG、WebP、GIF，可只傳圖片或同時輸入文字。圖片會隨 user 訊息保存，編輯重算與 `/reload` 會保留原附件。
-- 發送 API 時圖片使用 OpenAI-compatible `messages[].content[]` 的 `image_url` Base64 Data URL；AI 呼叫紀錄只保留圖片類型與大小，不保存第二份 Base64。
-- 若選擇的模型不支援圖片，供應商會直接回傳模型能力錯誤，不會轉送其他模型。
+- `CHAT_IMAGE_INPUT_MODE=main` 時，圖片使用 OpenAI-compatible `messages[].content[]` 的 `image_url` Base64 Data URL 直接交給主要模型，維持舊版行為。
+- `CHAT_IMAGE_INPUT_MODE=specialist` 時，一次最多四張圖片會先交給獨立圖片 API，依序辨識人物、物件、文字、場景、動作與圖片間關係；主要模型、壓縮、補寫與助手只收到隱藏文字描述，不收到原圖。
+- 圖片 API 的思考強度與溫度完全獨立於主要對話。DeepSeek 空白思考設定解析為高強度；選擇 `none` 才會送出圖片溫度，明確選擇低／高／最大時溫度保留但不送出。
+- 專用辨識結果與圖片及使用者文字的指紋保存在 user 訊息內；`/reload`、`/quick_send` 或訊息編輯的內容完全相同時直接複用，文字或圖片改變才重新辨識。原圖仍保留於聊天與對話存檔。
+- 專用圖片 API 缺少 Key／模型、連線失敗或回傳空白時會停止該回合並套用既有無效對話回滾，不會讓主要模型在沒有圖片資訊時猜測。環境設定的「測試圖片讀取」會實際傳送一張標準 RGBA 32×32 PNG。
+- AI 呼叫紀錄的 purpose 為 `image_understanding`，只保留圖片類型與大小，不保存第二份 Base64。`CHAT_IMAGE_API_KEY` 不加入故事 Key 分頁、作者預設或全局設定匯出。
 - 智譜參考：[GLM-5.3](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3)、[GLM-5.3-Flash](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)。
 
 ## 主頁功能細節
+
+聊天區固定在面板寬度內，長文字、網址與時間切換提醒會自動換行；寬表格及程式碼區塊可獨立橫向捲動，不會將輸入列與送出按鈕擠出畫面。
 
 角色卡：
 
 - 角色模式：單角色、多角色、無角色或自訂 Prompt 模式。
 - 封面可上傳、裁切、移除。
 - 自定義內容支援任意欄位。
-- 開場對話支援多分頁。
+- 開場對話支援多分頁；選擇分頁後可修改「開場名稱」，分頁文字即時更新，按角色卡「保存」一起儲存。名稱留空會使用「開場 1、開場 2」等預設名稱。
 - 單卡世界書會在關鍵字命中時插入正文 Prompt。
 - 角色卡區的「全局世界書」可建立所有角色卡共用的條目；總開關與每條條目均可獨立啟停，觸發規則沿用單卡世界書，助手模式不套用。
 - 支援 SillyTavern JSON、PNG、JPG/JPEG 匯入。
@@ -331,6 +344,7 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 | `GET` / `PUT` | `/api/ui-language` | 讀取或保存全域介面語言。 |
 | `GET` / `PUT` | `/api/env` | 讀取或保存 `.env`。 |
 | `POST` | `/api/chat-api/test` | 測試對話 API。 |
+| `POST` | `/api/chat-image-api/test` | 使用尚未保存的設定實際測試圖片讀取。 |
 | `POST` | `/api/restart` | 排程重啟 server。 |
 | `GET` / `PUT` | `/api/time-tracking` | 讀取或保存時間統計。 |
 | `GET` / `PUT` | `/api/global-lorebook` | 讀取或保存所有角色卡共用的全局世界書。 |

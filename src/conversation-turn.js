@@ -136,6 +136,14 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
 
   let generation;
   try {
+    await deps.prepareUserImagesForModel?.({
+      state: currentState,
+      runtimeUserName,
+      userMessage,
+      storedUserContent,
+      input,
+      turnExtra
+    });
     generation = await requireDependency(deps, "generateAssistant")({
       state: currentState,
       runtimeUserName,

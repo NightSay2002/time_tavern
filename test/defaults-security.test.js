@@ -16,6 +16,7 @@ test("published defaults exclude bot credentials and identifiers", () => {
   assert.equal(Object.hasOwn(environmentValues, "QQ_BOT_APP_ID"), false);
   assert.equal(Object.hasOwn(environmentValues, "QQ_BOT_APP_SECRET"), false);
   assert.equal(Object.hasOwn(environmentValues, "QQ_ALLOWED_USER_OPENID"), false);
+  assert.equal(Object.hasOwn(environmentValues, "CHAT_IMAGE_API_KEY"), false);
   assert.deepEqual(
     Object.keys(environmentValues).filter((key) => /(?:^|_)API_KEY$/u.test(key)),
     []
@@ -34,4 +35,5 @@ test("global settings files exclude secrets and preserve local credentials on im
   assert.doesNotMatch(exportBlock, /(?:^|\n)\s*(?:savedSessions|conversation|aiLogs):/u);
   assert.match(importEnvironmentBlock, /isDefaultEnvSecretKey\(key\)/u);
   assert.match(importEnvironmentBlock, /\.\.\.preservedSecrets/u);
+  assert.match(serverSource, /DEFAULT_ENV_SECRET_KEY_PATTERN[^\n]*API_KEY/u);
 });

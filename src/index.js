@@ -89,6 +89,7 @@ import {
   adaptChatApiRequestBody,
   buildChatApiCompletionsUrl,
   buildChatApiRequestHeaders,
+  isDeploymentChatCompletionsUrl,
   resolveChatApiModelForEndpoint
 } from "./chat-api-endpoint.js";
 import {
@@ -103,9 +104,13 @@ import {
   shouldResetConversationApiKeyAssignments
 } from "./chat-api-key-config.js";
 import {
+  appendChatImageAnalysisToModelContent,
   buildMultimodalMessageContent,
+  createChatImageAnalysisFingerprint,
+  getMessageImageAnalysis,
   getMessageChatImages,
   isSupportedChatImageAttachment,
+  normalizeChatImageInputMode,
   normalizeChatImageAttachments,
   sanitizeChatApiMessagesForLog
 } from "./chat-images.js";
@@ -231,6 +236,8 @@ const DEFAULT_ASSISTANT_CARD_DESCRIPTION = "專門協助建立角色卡、角色
 const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = envNumber("DISCORD_TEXT_ATTACHMENT_MAX_BYTES", 1024 * 1024);
 const DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_COUNT = 4;
+const DEFAULT_CHAT_IMAGE_API_MAX_TOKENS = 2000;
+const CHAT_IMAGE_API_TEST_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAANElEQVR4nO3OIQEAMAgAMCI9BNHoSwQeAoGZmF905my8mpUQEBAQEBAQEBAQEBAQEBC4DnzWeVCXLwJVqQAAAABJRU5ErkJggg==";
 const DEFAULT_IMAGE_ONLY_USER_CONTENT = "請查看附加圖片。";
 const DISCORD_LOGIN_RETRY_INITIAL_MS = envNumber("DISCORD_LOGIN_RETRY_INITIAL_MS", 15_000);
 const DISCORD_LOGIN_RETRY_MAX_MS = envNumber("DISCORD_LOGIN_RETRY_MAX_MS", 300_000);
@@ -3590,6 +3597,7 @@ function normalizeConversationForClient(conversation = [], options = {}) {
       baseModelContent: _baseModelContent,
       basePrompt: _basePrompt,
       triggeredLorebooks: _triggeredLorebooks,
+      imageAnalysis: _imageAnalysis,
       discordReplyMessageIds: _discordReplyMessageIds,
       discordMessageId: _discordMessageId,
       ...clientMessage
@@ -3602,6 +3610,7 @@ function normalizeConversationForClient(conversation = [], options = {}) {
         baseModelContent: _extraBaseModelContent,
         basePrompt: _extraBasePrompt,
         triggeredLorebooks: _extraTriggeredLorebooks,
+        imageAnalysis: _extraImageAnalysis,
         discordReplyMessageIds: _extraDiscordReplyMessageIds,
         discordMessageId: _extraDiscordMessageId,
         ...clientExtra
@@ -7862,7 +7871,7 @@ function buildCacheableDialogueMessages(messages = []) {
         : getMessageModelContent(item);
       const normalizedContent = stripLeadingContextRoundLabels(content);
       return normalizedContent
-        ? { role, content: buildMultimodalMessageContent(normalizedContent, item) }
+        ? { role, content: buildConversationModelMessageContent(normalizedContent, item) }
         : null;
     })
     .filter(Boolean);
@@ -9552,11 +9561,11 @@ function buildCharacterCardCreationAssistantMessages(state) {
     ...baseMessages,
     ...contextMessages.map((item) => ({
       role: item.role,
-      content: buildMultimodalMessageContent(getMessageModelContent(item), item)
+      content: buildConversationModelMessageContent(getMessageModelContent(item), item)
     })),
     {
       role: "user",
-      content: buildMultimodalMessageContent(getUserBaseModelContent(latestUser), latestUser)
+      content: buildConversationModelMessageContent(getMessageModelContent(latestUser), latestUser)
     }
   ];
 }
@@ -9607,6 +9616,60 @@ function getChatApiCompletionsUrlFromBaseUrl(baseUrl = "") {
 
 function getChatApiCompletionsUrl() {
   return getChatApiCompletionsUrlFromBaseUrl(getChatApiBaseUrl());
+}
+
+function getChatImageInputMode(envSource = process.env) {
+  return normalizeChatImageInputMode(
+    envObjectFirstText(envSource, ["CHAT_IMAGE_INPUT_MODE"], "main")
+  );
+}
+
+function buildConversationModelMessageContent(content = "", message = {}) {
+  return getChatImageInputMode() === "specialist"
+    ? safeText(content)
+    : buildMultimodalMessageContent(content, message);
+}
+
+function resolveChatImageApiConfig(envSource = process.env) {
+  const provider = normalizeChatApiProvider(
+    envObjectFirstText(envSource, ["CHAT_IMAGE_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
+  );
+  const baseUrl = envObjectFirstText(
+    envSource,
+    ["CHAT_IMAGE_API_BASE_URL"],
+    getDefaultChatApiBaseUrl(provider)
+  );
+  const completionsUrl = getChatApiCompletionsUrlFromBaseUrl(baseUrl);
+  const configuredModel = envObjectFirstText(envSource, ["CHAT_IMAGE_API_MODEL"], "");
+  const reasoningEffort = resolveChatApiReasoningEffort(
+    provider,
+    envObjectFirstText(envSource, ["CHAT_IMAGE_API_REASONING_EFFORT"], ""),
+    configuredModel
+  );
+  const temperatureText = envObjectFirstText(envSource, ["CHAT_IMAGE_API_TEMPERATURE"], "");
+  const parsedTemperature = Number(temperatureText);
+  const temperature = temperatureText && Number.isFinite(parsedTemperature)
+    ? Math.min(2, Math.max(0, parsedTemperature))
+    : null;
+  const requestTimeoutMs = Math.min(
+    envObjectFirstNumber(
+      envSource,
+      ["CHAT_IMAGE_API_REQUEST_TIMEOUT_MS", "CHAT_API_REQUEST_TIMEOUT_MS"],
+      getChatApiRequestTimeoutMs()
+    ),
+    getChatApiRequestTimeoutMs()
+  );
+  return {
+    provider,
+    apiKey: envObjectFirstText(envSource, ["CHAT_IMAGE_API_KEY"], ""),
+    baseUrl,
+    completionsUrl,
+    configuredModel,
+    model: resolveChatApiModelForEndpoint(configuredModel, "", completionsUrl),
+    reasoningEffort,
+    temperature,
+    requestTimeoutMs
+  };
 }
 
 function isContextCompressionPurpose(purpose = "") {
@@ -10551,6 +10614,233 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
   };
 }
 
+function validateChatImageApiConfig(config = {}) {
+  if (!config.apiKey) {
+    throw new Error("圖片處理 API 未設定 Key。");
+  }
+  if (!config.completionsUrl) {
+    throw new Error("圖片處理 API Base URL 未設定。");
+  }
+  if (!config.model && !isDeploymentChatCompletionsUrl(config.completionsUrl)) {
+    throw new Error("圖片處理 API 未設定模型。");
+  }
+}
+
+function buildChatImageUnderstandingMessages(images = [], userContent = "") {
+  const normalizedImages = (Array.isArray(images) ? images : [])
+    .slice(0, DEFAULT_CHAT_IMAGE_ATTACHMENT_MAX_COUNT);
+  const prompt = [
+    "請分析本次附加的圖片，提供可直接交給另一個文字模型使用的客觀描述。",
+    "依圖片順序說明人物、物件、可辨識文字、場景、動作，以及多張圖片之間的關係。",
+    "不要回答使用者問題、不要續寫故事，也不要聲稱看不到圖片。",
+    safeText(userContent) ? `使用者同時輸入：${safeText(userContent)}` : ""
+  ].filter(Boolean).join("\n");
+  return [
+    {
+      role: "system",
+      content: "你是圖片理解模型。請準確描述圖片可見內容，不推測看不到的資訊。"
+    },
+    {
+      role: "user",
+      content: buildMultimodalMessageContent(prompt, { images: normalizedImages })
+    }
+  ];
+}
+
+async function requestChatImageUnderstanding({
+  envSource = process.env,
+  images = [],
+  userContent = "",
+  targetState = null,
+  trackGeneration = false,
+  writeLog = false,
+  maxTokens = DEFAULT_CHAT_IMAGE_API_MAX_TOKENS,
+  requestTimeoutMs = null
+} = {}) {
+  const config = resolveChatImageApiConfig(envSource);
+  validateChatImageApiConfig(config);
+  const messages = buildChatImageUnderstandingMessages(images, userContent);
+  const requestMessages = sanitizeChatApiMessagesForLog(messages);
+  const logModel = config.configuredModel || "deployment";
+  const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
+    provider: config.provider,
+    reasoningEffort: config.reasoningEffort,
+    model: config.model,
+    temperature: config.temperature,
+    maxTokens,
+    messages
+  }), config.completionsUrl);
+  const appendImageLog = (entry) => {
+    if (writeLog && targetState) {
+      appendAiLogToState({
+        purpose: "image_understanding",
+        model: logModel,
+        temperature: config.temperature,
+        maxTokens,
+        requestMessages,
+        createdAt: nowIso(),
+        ...entry
+      }, targetState);
+    }
+  };
+  const { controller, generationEntry, cleanup } = createTimeoutController(
+    Number.isFinite(requestTimeoutMs) ? requestTimeoutMs : config.requestTimeoutMs,
+    {
+      trackGeneration,
+      purpose: "image_understanding"
+    }
+  );
+
+  let response;
+  try {
+    response = await fetch(config.completionsUrl, {
+      method: "POST",
+      headers: buildChatApiRequestHeaders(config.apiKey, config.completionsUrl),
+      signal: controller.signal,
+      body: JSON.stringify(requestBody)
+    });
+  } catch (error) {
+    cleanup();
+    if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+      throw createGenerationStoppedError();
+    }
+    const message = formatFetchErrorMessage(error, generationEntry);
+    appendImageLog({ responseText: "", error: message, status: "error" });
+    throw new Error(`圖片處理 API 請求失敗：${message}`);
+  }
+
+  let responseText = "";
+  try {
+    responseText = await response.text();
+  } catch (error) {
+    cleanup();
+    if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
+      throw createGenerationStoppedError();
+    }
+    const message = formatFetchErrorMessage(error, generationEntry);
+    appendImageLog({ responseText: "", error: message, status: "error" });
+    throw new Error(`圖片處理 API 回應讀取失敗：${message}`);
+  }
+  cleanup();
+  throwIfGenerationStopped(generationEntry);
+
+  let payload = null;
+  try {
+    payload = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const detail = safeText(payload?.error?.message || responseText).replace(/\s+/gu, " ").slice(0, 1000);
+    const message = `HTTP ${response.status}${detail ? ` ${detail}` : ""}`;
+    appendImageLog({ responseText, error: message, status: "error" });
+    throw new Error(`圖片處理 API 失敗：${message}`);
+  }
+  if (!payload) {
+    appendImageLog({ responseText, error: "回應不是有效 JSON", status: "error" });
+    throw new Error("圖片處理 API 回應不是有效 JSON。");
+  }
+
+  const content = extractChatApiMessageText(payload?.choices?.[0]?.message?.content).trim();
+  if (!content) {
+    appendImageLog({ responseText, error: "回傳空白內容", status: "error" });
+    throw new Error("圖片處理 API 回傳空白內容。");
+  }
+
+  appendImageLog({
+    responseText: content,
+    usage: normalizeAiUsage(payload?.usage),
+    status: "success"
+  });
+  return {
+    content,
+    provider: config.provider,
+    model: logModel,
+    usage: normalizeAiUsage(payload?.usage)
+  };
+}
+
+async function testChatImageApiConnection(envSource = {}) {
+  const startedAt = Date.now();
+  const config = resolveChatImageApiConfig(envSource);
+  const publicConfig = {
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    model: config.configuredModel || (isDeploymentChatCompletionsUrl(config.completionsUrl) ? "deployment" : "")
+  };
+  try {
+    const result = await requestChatImageUnderstanding({
+      envSource,
+      images: [{
+        imageUrl: CHAT_IMAGE_API_TEST_IMAGE,
+        contentType: "image/png",
+        fileName: "connection-test.png"
+      }],
+      userContent: "這是連接測試圖片，請簡短描述。",
+      maxTokens: 1024,
+      requestTimeoutMs: Math.min(config.requestTimeoutMs, 30000)
+    });
+    return {
+      ok: true,
+      message: `圖片讀取成功（${Date.now() - startedAt}ms）。`,
+      durationMs: Date.now() - startedAt,
+      responsePreview: result.content.slice(0, 120),
+      ...publicConfig
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `連接失敗：${safeText(error?.message) || "未知錯誤"}`,
+      durationMs: Date.now() - startedAt,
+      ...publicConfig
+    };
+  }
+}
+
+async function prepareUserMessageImagesForModel({
+  state: currentState,
+  userMessage,
+  storedUserContent
+} = {}) {
+  if (getChatImageInputMode() !== "specialist") {
+    return null;
+  }
+  const images = getMessageChatImages(userMessage).slice(0, getChatImageAttachmentMaxCount());
+  if (images.length === 0) {
+    return null;
+  }
+
+  const fingerprint = createChatImageAnalysisFingerprint(images, storedUserContent);
+  const existing = getMessageImageAnalysis(userMessage);
+  let analysis = existing?.fingerprint === fingerprint ? existing : null;
+  if (!analysis) {
+    delete userMessage.imageAnalysis;
+    if (userMessage.extra && typeof userMessage.extra === "object") {
+      delete userMessage.extra.imageAnalysis;
+    }
+    const result = await requestChatImageUnderstanding({
+      images,
+      userContent: storedUserContent,
+      targetState: currentState,
+      trackGeneration: true,
+      writeLog: true
+    });
+    analysis = {
+      fingerprint,
+      content: result.content,
+      provider: result.provider,
+      model: result.model,
+      createdAt: nowIso()
+    };
+    userMessage.imageAnalysis = analysis;
+  }
+
+  const preparedContent = safeText(userMessage.modelContent || userMessage.extra?.modelContent || storedUserContent);
+  userMessage.modelContent = appendChatImageAnalysisToModelContent(preparedContent, analysis.content);
+  userMessage.preparedModelContent = true;
+  return analysis;
+}
+
 async function callChatApiCompletionRaw({
   messages,
   temperature = null,
@@ -11469,6 +11759,7 @@ function createConversationTurnDeps(options = {}) {
     resolveRuntimeUserName: (currentState, turnExtra = {}) =>
       resolveUserDisplayName(currentState.userProfile, turnExtra.discordUserName || ""),
     attachTriggeredLorebooksToUserMessage,
+    prepareUserImagesForModel: prepareUserMessageImagesForModel,
     handleGenerationError: handleConversationGenerationError,
     rollbackFailedTurn: rollbackFailedConversationTurn,
     clearInvalidConversationMessages,
@@ -12242,6 +12533,9 @@ async function replayConversationFromUserIndexLocked({
   }
 
   const replacedUserMessage = state.conversation[targetIndex];
+  const replayImageAnalysis = getChatImageInputMode() === "specialist"
+    ? getMessageImageAnalysis(replacedUserMessage)
+    : null;
   const replayImages = Object.prototype.hasOwnProperty.call(userExtra, "images")
     ? userExtra.images
     : getMessageChatImages(replacedUserMessage);
@@ -12264,6 +12558,7 @@ async function replayConversationFromUserIndexLocked({
       userExtra: {
         ...userExtra,
         ...(replayImages.length > 0 ? { images: replayImages } : {}),
+        ...(replayImageAnalysis ? { imageAnalysis: replayImageAnalysis } : {}),
         rewrittenUserMessageId: safeText(replacedUserMessage?.id)
       },
       assistantExtra: {
@@ -12388,6 +12683,9 @@ async function replayConversationFromDiscordMessageId({
     const replayImages = Array.isArray(images)
       ? images
       : getMessageChatImages(state.conversation[targetIndex]);
+    const replayImageAnalysis = getChatImageInputMode() === "specialist"
+      ? getMessageImageAnalysis(state.conversation[targetIndex])
+      : null;
     const removedDiscordReplyMessageIds = state.conversation
       .slice(targetIndex + 1)
       .flatMap((item) => item?.role === "assistant" ? getDiscordReplyMessageIds(item) : []);
@@ -12407,7 +12705,8 @@ async function replayConversationFromDiscordMessageId({
         userExtra: {
           discordMessageId: normalizedMessageId,
           replayFromDiscordEdit: true,
-          ...(replayImages.length > 0 ? { images: replayImages } : {})
+          ...(replayImages.length > 0 ? { images: replayImages } : {}),
+          ...(replayImageAnalysis ? { imageAnalysis: replayImageAnalysis } : {})
         },
         assistantExtra: {
           discordMessageId: normalizedMessageId,
@@ -12629,6 +12928,16 @@ const server = http.createServer(async (req, res) => {
         ? body.env
         : parseEnvContent(body?.content || "");
       const result = await testChatApiConnection(envSource, body?.keyGroup);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (pathname === "/api/chat-image-api/test" && method === "POST") {
+      const body = await readBody(req);
+      const envSource = body?.env && typeof body.env === "object"
+        ? body.env
+        : parseEnvContent(body?.content || "");
+      const result = await testChatImageApiConnection(envSource);
       sendJson(res, 200, result);
       return;
     }

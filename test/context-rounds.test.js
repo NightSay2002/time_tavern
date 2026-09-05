@@ -17,7 +17,7 @@ test("recent dialogue keeps API roles separate from message content", () => {
   const functionEnd = serverSource.indexOf("\nfunction getCompletedDialogueRoundsBeforeLatestUser", functionStart);
   const functionSource = serverSource.slice(functionStart, functionEnd);
 
-  assert.match(functionSource, /\? \{ role, content: buildMultimodalMessageContent\(normalizedContent, item\) \}/u);
+  assert.match(functionSource, /\? \{ role, content: buildConversationModelMessageContent\(normalizedContent, item\) \}/u);
   assert.doesNotMatch(functionSource, /#\$\{|labels\[|getContextMessageRoundLabels/u);
 });
 

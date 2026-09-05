@@ -99,6 +99,7 @@ const el = {
   roleCardCustomSectionList: document.getElementById("roleCardCustomSectionList"),
   addRoleCardCustomSectionBtn: document.getElementById("addRoleCardCustomSectionBtn"),
   roleCardOpeningTabs: document.getElementById("roleCardOpeningTabs"),
+  roleCardOpeningName: document.getElementById("roleCardOpeningName"),
   addRoleCardOpeningBtn: document.getElementById("addRoleCardOpeningBtn"),
   roleCardOpening: document.getElementById("roleCardOpening"),
   roleCardLorebookList: document.getElementById("roleCardLorebookList"),
@@ -569,6 +570,80 @@ const ENV_FIELD_GROUPS = [
         step: "0.1",
         inputMode: "decimal",
         help: "選填，可設定 0 至 2（支援 0.1 等小數）。DeepSeek 只有關閉思考模式時才會套用；留空時一般對話使用 0.5，寫卡助手使用 0.9。"
+      }
+    ]
+  },
+  {
+    title: "圖片處理 API",
+    description: "可讓獨立的圖片模型先把附件轉成文字描述，再交給目前選用的主要模型。",
+    fields: [
+      {
+        key: "CHAT_IMAGE_INPUT_MODE",
+        label: "圖片輸入方式",
+        type: "select",
+        options: [
+          ["main", "主要模型直接處理"],
+          ["specialist", "專用圖片模型"]
+        ],
+        help: "既有設定預設為主要模型。專用模式下，主要模型只收到圖片辨識文字，不會收到原圖。"
+      },
+      {
+        key: "CHAT_IMAGE_API_PROVIDER",
+        label: "圖片 API 供應商",
+        type: "select",
+        options: [
+          ["deepseek", "DeepSeek"],
+          ["openai", "OpenAI / ChatGPT"],
+          ["gemini", "Gemini"],
+          ["zhipu", "智譜 GLM / BigModel"],
+          ["custom", "自訂 OpenAI-compatible"]
+        ],
+        help: "只決定圖片 API 的預設 Base URL，不使用主要對話的 Key 分頁。"
+      },
+      {
+        key: "CHAT_IMAGE_API_BASE_URL",
+        label: "圖片 API Base URL",
+        type: "text",
+        placeholder: "留空使用供應商預設",
+        help: "可填一般 OpenAI-compatible Base URL，或包含 /chat/completions 與查詢參數的完整 deployment URL。"
+      },
+      {
+        key: "CHAT_IMAGE_API_MODEL",
+        label: "圖片處理模型",
+        type: "text",
+        placeholder: "gpt-4.1-mini / glm-5.3-flash",
+        help: "必須是能讀取圖片的模型；完整 deployment URL 已包含模型時可留空。"
+      },
+      {
+        key: "CHAT_IMAGE_API_REASONING_EFFORT",
+        label: "圖片模型思考模式強度",
+        type: "select",
+        options: [
+          ["", "使用 API 預設"],
+          ["none", "關閉（使用溫度）"],
+          ["low", "低"],
+          ["high", "高"],
+          ["max", "最大"]
+        ],
+        help: "只控制圖片理解模型；依供應商與模型能力送出思考設定。DeepSeek 留空時使用高強度。"
+      },
+      {
+        key: "CHAT_IMAGE_API_TEMPERATURE",
+        label: "圖片模型溫度",
+        type: "number",
+        placeholder: "0.5",
+        min: "0",
+        max: "2",
+        step: "0.1",
+        inputMode: "decimal",
+        help: "範圍 0 至 2。關閉思考或使用不受控的 API 預設時才會送出；思考開啟時保留內容但不生效。"
+      },
+      {
+        key: "CHAT_IMAGE_API_KEY",
+        label: "圖片處理 API Key",
+        type: "password",
+        autocomplete: "off",
+        help: "只保存在本機 .env 與 data/environment.env，不加入故事 Key 租用。"
       }
     ]
   },
@@ -2455,6 +2530,25 @@ function createChatApiTestControls() {
   return row;
 }
 
+function createChatImageApiTestControls() {
+  const row = document.createElement("div");
+  row.className = "env-test-row";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "testChatImageApiConnectionBtn";
+  button.className = "secondary";
+  button.textContent = "測試圖片讀取";
+
+  const status = document.createElement("span");
+  status.id = "chatImageApiTestStatus";
+  status.className = "env-test-status";
+  status.textContent = "尚未測試";
+
+  row.append(button, status);
+  return row;
+}
+
 function renderEnvSettingsForm(content = "") {
   if (!el.envSettingsFields) {
     return;
@@ -2498,12 +2592,16 @@ function renderEnvSettingsForm(content = "") {
       section.appendChild(createChatApiProcessingKeyControls(activeDraft.keyGroups));
       section.appendChild(createChatApiTestControls());
     }
+    if (group.title === "圖片處理 API") {
+      section.appendChild(createChatImageApiTestControls());
+    }
     el.envSettingsFields.appendChild(section);
   });
 
   envExtraEntries = orderedEntries.filter((entry) => !isManagedEnvKey(entry.key) && !ENV_DROPPED_KEYS.has(entry.key));
   renderEnvExtraRows(envExtraEntries);
   syncChatApiReasoningField();
+  syncChatImageApiFields();
 }
 
 function collectEnvFieldValues() {
@@ -2593,6 +2691,80 @@ function isChatApiEnvField(key = "") {
   return key.startsWith("CHAT_API_");
 }
 
+function isChatImageApiEnvField(key = "") {
+  return key.startsWith("CHAT_IMAGE_");
+}
+
+function syncChatImageApiFields() {
+  const specialistEnabled = document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value === "specialist";
+  const provider = normalizeChatApiProviderSetting(
+    document.getElementById("envField_CHAT_IMAGE_API_PROVIDER")?.value || "deepseek"
+  );
+  const model = document.getElementById("envField_CHAT_IMAGE_API_MODEL")?.value || "";
+  const reasoningInput = document.getElementById("envField_CHAT_IMAGE_API_REASONING_EFFORT");
+  const temperatureInput = document.getElementById("envField_CHAT_IMAGE_API_TEMPERATURE");
+  const canDisable = canDisableChatApiReasoning(provider, model);
+  const supportsStrength = provider === "deepseek" ||
+    (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model));
+  [
+    "CHAT_IMAGE_API_PROVIDER",
+    "CHAT_IMAGE_API_BASE_URL",
+    "CHAT_IMAGE_API_MODEL",
+    "CHAT_IMAGE_API_REASONING_EFFORT",
+    "CHAT_IMAGE_API_TEMPERATURE",
+    "CHAT_IMAGE_API_KEY"
+  ].forEach((key) => {
+    const input = document.getElementById(`envField_${key}`);
+    if (!input) {
+      return;
+    }
+    input.disabled = !specialistEnabled;
+    input.closest(".env-field")?.classList.toggle("is-disabled", !specialistEnabled);
+  });
+
+  if (reasoningInput) {
+    const defaultOption = Array.from(reasoningInput.options || []).find((option) => option.value === "");
+    if (defaultOption) {
+      defaultOption.textContent = provider === "deepseek"
+        ? "使用預設（DeepSeek：高）"
+        : "使用 API 預設";
+    }
+    Array.from(reasoningInput.options || []).forEach((option) => {
+      const supported = option.value === "" ||
+        (option.value === "none" && canDisable) ||
+        (["low", "high", "max"].includes(option.value) && supportsStrength);
+      option.disabled = !supported;
+      option.hidden = !supported;
+    });
+    const reasoningDisabled = !specialistEnabled || (!canDisable && !supportsStrength);
+    reasoningInput.disabled = reasoningDisabled;
+    reasoningInput.closest(".env-field")?.classList.toggle("is-disabled", reasoningDisabled);
+  }
+
+  if (temperatureInput) {
+    const selectedEffort = reasoningInput?.value || "";
+    const effectiveEffort = provider === "deepseek"
+      ? selectedEffort || "high"
+      : selectedEffort === "none" && canDisable
+        ? "none"
+        : ["low", "high", "max"].includes(selectedEffort) && supportsStrength
+          ? selectedEffort
+          : "";
+    const temperatureDisabled = !specialistEnabled || Boolean(effectiveEffort && effectiveEffort !== "none");
+    temperatureInput.disabled = temperatureDisabled;
+    temperatureInput.closest(".env-field")?.classList.toggle("is-disabled", temperatureDisabled);
+  }
+
+  const testButton = document.getElementById("testChatImageApiConnectionBtn");
+  if (testButton) {
+    testButton.disabled = !specialistEnabled;
+    testButton.closest(".env-test-row")?.classList.toggle("is-disabled", !specialistEnabled);
+  }
+  if (!specialistEnabled) {
+    setChatImageApiTestStatus("", "目前由主要模型直接處理圖片");
+  }
+}
+
 async function testChatApiConnection() {
   const button = document.getElementById("testChatApiConnectionBtn");
   try {
@@ -2619,6 +2791,39 @@ async function testChatApiConnection() {
     if (button) {
       button.disabled = false;
     }
+  }
+}
+
+function setChatImageApiTestStatus(type = "", message = "") {
+  const status = document.getElementById("chatImageApiTestStatus");
+  if (!status) {
+    return;
+  }
+  status.className = `env-test-status${type ? ` ${type}` : ""}`;
+  status.textContent = message || "尚未測試";
+}
+
+async function testChatImageApiConnection() {
+  const button = document.getElementById("testChatImageApiConnectionBtn");
+  try {
+    if (button) {
+      button.disabled = true;
+    }
+    setChatImageApiTestStatus("testing", "正在傳送測試圖片...");
+    const payload = await request("/api/chat-image-api/test", {
+      method: "POST",
+      body: JSON.stringify({ content: buildEnvContentFromForm() })
+    });
+    const detail = [
+      payload?.model ? `模型：${payload.model}` : "",
+      payload?.durationMs ? `${payload.durationMs}ms` : ""
+    ].filter(Boolean).join("｜");
+    const message = payload?.message || (payload?.ok ? "圖片讀取成功。" : "連接失敗。");
+    setChatImageApiTestStatus(payload?.ok ? "success" : "error", detail ? `${message} ${detail}` : message);
+  } catch (error) {
+    setChatImageApiTestStatus("error", `連接失敗：${error.message}`);
+  } finally {
+    syncChatImageApiFields();
   }
 }
 
@@ -7594,8 +7799,14 @@ function syncSelectedRoleCardOpeningFromEditor() {
     return;
   }
   const content = el.roleCardOpening.value;
-  roleCardOpeningDialoguesDraft = roleCardOpeningDialoguesDraft.map((entry) =>
-    entry.id === selectedRoleCardOpeningId ? { ...entry, content } : entry
+  roleCardOpeningDialoguesDraft = roleCardOpeningDialoguesDraft.map((entry, index) =>
+    entry.id === selectedRoleCardOpeningId
+      ? {
+          ...entry,
+          name: el.roleCardOpeningName ? el.roleCardOpeningName.value.trim() || `開場 ${index + 1}` : entry.name,
+          content
+        }
+      : entry
   );
 }
 
@@ -7610,6 +7821,9 @@ function renderRoleCardOpeningTabs(selectedId = "") {
     ? selectedId
     : roleCardOpeningDialoguesDraft[0]?.id || "";
   const selectedEntry = roleCardOpeningDialoguesDraft.find((entry) => entry.id === selectedRoleCardOpeningId);
+  if (el.roleCardOpeningName) {
+    el.roleCardOpeningName.value = selectedEntry?.name || "";
+  }
   el.roleCardOpening.value = selectedEntry?.content || "";
   el.roleCardOpeningTabs.innerHTML = "";
 
@@ -9143,6 +9357,18 @@ function bindEvents() {
     el.roleCardOpening.addEventListener("input", syncSelectedRoleCardOpeningFromEditor);
   }
 
+  if (el.roleCardOpeningName) {
+    el.roleCardOpeningName.addEventListener("input", () => {
+      syncSelectedRoleCardOpeningFromEditor();
+      const selectedEntry = roleCardOpeningDialoguesDraft.find((entry) => entry.id === selectedRoleCardOpeningId);
+      const tabLabel = el.roleCardOpeningTabs?.querySelector(".opening-dialogue-tab.active .opening-dialogue-tab-label");
+      if (tabLabel && selectedEntry) {
+        tabLabel.textContent = selectedEntry.name;
+        tabLabel.title = selectedEntry.name;
+      }
+    });
+  }
+
   el.roleCardForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -9528,19 +9754,27 @@ function bindEvents() {
 
   if (el.envSettingsForm) {
     el.envSettingsForm.addEventListener("click", async (event) => {
-      if (event.target?.id !== "testChatApiConnectionBtn") {
-        return;
+      if (event.target?.id === "testChatApiConnectionBtn") {
+        event.preventDefault();
+        await testChatApiConnection();
+      } else if (event.target?.id === "testChatImageApiConnectionBtn") {
+        event.preventDefault();
+        await testChatImageApiConnection();
       }
-      event.preventDefault();
-      await testChatApiConnection();
     });
     el.envSettingsForm.addEventListener("input", (event) => {
       const key = event.target?.dataset?.envKey || "";
       if (key === "CHAT_API_MODEL") {
         syncChatApiReasoningField();
       }
+      if (key === "CHAT_IMAGE_API_MODEL") {
+        syncChatImageApiFields();
+      }
       if (isChatApiEnvField(key)) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
+      }
+      if (isChatImageApiEnvField(key)) {
+        setChatImageApiTestStatus("", "設定已變更，尚未重新測試");
       }
     });
     el.envSettingsForm.addEventListener("change", (event) => {
@@ -9551,6 +9785,12 @@ function bindEvents() {
       }
       if (isChatApiEnvField(key)) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
+      }
+      if (isChatImageApiEnvField(key)) {
+        setChatImageApiTestStatus("", "設定已變更，尚未重新測試");
+      }
+      if (["CHAT_IMAGE_INPUT_MODE", "CHAT_IMAGE_API_PROVIDER", "CHAT_IMAGE_API_REASONING_EFFORT"].includes(key)) {
+        syncChatImageApiFields();
       }
     });
     el.envSettingsForm.addEventListener("submit", async (event) => {
