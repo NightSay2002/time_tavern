@@ -117,6 +117,7 @@ NovelAI 同樣把 `defaults/novelai-defaults.json` 複製成 `data/novelai-defau
 
 NovelAI：
 
+- Random Prompt 的「畫師抽取／画师抽取」規則在打字時自動補上 `artist:` 並保留游標，空格轉底線；貼上或完成編輯時去除數值權重、拆行並去重，也接受只有名字或以 `:` 開頭的輸入。
 - 支援 NAI Diffusion V5、V4.5、V4 與 V3，並提供常用生成參數、Prompt 片段與參考圖功能。
 - 支援連續生成、圖片設定匯入、下載、收藏、本地歷史與放大檢視；生成及收藏異動會保留目前圖片庫分頁，上下方向鍵可跨頁連續瀏覽。
 - 支援 NovelAI 預設的保存與啟用。

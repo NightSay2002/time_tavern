@@ -810,12 +810,72 @@ function legacyFixedPromptSnippetsFromRandomSnippets(snippets = []) {
     })));
 }
 
+function isArtistExtractionSnippet(name = "") {
+  return /^(?:畫師抽取|画师抽取)$/u.test(String(name).trim());
+}
+
+function normalizeArtistExtractionName(value = "", editing = false) {
+  const text = editing ? String(value).trimStart() : String(value).trim();
+  return text.replace(/^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*::\s*|(?:artist)?\s*:\s*|artist\s+)+/iu, "")
+    .replace(/(?:::\s*)+$/u, "")
+    .replace(/\\_/gu, "_").replace(/\s+/gu, "_").toLowerCase();
+}
+
+function normalizeArtistExtractionItems(items = []) {
+  const artists = items
+    .flatMap((item) => String(item).replace(/[\[\]{}]/gu, "\n").split(/[,，\r\n]+/u))
+    .map((item) => normalizeArtistExtractionName(item))
+    .filter((item) => item && item !== "artist");
+  return [...new Set(artists)].map((artist) => `artist:${artist}`);
+}
+
+function normalizeArtistExtractionEditor(card, { editing = false } = {}) {
+  const name = card?.querySelector('[data-random-prompt-field="name"]')?.value || "";
+  const field = card?.querySelector('[data-random-prompt-field="randomText"]');
+  if (field && isArtistExtractionSnippet(name)) {
+    if (editing) {
+      const start = field.selectionStart;
+      const end = field.selectionEnd;
+      const lineStart = field.value.slice(0, start).lastIndexOf("\n") + 1;
+      const nextNewline = field.value.indexOf("\n", end);
+      const lineEnd = nextNewline < 0 ? field.value.length : nextNewline;
+      const line = field.value.slice(lineStart, lineEnd);
+      // Keep blank lines and duplicates while typing so new entries remain editable.
+      if (line.includes("\n") || /[,，\[\]{}]/u.test(line)) {
+        return;
+      }
+      const artist = normalizeArtistExtractionName(line, true);
+      if (!artist) {
+        return;
+      }
+      const normalizedLine = `artist:${artist}`;
+      if (line !== normalizedLine) {
+        const nextStart = lineStart + Math.min(normalizedLine.length, 7 + normalizeArtistExtractionName(line.slice(0, start - lineStart), true).length);
+        const nextEnd = lineStart + Math.min(normalizedLine.length, 7 + normalizeArtistExtractionName(line.slice(0, end - lineStart), true).length);
+        const direction = field.selectionDirection;
+        const scrollTop = field.scrollTop;
+        field.setRangeText(normalizedLine, lineStart, lineEnd, "preserve");
+        field.setSelectionRange(nextStart, nextEnd, direction);
+        field.scrollTop = scrollTop;
+        updateNovelAiDuplicateWarnings(field);
+      }
+      return;
+    }
+    const normalized = normalizeArtistExtractionItems([field.value]).join("\n");
+    if (field.value !== normalized) {
+      field.value = normalized;
+      updateNovelAiDuplicateWarnings(field);
+    }
+  }
+}
+
 function normalizeRandomPromptSnippet(snippet = {}, index = 0) {
   const source = snippet && typeof snippet === "object" ? snippet : {};
   const name = String(source.name || source.title || source.key || `片段 ${index + 1}`).trim();
   const min = clampIntegerValue(source.min ?? source.minPick ?? source.pickMin, 1, 0, 999);
   const max = clampIntegerValue(source.max ?? source.maxPick ?? source.pickMax, Math.max(1, min), 0, 999);
-  const randomItems = normalizePromptItemList(source.randomItems ?? source.random_items ?? source.randomText ?? source.random ?? source.choices ?? "", { preserveTrailingSpace: true });
+  const items = normalizePromptItemList(source.randomItems ?? source.random_items ?? source.randomText ?? source.random ?? source.choices ?? "", { preserveTrailingSpace: true });
+  const randomItems = isArtistExtractionSnippet(name) ? normalizeArtistExtractionItems(items) : items;
   const legacyFixedItems = normalizePromptItemList(source.fixedItems ?? source.fixed_items ?? source.fixedText ?? source.fixed ?? source.staticText ?? "");
   const weightMin = clampNumberValue(source.weightMin ?? source.numericWeightMin ?? source.promptWeightMin, 0, 0, 5);
   const weightMax = clampNumberValue(source.weightMax ?? source.numericWeightMax ?? source.promptWeightMax, weightMin, 0, 5);
@@ -4263,8 +4323,29 @@ function bindEvents() {
     }
     saveSettingsDraft();
   });
+  el.novelAiRandomPromptList.addEventListener("paste", (event) => {
+    const target = event.target?.closest?.('[data-random-prompt-field="randomText"]');
+    const card = target?.closest(".nai-random-prompt-card");
+    const name = card?.querySelector('[data-random-prompt-field="name"]')?.value || "";
+    const text = event.clipboardData?.getData("text/plain");
+    if (!target || !isArtistExtractionSnippet(name) || !text) {
+      return;
+    }
+    event.preventDefault();
+    target.setRangeText(text, target.selectionStart, target.selectionEnd, "end");
+    normalizeArtistExtractionEditor(card);
+    novelAiRandomPromptSnippets = collectRandomPromptSnippets();
+    saveSettingsDraft();
+  });
   el.novelAiRandomPromptList.addEventListener("input", (event) => {
     const target = event?.target?.closest?.("[data-random-prompt-field]");
+    if (!event.isComposing && target?.dataset.randomPromptField === "name") {
+      normalizeArtistExtractionEditor(target.closest(".nai-random-prompt-card"));
+    }
+    if (!event.isComposing && target?.dataset.randomPromptField === "randomText" &&
+        !/^(?:delete|history)/u.test(event.inputType || "")) {
+      normalizeArtistExtractionEditor(target.closest(".nai-random-prompt-card"), { editing: true });
+    }
     if (target?.dataset.randomPromptField === "name") {
       const card = target.closest(".nai-random-prompt-card");
       const insertButton = card?.querySelector('[data-random-prompt-action="insert"]');
@@ -4278,10 +4359,21 @@ function bindEvents() {
     novelAiRandomPromptSnippets = collectRandomPromptSnippets();
     saveSettingsDraft();
   });
+  el.novelAiRandomPromptList.addEventListener("compositionend", (event) => {
+    const target = event.target?.closest?.('[data-random-prompt-field="randomText"]');
+    if (target) {
+      normalizeArtistExtractionEditor(target.closest(".nai-random-prompt-card"), { editing: true });
+      novelAiRandomPromptSnippets = collectRandomPromptSnippets();
+      saveSettingsDraft();
+    }
+  });
   el.novelAiRandomPromptList.addEventListener("change", (event) => {
     const target = event?.target?.closest?.("[data-random-prompt-field]");
     if (!target) {
       return;
+    }
+    if (["name", "randomText"].includes(target.dataset.randomPromptField)) {
+      normalizeArtistExtractionEditor(target.closest(".nai-random-prompt-card"));
     }
     if (["squareEnabled", "curlyEnabled", "weightEnabled", "weightMin", "weightMax", "weightBias"].includes(target.dataset.randomPromptField)) {
       syncRandomPromptWeightControls(target.closest(".nai-random-prompt-card"));

@@ -197,6 +197,10 @@ Random Prompt：
 
 - 用 `||名字||` 插入 Base Prompt。
 - 每行可作為候選，也可用逗號放一串 prompt。
+- 名稱為「畫師抽取」或「画师抽取」時，貼上、完成編輯及載入設定會自動正規化：去除 `[]`／`{}` 包裝與重複的 `artist` 前綴，名字統一小寫、空格轉 `_`，保留原有底線與圓括號；逗號、換行及相連的括號標籤拆成獨立候選，相同畫師只保留第一次出現的一項。其他名稱的規則不套用這項處理。
+- 例如 `[artist:kedama milk][artist:ask(askzy)],artist:wanke,[artist:wlop],` 會成為四行：`artist:kedama_milk`、`artist:ask(askzy)`、`artist:wanke`、`artist:wlop`。抽選數量與額外權重仍依規則設定套用。
+- 輸入原有的數值權重也會移除：`0.9::kazutake_hazano::,`、`0.9::artist:kazutake_hazano::,` 都整理為 `artist:kazutake_hazano`；一般 Random Prompt 規則保留原有權重，畫師規則自己的抽選權重設定仍正常套用。
+- `:kazutake_hazano,` 與 `kazutake hazano` 都會成為 `artist:kazutake_hazano`。新行輸入 `a` 時立即補為 `artist:a`，游標保留在 `a` 後方，可繼續輸入；輸入中的空格轉為底線，空白新行與暫時重複的名字會保留，完成編輯時才去重。刪除、復原與輸入法組字期間不強制補字，組字完成後再正規化。
 - 可設定抽選數量、`[]`、`{}`、數值權重與偏向值。
 - metadata 會保存最終 prompt、template、片段庫與每個 placeholder 展開結果。
 
