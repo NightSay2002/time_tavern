@@ -3522,6 +3522,54 @@ body.novelai-studio-body .novelai-small-preview {
   grid-column: 1 / -1;
 }
 
+.env-field[hidden],
+.env-field [hidden] {
+  display: none;
+}
+
+.api-endpoint-prices {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+
+.api-endpoint-prices table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.api-endpoint-prices th,
+.api-endpoint-prices td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color, #484451);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.api-endpoint-prices button {
+  white-space: nowrap;
+}
+
+.env-field .api-catalog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.env-field .api-catalog-actions button {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.api-catalog-actions a {
+  color: #9ecbff;
+  overflow-wrap: anywhere;
+}
+
 .env-image-field {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);

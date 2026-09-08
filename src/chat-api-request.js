@@ -83,8 +83,17 @@ export function shouldIncludeUserCustomSupplement(reasoningEffort = "") {
   return String(reasoningEffort || "").trim().toLowerCase() !== "none";
 }
 
+export function normalizeOpenRouterProvider(value = "") {
+  const slug = String(value || "").trim().toLowerCase();
+  if (slug && !/^[a-z0-9][a-z0-9._/-]{0,199}$/u.test(slug)) {
+    throw new Error("OpenRouter 推理供應商識別碼無效。");
+  }
+  return slug;
+}
+
 export function buildChatApiRequestBody({
   provider = "",
+  openrouterProvider = "",
   reasoningEffort = "",
   model,
   temperature,
@@ -104,6 +113,12 @@ export function buildChatApiRequestBody({
     model,
     messages
   };
+  if (normalizedProvider === "openrouter") {
+    const slug = normalizeOpenRouterProvider(openrouterProvider);
+    if (slug) {
+      requestBody.provider = { only: [slug], order: [slug], allow_fallbacks: false };
+    }
+  }
 
   if (
     Number.isFinite(temperature) &&

@@ -90,6 +90,9 @@ import {
   buildChatApiCompletionsUrl,
   buildChatApiRequestHeaders,
   isDeploymentChatCompletionsUrl,
+  listChatApiModels,
+  listOpenRouterProviders,
+  listOpenRouterModelEndpoints,
   resolveChatApiModelForEndpoint
 } from "./chat-api-endpoint.js";
 import {
@@ -450,7 +453,7 @@ function isDefaultEnvSecretKey(key = "") {
   if (/^(?:CONVERSATION_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_KEY)[2-9]\d*$/iu.test(normalizedKey)) {
     return true;
   }
-  if (/^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|CUSTOM_API_KEY)_GROUP[2-9]\d*(?:_[2-9]\d*)?$/iu.test(normalizedKey)) {
+  if (/^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|OPENROUTER_API_KEY|CUSTOM_API_KEY)_GROUP[2-9]\d*(?:_[2-9]\d*)?$/iu.test(normalizedKey)) {
     return true;
   }
   if (DEFAULT_ENV_EXCLUDED_KEYS.has(normalizedKey.toUpperCase())) {
@@ -1605,8 +1608,9 @@ function normalizeAiUsageCost(input) {
   };
 }
 
-function normalizeAiUsage(input) {
+function normalizeAiUsage(input, apiProvider = "") {
   const source = input && typeof input === "object" ? input : {};
+  const accountingProvider = apiProvider || source.accountingProvider || "";
   const promptTokens = Number(source.promptTokens ?? source.prompt_tokens ?? source.input_tokens);
   const completionTokens = Number(source.completionTokens ?? source.completion_tokens ?? source.output_tokens);
   const inferredTotalTokens = Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
@@ -1621,7 +1625,9 @@ function normalizeAiUsage(input) {
     source.cache_read_tokens
   );
   const promptCacheMissTokens = Number(source.promptCacheMissTokens ?? source.prompt_cache_miss_tokens);
-  const cost = normalizeAiUsageCost(source.cost || source);
+  const cost = accountingProvider === "openrouter" && typeof source.cost === "number" && source.cost >= 0
+    ? normalizeAiUsageCost({ amount: source.cost, currency: "USD" })
+    : normalizeAiUsageCost(source.cost || source);
 
   return {
     promptTokens: Number.isFinite(promptTokens) ? promptTokens : null,
@@ -1629,7 +1635,8 @@ function normalizeAiUsage(input) {
     totalTokens: Number.isFinite(totalTokens) ? totalTokens : null,
     promptCacheHitTokens: Number.isFinite(promptCacheHitTokens) ? promptCacheHitTokens : null,
     promptCacheMissTokens: Number.isFinite(promptCacheMissTokens) ? promptCacheMissTokens : null,
-    cost
+    cost,
+    ...(accountingProvider === "openrouter" ? { accountingProvider } : {})
   };
 }
 
@@ -1651,6 +1658,7 @@ function getAiUsagePricingForModel(model = "", promptTokens = null) {
 }
 
 function calculateAiUsageCost(usage = {}, model = "") {
+  if (usage?.accountingProvider === "openrouter") return usage.cost || null;
   if (!usage || typeof usage !== "object") {
     return null;
   }
@@ -9575,7 +9583,7 @@ function normalizeChatApiProvider(value = "") {
   if (["zhipu", "glm", "bigmodel"].includes(normalized)) {
     return "zhipu";
   }
-  if (["deepseek", "openai", "gemini", "custom"].includes(normalized)) {
+  if (["deepseek", "openai", "gemini", "openrouter", "custom"].includes(normalized)) {
     return normalized;
   }
   return DEFAULT_CHAT_API_PROVIDER;
@@ -9587,6 +9595,9 @@ function getChatApiProvider() {
 
 function getDefaultChatApiBaseUrl(provider = getChatApiProvider()) {
   const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openrouter") {
+    return "https://openrouter.ai/api/v1";
+  }
   if (normalizedProvider === "openai") {
     return "https://api.openai.com/v1";
   }
@@ -9604,6 +9615,9 @@ function getDefaultChatApiBaseUrl(provider = getChatApiProvider()) {
 
 function getChatApiBaseUrl() {
   const provider = getChatApiProvider();
+  if (provider !== "custom") {
+    return getDefaultChatApiBaseUrl(provider);
+  }
   return envFirstText(
     ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", ...getChatApiProviderBaseUrlAliases(provider)],
     getDefaultChatApiBaseUrl(provider)
@@ -9634,7 +9648,7 @@ function resolveChatImageApiConfig(envSource = process.env) {
   const provider = normalizeChatApiProvider(
     envObjectFirstText(envSource, ["CHAT_IMAGE_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
-  const baseUrl = envObjectFirstText(
+  const baseUrl = provider !== "custom" ? getDefaultChatApiBaseUrl(provider) : envObjectFirstText(
     envSource,
     ["CHAT_IMAGE_API_BASE_URL"],
     getDefaultChatApiBaseUrl(provider)
@@ -9662,6 +9676,7 @@ function resolveChatImageApiConfig(envSource = process.env) {
   return {
     provider,
     apiKey: envObjectFirstText(envSource, ["CHAT_IMAGE_API_KEY"], ""),
+    openrouterProvider: envObjectFirstText(envSource, ["CHAT_IMAGE_API_OPENROUTER_PROVIDER"], ""),
     baseUrl,
     completionsUrl,
     configuredModel,
@@ -10419,6 +10434,9 @@ function getChatApiMaxTokensParamName() {
 
 function getChatApiProviderModelAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
   const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openrouter") {
+    return ["OPENROUTER_MODEL"];
+  }
   if (normalizedProvider === "openai") {
     return ["OPENAI_MODEL"];
   }
@@ -10439,6 +10457,9 @@ function getChatApiProviderModelAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
 
 function getChatApiProviderBaseUrlAliases(provider = DEFAULT_CHAT_API_PROVIDER) {
   const normalizedProvider = normalizeChatApiProvider(provider);
+  if (normalizedProvider === "openrouter") {
+    return ["OPENROUTER_BASE_URL"];
+  }
   if (normalizedProvider === "openai") {
     return ["OPENAI_BASE_URL"];
   }
@@ -10461,7 +10482,7 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
   const provider = normalizeChatApiProvider(
     envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
-  const baseUrl = envObjectFirstText(
+  const baseUrl = provider !== "custom" ? getDefaultChatApiBaseUrl(provider) : envObjectFirstText(
     envSource,
     ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", ...getChatApiProviderBaseUrlAliases(provider)],
     getDefaultChatApiBaseUrl(provider)
@@ -10494,7 +10515,8 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
     model,
     requestTimeoutMs,
     maxTokensParamName,
-    reasoningEffort
+    reasoningEffort,
+    openrouterProvider: envObjectFirstText(envSource, ["CHAT_API_OPENROUTER_PROVIDER"], "")
   };
 }
 
@@ -10526,6 +10548,7 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
 
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: config.provider,
+    openrouterProvider: config.openrouterProvider,
     reasoningEffort: config.reasoningEffort,
     model: config.model,
     maxTokens: ["deepseek", "zhipu"].includes(config.provider) && config.reasoningEffort !== "none" ? 1024 : 8,
@@ -10609,7 +10632,7 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
     durationMs: Date.now() - startedAt,
     responsePreview: content.slice(0, 80),
     finishReason,
-    usage: normalizeAiUsage(payload?.usage),
+    usage: normalizeAiUsage(payload?.usage, config.provider),
     ...publicConfig
   };
 }
@@ -10664,6 +10687,7 @@ async function requestChatImageUnderstanding({
   const logModel = config.configuredModel || "deployment";
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: config.provider,
+    openrouterProvider: config.openrouterProvider,
     reasoningEffort: config.reasoningEffort,
     model: config.model,
     temperature: config.temperature,
@@ -10749,14 +10773,14 @@ async function requestChatImageUnderstanding({
 
   appendImageLog({
     responseText: content,
-    usage: normalizeAiUsage(payload?.usage),
+    usage: normalizeAiUsage(payload?.usage, config.provider),
     status: "success"
   });
   return {
     content,
     provider: config.provider,
     model: logModel,
-    usage: normalizeAiUsage(payload?.usage)
+    usage: normalizeAiUsage(payload?.usage, config.provider)
   };
 }
 
@@ -10899,8 +10923,10 @@ async function callChatApiCompletionRaw({
     throw new Error(errorMessage);
   }
 
+  const apiProvider = getChatApiProvider();
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
-    provider: getChatApiProvider(),
+    provider: apiProvider,
+    openrouterProvider: envFirstText(["CHAT_API_OPENROUTER_PROVIDER"], ""),
     reasoningEffort: getChatApiReasoningEffort(),
     model,
     temperature: resolvedTemperature,
@@ -11010,7 +11036,7 @@ async function callChatApiCompletionRaw({
   const reasoningContent = extractChatApiMessageText(message.reasoning_content);
   const trimmed = safeText(content).trim();
   const trimmedReasoning = safeText(reasoningContent).trim();
-  const usage = normalizeAiUsage(payload?.usage);
+  const usage = normalizeAiUsage(payload?.usage, apiProvider);
 
   if (shouldRetryChatApiEmptyResponse(trimmed, emptyRetryCount)) {
     return callChatApiCompletionRaw({
@@ -11133,7 +11159,7 @@ async function readChatApiStreamBody(response, handlers = {}) {
   let finishReason = "";
   let content = "";
   let reasoningContent = "";
-  let usage = normalizeAiUsage(null);
+  let usage = normalizeAiUsage(null, handlers.apiProvider);
 
   const processEventBlock = (block) => {
     const dataLines = block
@@ -11164,7 +11190,7 @@ async function readChatApiStreamBody(response, handlers = {}) {
     const contentDelta = extractChatApiMessageText(delta.content);
     const nextFinishReason = safeText(choice?.finish_reason);
     if (payload?.usage && hasUsageTokens(payload.usage)) {
-      usage = normalizeAiUsage(payload.usage);
+      usage = normalizeAiUsage(payload.usage, handlers.apiProvider);
     }
 
     if (reasoningDelta) {
@@ -11270,8 +11296,10 @@ async function callChatApiCompletionStreamRaw({
     throw new Error(errorMessage);
   }
 
+  const apiProvider = getChatApiProvider();
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
-    provider: getChatApiProvider(),
+    provider: apiProvider,
+    openrouterProvider: envFirstText(["CHAT_API_OPENROUTER_PROVIDER"], ""),
     reasoningEffort: getChatApiReasoningEffort(),
     model,
     temperature: resolvedTemperature,
@@ -11362,6 +11390,7 @@ async function callChatApiCompletionStreamRaw({
   let streamed;
   try {
     streamed = await readChatApiStreamBody(response, {
+      apiProvider,
       onReasoningDelta,
       onContentDelta
     });
@@ -12929,6 +12958,29 @@ const server = http.createServer(async (req, res) => {
         : parseEnvContent(body?.content || "");
       const result = await testChatApiConnection(envSource, body?.keyGroup);
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (/^\/api\/chat(?:-image)?-api\/(models|providers|model-endpoints)$/u.test(pathname) && method === "POST") {
+      const body = await readBody(req);
+      const envSource = body?.env && typeof body.env === "object"
+        ? body.env
+        : parseEnvContent(body?.content || "");
+      const config = pathname.startsWith("/api/chat-image-api/")
+        ? resolveChatImageApiConfig(envSource)
+        : resolveChatApiTestConfig(envSource, body?.keyGroup);
+      config.imageOnly = pathname.startsWith("/api/chat-image-api/");
+      try {
+        if (pathname.endsWith("/providers")) {
+          sendJson(res, 200, { ok: true, providers: await listOpenRouterProviders(config) });
+        } else if (pathname.endsWith("/model-endpoints")) {
+          sendJson(res, 200, { ok: true, ...await listOpenRouterModelEndpoints(config) });
+        } else {
+          sendJson(res, 200, { ok: true, models: await listChatApiModels(config) });
+        }
+      } catch (error) {
+        sendJson(res, 200, { ok: false, message: error.message });
+      }
       return;
     }
 

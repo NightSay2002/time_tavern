@@ -3,6 +3,7 @@ const PROVIDER_KEY_ALIASES = {
   openai: ["OPENAI_API_KEY"],
   gemini: ["GEMINI_API_KEY"],
   zhipu: ["ZHIPU_API_KEY", "BIGMODEL_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
   custom: ["CUSTOM_API_KEY"]
 };
 

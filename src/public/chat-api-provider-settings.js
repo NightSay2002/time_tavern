@@ -23,6 +23,12 @@ const PROVIDER_FIELDS = {
     model: ["ZHIPU_MODEL", "GLM_MODEL"],
     baseUrl: ["ZHIPU_BASE_URL", "BIGMODEL_BASE_URL"]
   },
+  openrouter: {
+    key: ["OPENROUTER_API_KEY"],
+    processingKey: ["OPENROUTER_API_KEY"],
+    model: ["OPENROUTER_MODEL"],
+    baseUrl: ["OPENROUTER_BASE_URL"]
+  },
   custom: {
     key: ["CUSTOM_API_KEY"],
     processingKey: ["CUSTOM_API_KEY"],
@@ -33,6 +39,16 @@ const PROVIDER_FIELDS = {
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export function getOfficialChatApiBaseUrl(provider = "deepseek") {
+  return {
+    deepseek: "https://api.deepseek.com",
+    openai: "https://api.openai.com/v1",
+    gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+    zhipu: "https://open.bigmodel.cn/api/paas/v4",
+    openrouter: "https://openrouter.ai/api/v1"
+  }[normalizeChatApiProviderSetting(provider)] || "";
 }
 
 function firstValue(source, keys) {

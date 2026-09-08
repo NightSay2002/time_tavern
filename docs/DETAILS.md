@@ -28,11 +28,12 @@
 | --- | --- | --- |
 | `PORT` | `3234` | 本地 HTTP server port。 |
 | `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
-| `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`custom`。 |
+| `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`openrouter`、`custom`。 |
+| `CHAT_API_OPENROUTER_PROVIDER` | 空白 | OpenRouter 推理供應商 slug，例如 `deepinfra`；可選精確端點如 `deepinfra/fp8`。空白自動路由。 |
 | `CHAT_API_KEY` | 空 | Key 1 的主聊天、補寫及角色卡助手 Key。舊設定直接沿用，不需遷移。 |
-| `CHAT_API_BASE_URL` | 依 provider | 自訂 OpenAI-compatible API base URL，亦可直接填完整 Chat Completions 路線。 |
+| `CHAT_API_BASE_URL` | 依 provider | 只有 `custom` 讀取此值；可填 Base URL 或完整 Chat Completions 路線。其他 provider 固定使用官方網址。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型；Base URL 是完整 deployment URL 時可留空。 |
-| `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前供應商的專屬 Key 優先，`CHAT_API_KEY` 只作舊設定後備，執行時不讀取其他供應商的 Key。 |
+| `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `OPENROUTER_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前供應商的專屬 Key 優先，`CHAT_API_KEY` 只作舊設定後備，執行時不讀取其他供應商的 Key。官方 provider 的 Base URL 覆寫不再生效。 |
 | `CHAT_API_REASONING_EFFORT` | `high` | 共用思考欄位。DeepSeek 空值使用 `high`；GLM 4.5+、Gemini 2.5 Flash／Flash-Lite，以及支援 `none` 的 GPT-5.1+ 非 Pro 模型可選 `none`。模型不支援時不送關閉參數。關閉後啟用 temperature，且不附帶使用者自訂補充。舊版 provider 專用變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
@@ -42,7 +43,8 @@
 | `CHAT_IMAGE_ATTACHMENT_MAX_BYTES` | `5242880` | 每張聊天圖片大小上限，單位 bytes。 |
 | `CHAT_IMAGE_INPUT_MODE` | `main` | `main` 由主要模型直接讀圖；`specialist` 先由專用圖片模型轉成文字描述。 |
 | `CHAT_IMAGE_API_PROVIDER` | `deepseek` | 專用圖片 API provider；支援與對話 API 相同的 provider 類型。 |
-| `CHAT_IMAGE_API_BASE_URL` | 依 provider | 專用圖片 API 的 Base URL 或完整 deployment URL。 |
+| `CHAT_IMAGE_API_OPENROUTER_PROVIDER` | 空白 | 圖片 API 獨立的 OpenRouter 推理供應商／端點；空白自動路由。 |
+| `CHAT_IMAGE_API_BASE_URL` | 依 provider | 只有圖片 provider 為 `custom` 時生效；官方 provider 使用固定網址。 |
 | `CHAT_IMAGE_API_MODEL` | 空 | 專用圖片模型；完整 deployment URL 已包含模型時可留空。 |
 | `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，可設 `none`、`low`、`high`、`max`。 |
 | `CHAT_IMAGE_API_TEMPERATURE` | API 預設 | 圖片模型獨立 temperature，範圍 `0–2`；思考開啟時不送出。 |
@@ -74,7 +76,7 @@
 | `NOVELAI_PRIMARY_API_BASE_URL` | `https://api.novelai.net` | NovelAI 主 API base URL。 |
 | `NOVELAI_REQUEST_TIMEOUT_MS` | `600000` | NovelAI 請求逾時，毫秒。 |
 
-Provider 預設 base URL：
+Provider 固定 Base URL（對話與圖片處理共用此對照）：
 
 | Provider | Base URL |
 | --- | --- |
@@ -82,9 +84,22 @@ Provider 預設 base URL：
 | `openai` | `https://api.openai.com/v1` |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` |
+| `openrouter` | `https://openrouter.ai/api/v1` |
 | `custom` | 必須自行設定 `CHAT_API_BASE_URL` |
 
-一般 Base URL 使用 `{base}/chat/completions` 與 Bearer Token。若 Base URL 已是完整的 `/deployments/{deployment}/chat/completions?...` 路線，系統會原樣使用、改用 `api-key` header，並省略 request body 的 `model`；API 輸出模型可留空。系統不會推測 deployment 名稱或自動加入 API version。
+一般 Base URL 使用 `{base}/chat/completions` 與 Bearer Token。自訂 Base URL 若已是完整的 `/deployments/{deployment}/chat/completions?...` 路線，系統會原樣使用、改用 `api-key` header，並省略 request body 的 `model`；API 輸出模型可留空。系統不會推測 deployment 名稱或自動加入 API version。
+
+舊設定若在官方 provider 填了代理、不同區域或 deployment 網址，請改選 `custom`，填回原網址及該服務的 Key／模型；不會自動搬移或混用不同供應商的 Key。圖片 API 同樣適用，且「主要模型直接處理」仍會停用專用欄位並保留內容。
+
+兩組模型欄位都有「取得模型清單」，由本地 server 以尚未保存的設定呼叫 `{base}/models`。對話清單使用目前 Key 分頁的主 Key，圖片清單使用獨立圖片 Key；不租用故事 Key、不呼叫生成、不寫入 AI logs、存檔或 localStorage。選項按模型 ID 排序，可搜尋及手動輸入；刷新不會改掉目前模型。切換供應商、Key 或網址會清掉舊選項，較晚返回的舊請求不會覆蓋新設定。
+
+[DeepSeek](https://api-docs.deepseek.com/api/list-models)、[OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[Gemini](https://ai.google.dev/gemini-api/docs/openai#list_models) 與 [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/get-models) 提供模型列表介面。智譜目前未在官方文件公開通用 `/models`，因此停用清單按鈕，改連結[官方模型總覽](https://docs.bigmodel.cn/cn/guide/start/model-overview)，由使用者填入模型。自訂服務嘗試標準 `/models`；完整 deployment 網址不猜測清單路線。清單不保證聊天或圖片能力，圖片請另用「測試圖片讀取」驗證。DeepSeek、OpenAI、Gemini 的清單不含價格，介面提供官方計費連結，不估造價目。若顯示本機沒有清單介面，請重啟服務並重新整理頁面。
+
+OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[供應商 API](https://openrouter.ai/docs/api/api-reference/providers/list-all-providers)取得清單，再用 `/models?providers=<slug>` 篩選模型；圖片清單另加 `input_modalities=image`。選模型後只查該模型的[端點 API](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model)，不逐一查詢全部模型，避免延遲。選單保留原模型／端點，清單缺項時警告，不自動替換。
+
+端點表列出輸入、輸出、快取及其他已提供費率、上下文與輸出上限。token 費率由 USD/token 換算為 USD/百萬 tokens；圖片、請求、搜尋按次／張列出。缺少價格顯示「未提供」，只有明確的 0 才是免費。模型總清單的價格是跨供應商起價，不能當作指定端點價格；實際收費、長上下文與帳號限制以 OpenRouter 為準。AI logs 採用 OpenRouter 回傳的 `usage.cost`（USD），不套用直連 DeepSeek 價格表；未回傳費用不猜測。
+
+指定供應商時，連接測試、正文串流、助手、壓縮、補寫與圖片理解均送出 `provider.only`、`provider.order` 及 `allow_fallbacks:false`；根 slug 包含其區域／量化端點，選表格端點則固定完整 tag。空白使用 OpenRouter 自動路由。詳見[官方路由規則](https://openrouter.ai/docs/guides/routing/provider-selection)。兩組路由設定互相獨立，不改動故事 Key 租用；Key 仍不進入全局匯出或作者預設。清單請求只用目前欄位的 Key，不呼叫付費生成。
 
 環境設定的「測試連線」不傳 `temperature`，由 deployment 使用模型預設值；正式對話仍依 `CHAT_API_TEMPERATURE` 設定送出溫度。
 

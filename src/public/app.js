@@ -2,9 +2,10 @@
   canDisableChatApiReasoning,
   createChatApiProviderDrafts,
   getChatApiProviderEnvEntries,
+  getOfficialChatApiBaseUrl,
   normalizeChatApiProviderSetting,
   resolveChatApiReasoningEffort
-} from "./chat-api-provider-settings.js";
+} from "./chat-api-provider-settings.js?v=20260908-provider-models";
 import {
   createUiLanguageController,
   normalizeUiLanguage,
@@ -495,7 +496,7 @@ const ENV_FIELD_GROUPS = [
   },
   {
     title: "對話API",
-    description: "支援 OpenAI-compatible Chat Completions API。DeepSeek、OpenAI、Gemini、智譜 GLM 可直接使用。",
+    description: "支援 DeepSeek、OpenAI、Gemini、智譜 GLM、OpenRouter 及自訂 OpenAI-compatible API。",
     fields: [
       {
         key: "CHAT_API_PROVIDER",
@@ -506,16 +507,24 @@ const ENV_FIELD_GROUPS = [
           ["openai", "OpenAI / ChatGPT"],
           ["gemini", "Gemini"],
           ["zhipu", "智譜 GLM / BigModel"],
+          ["openrouter", "OpenRouter"],
           ["custom", "自訂 OpenAI-compatible"]
         ],
-        help: "決定預設 Base URL；custom 供應商必須另外填 CHAT_API_BASE_URL。"
+        help: "官方供應商使用固定網址；代理或完整 deployment 網址請選自訂。"
       },
       {
         key: "CHAT_API_BASE_URL",
         label: "對話 API Base URL",
         type: "text",
         placeholder: "留空使用供應商預設",
-        help: "留空使用 provider 預設。可填一般 OpenAI-compatible Base URL，或包含 /chat/completions 與查詢參數的完整 deployment URL。"
+        help: "只有自訂供應商可修改；支援一般 Base URL 或包含 /chat/completions 與查詢參數的完整網址。"
+      },
+      {
+        key: "CHAT_API_OPENROUTER_PROVIDER",
+        label: "OpenRouter 推理供應商",
+        type: "select",
+        options: [["", "自動路由"]],
+        help: "指定後只使用該供應商；不會自動改走其他供應商。"
       },
       {
         key: "CHAT_API_MODEL",
@@ -596,16 +605,24 @@ const ENV_FIELD_GROUPS = [
           ["openai", "OpenAI / ChatGPT"],
           ["gemini", "Gemini"],
           ["zhipu", "智譜 GLM / BigModel"],
+          ["openrouter", "OpenRouter"],
           ["custom", "自訂 OpenAI-compatible"]
         ],
-        help: "只決定圖片 API 的預設 Base URL，不使用主要對話的 Key 分頁。"
+        help: "官方供應商使用固定網址；圖片 API 使用獨立 Key，不使用對話 Key 分頁。"
       },
       {
         key: "CHAT_IMAGE_API_BASE_URL",
         label: "圖片 API Base URL",
         type: "text",
         placeholder: "留空使用供應商預設",
-        help: "可填一般 OpenAI-compatible Base URL，或包含 /chat/completions 與查詢參數的完整 deployment URL。"
+        help: "只有自訂供應商可修改；支援一般 Base URL 或包含 /chat/completions 與查詢參數的完整網址。"
+      },
+      {
+        key: "CHAT_IMAGE_API_OPENROUTER_PROVIDER",
+        label: "OpenRouter 圖片推理供應商",
+        type: "select",
+        options: [["", "自動路由"]],
+        help: "獨立於對話 API；指定後只使用該供應商。"
       },
       {
         key: "CHAT_IMAGE_API_MODEL",
@@ -742,10 +759,10 @@ const ENV_FIELD_GROUPS = [
   }
 ];
 const ENV_ALIAS_KEYS = {
-  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY", "CUSTOM_API_KEY"],
+  CHAT_API_KEY: ["CONVERSATION_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY", "OPENROUTER_API_KEY", "CUSTOM_API_KEY"],
   CHAT_API_KEY2: ["CONVERSATION_API_KEY2", "DEEPSEEK_API_KEY2", "DEEPSEEK_KEY2", "deepseek_key2"],
-  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "CUSTOM_MODEL"],
-  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL", "OPENAI_BASE_URL", "GEMINI_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "CUSTOM_API_BASE_URL"],
+  CHAT_API_MODEL: ["CONVERSATION_API_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ZHIPU_MODEL", "GLM_MODEL", "OPENROUTER_MODEL", "CUSTOM_MODEL"],
+  CHAT_API_BASE_URL: ["CONVERSATION_API_BASE_URL", "DEEPSEEK_BASE_URL", "OPENAI_BASE_URL", "GEMINI_BASE_URL", "ZHIPU_BASE_URL", "BIGMODEL_BASE_URL", "OPENROUTER_BASE_URL", "CUSTOM_API_BASE_URL"],
   CHAT_API_REASONING_EFFORT: ["DEEPSEEK_REASONING_EFFORT", "GLM_REASONING_EFFORT", "ZHIPU_REASONING_EFFORT"],
   CHAT_API_REQUEST_TIMEOUT_MS: ["CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
   CHAT_API_MAX_TOKENS: ["CONVERSATION_API_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS"],
@@ -831,7 +848,7 @@ function isChatApiProcessingKeyName(key = "") {
 }
 
 function isProviderChatApiProcessingKeyName(key = "") {
-  return /^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|CUSTOM_API_KEY)(?:[2-9]\d*|_GROUP[2-9]\d*(?:_[2-9]\d*)?)$/u
+  return /^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|OPENROUTER_API_KEY|CUSTOM_API_KEY)(?:[2-9]\d*|_GROUP[2-9]\d*(?:_[2-9]\d*)?)$/u
     .test(String(key || "").trim());
 }
 
@@ -2081,6 +2098,8 @@ function showChatApiProviderDraft(provider) {
   if (baseUrlInput) {
     baseUrlInput.value = draft.baseUrl || "";
   }
+  syncApiBaseUrlField("CHAT_API", activeChatApiProviderSetting);
+  clearApiModelList("CHAT_API");
   activeChatApiKeyGroupIndex = 0;
   renderChatApiKeyGroupControls();
   syncChatApiReasoningField();
@@ -2209,12 +2228,16 @@ function createEnvField(field, parsedEnv) {
     return createEnvImageField(field, parsedEnv);
   }
 
-  const wrapper = document.createElement("label");
-  wrapper.className = `env-field env-field-${field.type === "textarea" ? "wide" : "normal"}`;
+  const isApiModel = ["CHAT_API_MODEL", "CHAT_IMAGE_API_MODEL"].includes(field.key);
+  const wrapper = document.createElement(isApiModel ? "div" : "label");
+  wrapper.className = `env-field env-field-${field.type === "textarea" || isApiModel ? "wide" : "normal"}`;
 
-  const title = document.createElement("span");
+  const title = document.createElement(isApiModel ? "label" : "span");
   title.className = "env-field-title";
   title.textContent = field.label;
+  if (isApiModel) {
+    title.htmlFor = `envField_${field.key}`;
+  }
 
   const keyLabel = document.createElement("code");
   keyLabel.className = "env-field-key";
@@ -2242,6 +2265,9 @@ function createEnvField(field, parsedEnv) {
       option.textContent = label;
       input.appendChild(option);
     });
+    if (field.key.endsWith("_OPENROUTER_PROVIDER") && currentValue) {
+      input.add(new Option(currentValue, currentValue));
+    }
     input.value = currentValue || field.options?.[0]?.[0] || "";
   } else {
     input.type = field.type || "text";
@@ -2266,6 +2292,50 @@ function createEnvField(field, parsedEnv) {
   }
 
   wrapper.append(title, keyLabel, input);
+
+  if (isApiModel) {
+    const prefix = field.key.replace(/_MODEL$/u, "");
+    const list = document.createElement("datalist");
+    list.id = `${prefix}_models`;
+    input.setAttribute("list", list.id);
+    const row = document.createElement("div");
+    row.className = "env-test-row api-catalog-actions";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.dataset.apiModels = prefix;
+    button.textContent = "取得模型清單";
+    const status = document.createElement("span");
+    status.id = `${prefix}_modelsStatus`;
+    status.className = "env-test-status";
+    status.setAttribute("role", "status");
+    row.append(button, status);
+    const choices = document.createElement("select");
+    choices.id = `${prefix}_modelChoices`;
+    choices.setAttribute("aria-label", "可用模型");
+    choices.hidden = true;
+    choices.addEventListener("change", () => {
+      if (!choices.value) return;
+      input.value = choices.value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const prices = document.createElement("div");
+    prices.id = `${prefix}_endpointPrices`;
+    prices.className = "api-endpoint-prices";
+    const priceButton = document.createElement("button");
+    priceButton.type = "button";
+    priceButton.className = "secondary";
+    priceButton.dataset.apiEndpoints = prefix;
+    priceButton.textContent = "更新端點價格";
+    const official = document.createElement("a");
+    official.id = `${prefix}_officialCatalog`;
+    official.target = "_blank";
+    official.rel = "noopener noreferrer";
+    official.textContent = "官方模型與計費";
+    row.append(priceButton, official);
+    wrapper.append(list, row, choices, prices);
+  }
 
   if (field.help) {
     const help = document.createElement("span");
@@ -2408,6 +2478,7 @@ function createChatApiPrimaryKeyField(value = "") {
 }
 
 function renderChatApiKeyGroupControls() {
+  clearApiModelList("CHAT_API");
   const wrapper = document.getElementById("chatApiKeyGroups");
   if (!wrapper) {
     return;
@@ -2600,6 +2671,7 @@ function renderEnvSettingsForm(content = "") {
 
   envExtraEntries = orderedEntries.filter((entry) => !isManagedEnvKey(entry.key) && !ENV_DROPPED_KEYS.has(entry.key));
   renderEnvExtraRows(envExtraEntries);
+  syncApiBaseUrlField("CHAT_API", activeChatApiProviderSetting);
   syncChatApiReasoningField();
   syncChatImageApiFields();
 }
@@ -2695,6 +2767,240 @@ function isChatImageApiEnvField(key = "") {
   return key.startsWith("CHAT_IMAGE_");
 }
 
+function syncApiBaseUrlField(prefix, provider, enabled = true) {
+  const input = document.getElementById(`envField_${prefix}_BASE_URL`);
+  if (!input) return;
+  if (prefix === "CHAT_IMAGE_API") {
+    if (input.dataset.provider === "custom" || (!input.dataset.provider && provider === "custom")) {
+      input.dataset.customBaseUrl = input.value;
+    }
+    if (provider === "custom" && input.dataset.provider !== "custom") {
+      input.value = input.dataset.customBaseUrl || "";
+    }
+    input.dataset.provider = provider;
+  }
+  if (provider !== "custom") input.value = getOfficialChatApiBaseUrl(provider);
+  input.disabled = !enabled || provider !== "custom";
+  input.closest(".env-field")?.classList.toggle("is-disabled", input.disabled);
+  syncApiCatalogControls(prefix);
+}
+
+function clearApiModelList(prefix) {
+  document.getElementById(`${prefix}_models`)?.replaceChildren();
+  const choices = document.getElementById(`${prefix}_modelChoices`);
+  if (choices) {
+    choices.replaceChildren();
+    choices.hidden = true;
+  }
+  clearApiEndpointPrices(prefix);
+  const status = document.getElementById(`${prefix}_modelsStatus`);
+  if (status) status.textContent = "";
+  syncApiCatalogControls(prefix);
+}
+
+function clearApiEndpointPrices(prefix) {
+  const prices = document.getElementById(`${prefix}_endpointPrices`);
+  if (prices) {
+    prices.replaceChildren();
+    prices.dataset.requestId = String(Number(prices.dataset.requestId || 0) + 1);
+  }
+  const priceButton = document.querySelector(`[data-api-endpoints="${prefix}"]`);
+  if (priceButton) priceButton.dataset.loading = "false";
+  syncApiCatalogControls(prefix);
+}
+
+function syncApiCatalogControls(prefix) {
+  const provider = document.getElementById(`envField_${prefix}_PROVIDER`)?.value;
+  const enabled = prefix === "CHAT_API" || document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value === "specialist";
+  const routing = document.getElementById(`envField_${prefix}_OPENROUTER_PROVIDER`);
+  if (routing) {
+    routing.closest(".env-field").hidden = provider !== "openrouter";
+    routing.disabled = !enabled;
+    routing.closest(".env-field").classList.toggle("is-disabled", !enabled);
+  }
+  const button = document.querySelector(`[data-api-models="${prefix}"]`);
+  if (button) button.disabled = !enabled || provider === "zhipu" || button.dataset.loading === "true";
+  const priceButton = document.querySelector(`[data-api-endpoints="${prefix}"]`);
+  if (priceButton) {
+    priceButton.hidden = provider !== "openrouter";
+    priceButton.disabled = !enabled || priceButton.dataset.loading === "true";
+  }
+  const choices = document.getElementById(`${prefix}_modelChoices`);
+  if (choices) choices.disabled = !enabled;
+  const prices = document.getElementById(`${prefix}_endpointPrices`);
+  if (prices) {
+    prices.hidden = provider !== "openrouter";
+    prices.querySelectorAll("button").forEach((item) => { item.disabled = !enabled; });
+  }
+  const links = {
+    deepseek: "https://api-docs.deepseek.com/quick_start/pricing/",
+    openai: "https://developers.openai.com/api/docs/pricing",
+    gemini: "https://ai.google.dev/gemini-api/docs/pricing",
+    zhipu: "https://docs.bigmodel.cn/cn/guide/start/model-overview",
+    openrouter: "https://openrouter.ai/models"
+  };
+  const link = document.getElementById(`${prefix}_officialCatalog`);
+  if (link) {
+    link.hidden = !links[provider];
+    link.href = links[provider] || "#";
+  }
+  if (provider === "zhipu") {
+    document.getElementById(`${prefix}_modelsStatus`).textContent = "官方未公開通用模型清單 API，請參閱官方總覽並填寫模型。";
+  }
+}
+
+function getApiModelListDraft(prefix) {
+  return {
+    [`${prefix}_PROVIDER`]: document.getElementById(`envField_${prefix}_PROVIDER`)?.value || "deepseek",
+    [`${prefix}_BASE_URL`]: document.getElementById(`envField_${prefix}_BASE_URL`)?.value || "",
+    [`${prefix}_MODEL`]: document.getElementById(`envField_${prefix}_MODEL`)?.value || "",
+    [`${prefix}_OPENROUTER_PROVIDER`]: document.getElementById(`envField_${prefix}_OPENROUTER_PROVIDER`)?.value || "",
+    [`${prefix}_KEY`]: prefix === "CHAT_API"
+      ? document.getElementById("chatApiPrimaryKeyInput")?.value || ""
+      : document.getElementById("envField_CHAT_IMAGE_API_KEY")?.value || ""
+  };
+}
+
+async function requestApiCatalog(prefix, action, env) {
+  try {
+    const payload = await request(`/api/${prefix === "CHAT_API" ? "chat-api" : "chat-image-api"}/${action}`, {
+      method: "POST", body: JSON.stringify({ env })
+    });
+    if (!payload.ok) throw new Error(payload.message || "讀取清單失敗。");
+    return payload;
+  } catch (error) {
+    if (error.status === 404) throw new Error("本機伺服器沒有此清單介面，請重新啟動服務並重新整理頁面。");
+    throw error;
+  }
+}
+
+async function loadApiModelList(prefix) {
+  const button = document.querySelector(`[data-api-models="${prefix}"]`);
+  const status = document.getElementById(`${prefix}_modelsStatus`);
+  if (!button || !status || (prefix === "CHAT_IMAGE_API" && document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value !== "specialist")) return;
+  const env = getApiModelListDraft(prefix);
+  if (env[`${prefix}_PROVIDER`] === "zhipu") return;
+  const snapshot = JSON.stringify(env);
+  const requestId = String(Number(button.dataset.requestId || 0) + 1);
+  button.dataset.requestId = requestId;
+  const isCurrent = () => button.isConnected && button.dataset.requestId === requestId && snapshot === JSON.stringify(getApiModelListDraft(prefix));
+  button.disabled = true;
+  button.dataset.loading = "true";
+  clearApiModelList(prefix);
+  status.textContent = "正在取得模型清單...";
+  try {
+    if (env[`${prefix}_PROVIDER`] === "openrouter") {
+      const { providers } = await requestApiCatalog(prefix, "providers", env);
+      if (!isCurrent()) return;
+      const select = document.getElementById(`envField_${prefix}_OPENROUTER_PROVIDER`);
+      const selected = select.value;
+      select.replaceChildren(new Option("自動路由", ""), ...providers.map((item) => new Option(item.name, item.slug)));
+      if (selected && !providers.some((item) => item.slug === selected)) select.add(new Option(`${selected}（指定端點／未列出）`, selected));
+      select.value = selected;
+    }
+    const payload = await requestApiCatalog(prefix, "models", env);
+    if (!isCurrent()) return;
+    const list = document.getElementById(`${prefix}_models`);
+    list.replaceChildren(...payload.models.map((model) => {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.label = model.name;
+      return option;
+    }));
+    const choices = document.getElementById(`${prefix}_modelChoices`);
+    choices.replaceChildren(new Option("選擇模型", ""), ...payload.models.map((model) => new Option(`${model.name} (${model.id})`, model.id)));
+    choices.hidden = !payload.models.length;
+    choices.value = payload.models.some((model) => model.id === env[`${prefix}_MODEL`]) ? env[`${prefix}_MODEL`] : "";
+    status.textContent = payload.models.length ? `${payload.models.length} 個模型` : "平台未提供可用模型";
+    if (env[`${prefix}_MODEL`] && !payload.models.some((model) => model.id === env[`${prefix}_MODEL`])) status.textContent += "；目前模型未列出，設定未變更";
+    if (env[`${prefix}_PROVIDER`] === "openrouter" && env[`${prefix}_MODEL`].includes("/")) await loadApiEndpointPrices(prefix);
+  } catch (error) {
+    if (isCurrent()) status.textContent = error.message;
+  } finally {
+    if (button.dataset.requestId === requestId) {
+      button.dataset.loading = "false";
+      syncApiCatalogControls(prefix);
+    }
+  }
+}
+
+async function loadApiEndpointPrices(prefix) {
+  const env = getApiModelListDraft(prefix);
+  const button = document.querySelector(`[data-api-endpoints="${prefix}"]`);
+  const panel = document.getElementById(`${prefix}_endpointPrices`);
+  if (env[`${prefix}_PROVIDER`] !== "openrouter" || !button || !panel || (prefix === "CHAT_IMAGE_API" && document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value !== "specialist")) return;
+  const snapshot = JSON.stringify(env);
+  const requestId = String(Number(panel.dataset.requestId || 0) + 1);
+  panel.dataset.requestId = requestId;
+  const isCurrent = () => panel.isConnected && panel.dataset.requestId === requestId && snapshot === JSON.stringify(getApiModelListDraft(prefix));
+  button.dataset.loading = "true";
+  button.disabled = true;
+  panel.textContent = "正在取得端點價格...";
+  try {
+    const payload = await requestApiCatalog(prefix, "model-endpoints", env);
+    if (!isCurrent()) return;
+    const selected = env[`${prefix}_OPENROUTER_PROVIDER`];
+    const root = selected.split("/")[0];
+    const endpoints = payload.endpoints.filter((item) => !root || item.tag === root || item.tag.startsWith(`${root}/`));
+    panel.replaceChildren();
+    const summary = document.createElement("p");
+    summary.textContent = "USD／百萬 tokens；選定端點後不跨供應商備援。自動路由的費用依實際端點而定。";
+    if (prefix === "CHAT_IMAGE_API" && !payload.inputModalities.includes("image")) summary.textContent += " 此模型未標示圖片輸入能力。";
+    panel.append(summary);
+    if (!endpoints.length || (selected && !endpoints.some((item) => item.tag === selected || item.tag.startsWith(`${selected}/`)))) {
+      const warning = document.createElement("p");
+      warning.textContent = "目前指定的供應商／端點未提供此模型；設定保持不變，請重新選擇。";
+      panel.append(warning);
+    }
+    const table = document.createElement("table");
+    const heading = table.createTHead().insertRow();
+    for (const title of ["推理端點", "輸入", "輸出", "快取讀取", "其他價格／限制", "選擇"]) {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = title;
+      heading.append(th);
+    }
+    const body = table.createTBody();
+    const price = (raw, scale = 1000000) => {
+      if (raw === undefined) return "未提供";
+      const value = Number(raw) * scale;
+      return value > 0 && value < 1e-10 ? value.toExponential() : new Intl.NumberFormat("en-US", { maximumFractionDigits: 10 }).format(value);
+    };
+    for (const endpoint of endpoints) {
+      const row = body.insertRow();
+      const extras = [];
+      for (const [key, label, scale] of [["input_cache_write", "快取寫入／百萬", 1000000], ["image", "圖片／張", 1], ["request", "請求／次", 1], ["web_search", "搜尋／次", 1], ["internal_reasoning", "思考／百萬", 1000000]]) {
+        if (endpoint.pricing[key] !== undefined) extras.push(`${label}: ${price(endpoint.pricing[key], scale)}`);
+      }
+      if (endpoint.contextLength) extras.push(`上下文 ${endpoint.contextLength}`);
+      if (endpoint.maxCompletionTokens) extras.push(`輸出上限 ${endpoint.maxCompletionTokens}`);
+      if (endpoint.quantization) extras.push(endpoint.quantization);
+      if (endpoint.status !== null && endpoint.status !== 0) extras.push(`狀態 ${endpoint.status}（非正常）`);
+      for (const content of [`${endpoint.providerName}\n${endpoint.tag}`, price(endpoint.pricing.prompt), price(endpoint.pricing.completion), price(endpoint.pricing.input_cache_read), extras.join("\n") || "未提供"]) row.insertCell().textContent = content;
+      const choose = document.createElement("button");
+      choose.type = "button";
+      choose.className = "secondary";
+      choose.textContent = selected === endpoint.tag ? "已選" : "選用";
+      choose.setAttribute("aria-label", `選用 ${endpoint.tag}`);
+      choose.addEventListener("click", () => {
+        const routing = document.getElementById(`envField_${prefix}_OPENROUTER_PROVIDER`);
+        if (![...routing.options].some((item) => item.value === endpoint.tag)) routing.add(new Option(endpoint.tag, endpoint.tag));
+        routing.value = endpoint.tag;
+        routing.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      row.insertCell().append(choose);
+    }
+    panel.append(table);
+  } catch (error) {
+    if (isCurrent()) panel.textContent = error.message;
+  } finally {
+    if (panel.dataset.requestId === requestId) {
+      button.dataset.loading = "false";
+      syncApiCatalogControls(prefix);
+    }
+  }
+}
+
 function syncChatImageApiFields() {
   const specialistEnabled = document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value === "specialist";
   const provider = normalizeChatApiProviderSetting(
@@ -2721,6 +3027,11 @@ function syncChatImageApiFields() {
     input.disabled = !specialistEnabled;
     input.closest(".env-field")?.classList.toggle("is-disabled", !specialistEnabled);
   });
+  syncApiBaseUrlField("CHAT_IMAGE_API", provider, specialistEnabled);
+  const modelsButton = document.querySelector('[data-api-models="CHAT_IMAGE_API"]');
+  if (modelsButton) {
+    syncApiCatalogControls("CHAT_IMAGE_API");
+  }
 
   if (reasoningInput) {
     const defaultOption = Array.from(reasoningInput.options || []).find((option) => option.value === "");
@@ -9754,7 +10065,13 @@ function bindEvents() {
 
   if (el.envSettingsForm) {
     el.envSettingsForm.addEventListener("click", async (event) => {
-      if (event.target?.id === "testChatApiConnectionBtn") {
+      if (event.target?.dataset?.apiModels) {
+        event.preventDefault();
+        await loadApiModelList(event.target.dataset.apiModels);
+      } else if (event.target?.dataset?.apiEndpoints) {
+        event.preventDefault();
+        await loadApiEndpointPrices(event.target.dataset.apiEndpoints);
+      } else if (event.target?.id === "testChatApiConnectionBtn") {
         event.preventDefault();
         await testChatApiConnection();
       } else if (event.target?.id === "testChatImageApiConnectionBtn") {
@@ -9764,10 +10081,18 @@ function bindEvents() {
     });
     el.envSettingsForm.addEventListener("input", (event) => {
       const key = event.target?.dataset?.envKey || "";
+      if (["CHAT_API_PROVIDER", "CHAT_API_BASE_URL"].includes(key) || event.target?.id === "chatApiPrimaryKeyInput") {
+        clearApiModelList("CHAT_API");
+      }
+      if (["CHAT_IMAGE_API_PROVIDER", "CHAT_IMAGE_API_BASE_URL", "CHAT_IMAGE_API_KEY"].includes(key)) {
+        clearApiModelList("CHAT_IMAGE_API");
+      }
       if (key === "CHAT_API_MODEL") {
+        clearApiEndpointPrices("CHAT_API");
         syncChatApiReasoningField();
       }
       if (key === "CHAT_IMAGE_API_MODEL") {
+        clearApiEndpointPrices("CHAT_IMAGE_API");
         syncChatImageApiFields();
       }
       if (isChatApiEnvField(key)) {
@@ -9777,7 +10102,7 @@ function bindEvents() {
         setChatImageApiTestStatus("", "設定已變更，尚未重新測試");
       }
     });
-    el.envSettingsForm.addEventListener("change", (event) => {
+    el.envSettingsForm.addEventListener("change", async (event) => {
       const key = event.target?.dataset?.envKey || "";
       if (key === "CHAT_API_PROVIDER") {
         saveCurrentChatApiProviderDraft();
@@ -9791,6 +10116,13 @@ function bindEvents() {
       }
       if (["CHAT_IMAGE_INPUT_MODE", "CHAT_IMAGE_API_PROVIDER", "CHAT_IMAGE_API_REASONING_EFFORT"].includes(key)) {
         syncChatImageApiFields();
+      }
+      for (const prefix of ["CHAT_API", "CHAT_IMAGE_API"]) {
+        if (key === `${prefix}_OPENROUTER_PROVIDER` || (key === `${prefix}_PROVIDER` && event.target.value === "openrouter")) {
+          await loadApiModelList(prefix);
+        } else if (key === `${prefix}_MODEL`) {
+          await loadApiEndpointPrices(prefix);
+        }
       }
     });
     el.envSettingsForm.addEventListener("submit", async (event) => {

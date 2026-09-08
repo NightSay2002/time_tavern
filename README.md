@@ -64,9 +64,9 @@ CHAT_API_KEY=你的_API_Key
 CHAT_API_MODEL=deepseek-v4-pro
 ```
 
-也可把 provider 改為 `zhipu` 並選用 `glm-5.3` 或原生多模態的 `glm-5.3-flash`；使用一般 Base URL 時，系統使用 `CHAT_API_MODEL` 指定的模型且不會因上傳圖片自動換模型。完整 provider 設定見 [細節文件](docs/DETAILS.md)。
+對話與圖片處理 API 支援 DeepSeek、OpenAI、Gemini、智譜 GLM、OpenRouter 及自訂服務。官方網址固定，自訂可修改；支援的平台可取得模型清單。OpenRouter 可按推理供應商選模型、比較端點價格並固定路由。設定與平台限制見 [細節文件](docs/DETAILS.md)。
 
-環境設定的對話 API Key 可用 `Key 1`、`Key 2...` 分頁管理，每組同時包含主對話 Key 與大模型處理 Key。新故事自動租用最前面的閒置組，任何 AI 呼叫都會續期；24 小時沒有 AI 活動後才供其他故事使用，刪除故事或 Discord 頻道則立即釋放。切換供應商時會保留各供應商自己的 Key 組、輸出模型與 Base URL，並讓現有故事改用新供應商重新分配；目前供應商的專屬 Key 優先，通用 Key 只作舊設定後備，若兩者都沒有則要求先設定。Base URL 可直接填入包含 `/chat/completions` 與查詢參數的完整 deployment URL；此時 API 輸出模型可留空，請求會使用 `api-key` 驗證。環境設定的測試連線使用模型預設溫度，不會送出額外的 `temperature`。
+環境設定的對話 API Key 可用 `Key 1`、`Key 2...` 分頁管理，每組同時包含主對話 Key 與大模型處理 Key。各供應商獨立保存 Key 組與輸出模型；新故事租用閒置組，24 小時沒有 AI 活動或刪除故事後釋放。代理及完整 deployment 網址請選「自訂」，詳見細節文件。
 
 主要模型不能讀圖時，可在環境設定的「圖片處理 API」改用專用圖片模型；圖片會先轉成隱藏文字描述，再交給主要模型。圖片模型有獨立的思考強度與溫度，思考開啟時不送溫度。使用主要模型直接處理時，專用 API 欄位會停用但保留內容；測試連接會實際傳送標準 PNG。專用 Key 只保存在本機，完整設定見 [細節文件](docs/DETAILS.md)。
 
