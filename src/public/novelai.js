@@ -54,6 +54,8 @@ const el = {
   novelAiMetadataFile: document.getElementById("novelAiMetadataFile"),
   novelAiDefaultsFile: document.getElementById("novelAiDefaultsFile"),
   novelAiImportMetadataBtn: document.getElementById("novelAiImportMetadataBtn"),
+  novelAiCleanExternalImageBtn: document.getElementById("novelAiCleanExternalImageBtn"),
+  novelAiCleanExternalImageFile: document.getElementById("novelAiCleanExternalImageFile"),
   novelAiSaveDefaultsBtn: document.getElementById("novelAiSaveDefaultsBtn"),
   novelAiApplyDefaultsBtn: document.getElementById("novelAiApplyDefaultsBtn"),
   novelAiDownloadDefaultsBtn: document.getElementById("novelAiDownloadDefaultsBtn"),
@@ -3324,7 +3326,7 @@ function stripPngStealthImageData(imageData) {
   return true;
 }
 
-async function decodePngBlobImageData(blob) {
+async function decodePngBlobImageData(blob, maxPixels = Infinity) {
   if (typeof createImageBitmap !== "function") {
     return null;
   }
@@ -3335,6 +3337,9 @@ async function decodePngBlobImageData(blob) {
     bitmap = await createImageBitmap(blob);
   }
   try {
+    if (bitmap.width * bitmap.height > maxPixels) {
+      throw new Error("圖片超過 4000 萬像素，請先縮小圖片。");
+    }
     const canvas = document.createElement("canvas");
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
@@ -3512,6 +3517,48 @@ async function stripPngMetadataForDownload(blob) {
   }
   const chunkCleanedBlob = new Blob([stripPngTextMetadata(bytes)], { type: "image/png" });
   return stripPngStealthMetadata(chunkCleanedBlob);
+}
+
+async function prepareExternalImageDownload(file) {
+  if (!file || !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
+    throw new Error("請選擇 PNG、JPEG、WebP 或 GIF 圖片。");
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    throw new Error("圖片超過 50 MB，請先縮小檔案。");
+  }
+  const decoded = await decodePngBlobImageData(file, 40000000);
+  if (!decoded) throw new Error("此瀏覽器不支援安全清除圖片資料。");
+  try {
+    if (stripPngStealthImageData(decoded.imageData)) {
+      decoded.context.putImageData(decoded.imageData, 0, 0);
+    }
+    // Always re-encode: copying the source could preserve EXIF, XMP or other chunks.
+    const blob = await canvasToBlob(decoded.canvas, "image/png");
+    if (!blob) throw new Error("瀏覽器無法輸出已清除資料的圖片。");
+    return blob;
+  } finally {
+    decoded.canvas.width = 0;
+    decoded.canvas.height = 0;
+  }
+}
+
+async function downloadCleanExternalImage(file) {
+  if (!file || el.novelAiCleanExternalImageBtn.disabled) return;
+  el.novelAiCleanExternalImageBtn.disabled = true;
+  el.novelAiMetadataStatus.textContent = "正在清除圖片 metadata...";
+  try {
+    const blob = await prepareExternalImageDownload(file);
+    const name = sanitizeDownloadFileName(file.name || "image").replace(/\.[^.]+$/u, "");
+    triggerBlobDownload(blob, `${name || "image"}-clean.png`);
+    el.novelAiMetadataStatus.textContent = "已清除 metadata 並下載靜態 PNG，原檔未修改。";
+    showToast("已下載清除 metadata 的圖片");
+  } catch (error) {
+    el.novelAiMetadataStatus.textContent = error.message || "圖片資料清除失敗。";
+    showToast(error.message || "圖片資料清除失敗", "error");
+  } finally {
+    el.novelAiCleanExternalImageBtn.disabled = false;
+    el.novelAiCleanExternalImageFile.value = "";
+  }
 }
 
 function openDownloadDialog(item = {}) {
@@ -3881,6 +3928,8 @@ async function showDropChoiceDialog(files = []) {
     }
   }
   renderDropChoiceText(files);
+  const cleanButton = el.novelAiDropChoiceDialog.querySelector('[data-drop-action="clean"]');
+  if (cleanButton) cleanButton.textContent = files.length > 1 ? "清除首張 metadata 並下載" : "清除 metadata 並下載";
   if (typeof el.novelAiDropChoiceDialog.showModal === "function") {
     el.novelAiDropChoiceDialog.showModal();
   } else {
@@ -3922,6 +3971,8 @@ async function handleDropChoice(action = "cancel") {
       showToast(`已加入 ${files.length} 張 Precise Reference 圖片`);
     } else if (action === "metadata") {
       await importMetadataFromFile(files[0]);
+    } else if (action === "clean") {
+      await downloadCleanExternalImage(files[0]);
     }
   } catch (error) {
     showToast(error.message || "圖片處理失敗", "error");
@@ -4149,6 +4200,7 @@ async function loopGenerateImages() {
 
 function bindEvents() {
   const onFormChange = (event) => {
+    if (event?.target === el.novelAiCleanExternalImageFile) return;
     if (event?.target === el.novelAiModel) {
       syncNovelAiModelCapabilities();
     } else if (event?.target === el.novelAiSizePreset) {
@@ -4424,6 +4476,10 @@ function bindEvents() {
   el.novelAiPreciseList.addEventListener("input", (event) => handleReferenceListAction("precise", event));
   el.novelAiPreciseList.addEventListener("change", (event) => handleReferenceListAction("precise", event));
   el.novelAiImportMetadataBtn.addEventListener("click", () => el.novelAiMetadataFile.click());
+  el.novelAiCleanExternalImageBtn.addEventListener("click", () => el.novelAiCleanExternalImageFile.click());
+  el.novelAiCleanExternalImageFile.addEventListener("change", async () => {
+    await downloadCleanExternalImage(el.novelAiCleanExternalImageFile.files?.[0]);
+  });
   el.novelAiMetadataFile.addEventListener("change", async () => {
     await importMetadataFromFile(el.novelAiMetadataFile.files?.[0]);
   });

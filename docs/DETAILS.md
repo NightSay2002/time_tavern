@@ -221,6 +221,9 @@ Random Prompt：
 
 圖片與 metadata：
 
+- 伺服器版與靜態版都有「外部圖片清除 metadata 並下載」，拖入圖片也可選此用途。支援 PNG、JPEG、WebP、GIF，重新編碼為 `原檔名-clean.png`，移除原檔 EXIF／XMP／文字等附加資料及已知 NovelAI Alpha／RGB stealth metadata。保留尺寸，動畫只匯出一幀；不保證清除其他自訂隱寫或可見浮水印。
+- 外部清除完全在瀏覽器內執行，不上傳、不加入歷史／收藏，也不改動 Prompt、參考圖或原檔。一次處理一張；拖入多張時按鈕標示僅清除首張。限制 50 MB、4000 萬像素；不支援或解碼失敗時顯示錯誤，不會以原檔冒充清除後下載。
+
 - 匯入圖片時可讀取 PNG 文字 chunks，以及 Alpha／RGB 最低位元中的 NovelAI stealth metadata。
 - 只有偵測到可用的圖片設定時，拖放用途選擇才會顯示「匯入設定」。
 - 下載 PNG 時優先保留 NovelAI 原生可匯回的 `Comment` metadata。

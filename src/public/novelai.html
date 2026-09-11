@@ -151,6 +151,8 @@
               <input id="novelAiMetadataFile" type="file" accept="image/*" class="hidden" />
               <input id="novelAiDefaultsFile" type="file" accept="application/json,.json" class="hidden" />
               <button id="novelAiImportMetadataBtn" type="button" class="secondary">選擇圖片讀取 metadata</button>
+              <input id="novelAiCleanExternalImageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden" />
+              <button id="novelAiCleanExternalImageBtn" type="button" class="secondary">外部圖片清除 metadata 並下載</button>
               <button id="novelAiSaveDefaultsBtn" type="button" class="secondary">保存預設</button>
               <button id="novelAiApplyDefaultsBtn" type="button" class="secondary">啟用預設</button>
               <button id="novelAiDownloadDefaultsBtn" type="button" class="secondary">下載預設</button>
@@ -220,6 +222,7 @@
           <button type="button" data-drop-action="img2img">Image2Image</button>
           <button type="button" data-drop-action="precise">Precise Reference</button>
           <button type="button" data-drop-action="metadata" hidden>匯入設定</button>
+          <button type="button" data-drop-action="clean">清除 metadata 並下載</button>
           <button type="button" class="muted" data-drop-action="cancel">Cancel</button>
         </div>
       </form>
@@ -260,6 +263,6 @@
     </dialog>
 
     <div id="toast" class="toast"></div>
-    <script type="module" src="/novelai.js?v=20260829-ui-language"></script>
+    <script type="module" src="/novelai.js?v=20260911-external-clean"></script>
   </body>
 </html>
