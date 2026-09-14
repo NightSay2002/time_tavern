@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260829-neon-border-card" />
+    <link rel="stylesheet" href="/styles.css?v=20260914-update-notes" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -81,6 +81,7 @@
           <button id="openDefaultsMenuBtn" type="button" class="secondary">全局設定</button>
           <button id="uiLanguageToggleBtn" type="button" class="secondary" aria-pressed="false">簡繁轉換：繁體</button>
           <button id="otherActionsBtn" type="button" class="secondary">亂七八糟</button>
+          <button id="updateNotesBtn" type="button" class="secondary">更新</button>
         </div>
       </section>
 
@@ -129,6 +130,19 @@
         </section>
       </section>
     </main>
+
+    <dialog id="updateNotesDialog" class="dialog update-notes-dialog" aria-labelledby="updateNotesHeading">
+      <form method="dialog" class="update-notes-shell">
+        <div class="role-picker-header">
+          <h3 id="updateNotesHeading">更新</h3>
+          <button type="submit" class="muted">關閉</button>
+        </div>
+        <div class="update-notes-layout">
+          <nav id="updateNotesList" class="update-notes-list" aria-label="更新列表"></nav>
+          <article id="updateNotesContent" class="update-notes-content" aria-live="polite"></article>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="otherActionsDialog" class="dialog compact-action-dialog">
       <form method="dialog" class="stack compact-action-shell">
@@ -661,6 +675,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20260908-provider-models"></script>
+    <script type="module" src="/app.js?v=20260914-update-notes"></script>
   </body>
 </html>

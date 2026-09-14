@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { listChatApiModels, listOpenRouterProviders, listOpenRouterModelEndpoints, normalizeOpenRouterPricing, buildChatApiCompletionsUrl, isDeploymentChatCompletionsUrl, resolveChatApiModelForEndpoint, adaptChatApiRequestBody, buildChatApiRequestHeaders } from "../src/chat-api-endpoint.js";
-import { buildChatApiRequestBody } from "../src/chat-api-request.js";
+import { buildChatApiRequestBody, fetchChatApiWithRetry, normalizeChatApiRetryCount } from "../src/chat-api-request.js";
 import { createChatApiProviderDrafts, getChatApiProviderEnvEntries, getOfficialChatApiBaseUrl } from "../src/public/chat-api-provider-settings.js";
 import { resolveChatApiKeyGroupPrimaryKey } from "../src/chat-api-key-config.js";
 
@@ -179,6 +179,8 @@ test("all four real request paths send independently selected inference routes",
   const scope = vm.createContext({
     process: { env: {} }, state: {}, DEFAULT_CHAT_IMAGE_API_MAX_TOKENS: 1024,
     buildChatApiRequestBody, adaptChatApiRequestBody, buildChatApiRequestHeaders, clearTimeout,
+    normalizeChatApiRetryCount,
+    fetchChatApiWithRetry: (url, options, config) => fetchChatApiWithRetry(url, options, { ...config, fetchImpl: scope.fetch }),
     resolveChatApiTestConfig: () => mainConfig,
     resolveChatImageApiConfig: () => ({ ...mainConfig, openrouterProvider: "azure/us" }),
     getChatApiProvider: () => mainConfig.provider,
@@ -232,6 +234,7 @@ test("runtime, connection tests and image config enforce official URLs but prese
   const env = {};
   const scope = vm.createContext({
     process: { env }, DEFAULT_CHAT_API_PROVIDER: "deepseek", DEFAULT_CHAT_API_MODEL: "default",
+    normalizeChatApiRetryCount,
     safeText: (value) => String(value ?? "").trim(), buildChatApiCompletionsUrl, resolveChatApiModelForEndpoint,
     resolveChatApiKeyGroupPrimaryKey, resolveChatApiReasoningEffort: () => "", getChatApiRequestTimeoutMs: () => 30000,
     getChatApiReasoningEffort: () => "", normalizeChatApiMaxTokensParamName: () => "max_tokens"

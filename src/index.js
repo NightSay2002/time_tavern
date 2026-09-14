@@ -81,6 +81,8 @@ import {
 } from "./prompt-image-actions.js";
 import {
   buildChatApiRequestBody,
+  fetchChatApiWithRetry,
+  normalizeChatApiRetryCount,
   normalizeChatApiMaxTokensParamName,
   resolveChatApiReasoningEffort,
   shouldIncludeUserCustomSupplement
@@ -10515,6 +10517,7 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
     model,
     requestTimeoutMs,
     maxTokensParamName,
+    failureRetryCount: normalizeChatApiRetryCount(envSource.CHAT_API_RETRY_COUNT),
     reasoningEffort,
     openrouterProvider: envObjectFirstText(envSource, ["CHAT_API_OPENROUTER_PROVIDER"], "")
   };
@@ -10564,12 +10567,12 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
   let response;
   const { controller, timeout } = createTimeoutController(config.requestTimeoutMs);
   try {
-    response = await fetch(config.completionsUrl, {
+    response = await fetchChatApiWithRetry(config.completionsUrl, {
       method: "POST",
       headers: buildChatApiRequestHeaders(config.apiKey, config.completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    });
+    }, { retries: config.failureRetryCount });
   } catch (error) {
     clearTimeout(timeout);
     return {
@@ -10940,12 +10943,12 @@ async function callChatApiCompletionRaw({
     purpose
   });
   try {
-    response = await fetch(completionsUrl, {
+    response = await fetchChatApiWithRetry(completionsUrl, {
       method: "POST",
       headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    });
+    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT) });
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);
@@ -11314,12 +11317,12 @@ async function callChatApiCompletionStreamRaw({
     purpose
   });
   try {
-    response = await fetch(completionsUrl, {
+    response = await fetchChatApiWithRetry(completionsUrl, {
       method: "POST",
       headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    });
+    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT) });
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);

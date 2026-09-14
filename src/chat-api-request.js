@@ -83,6 +83,62 @@ export function shouldIncludeUserCustomSupplement(reasoningEffort = "") {
   return String(reasoningEffort || "").trim().toLowerCase() !== "none";
 }
 
+export function normalizeChatApiRetryCount(value = 3) {
+  if (value === null || String(value).trim() === "") return 3;
+  const count = Number(value);
+  return Number.isFinite(count) ? Math.min(20, Math.max(0, Math.floor(count))) : 3;
+}
+
+function waitForChatApiRetry(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason || new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+}
+
+export async function fetchChatApiWithRetry(url, options, {
+  retries = 0,
+  fetchImpl = fetch,
+  wait = waitForChatApiRetry
+} = {}) {
+  const limit = normalizeChatApiRetryCount(retries);
+  for (let attempt = 0; ; attempt += 1) {
+    options.signal?.throwIfAborted();
+    let response;
+    let retryAfterMs = 0;
+    try {
+      response = await fetchImpl(url, options);
+    } catch (error) {
+      const code = String(error?.cause?.code || error?.code || "");
+      const retryable = error?.message === "fetch failed" ||
+        /^(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)$/u.test(code);
+      if (options.signal?.aborted || error?.name === "AbortError" ||
+          /CERT|TLS|SSL|INVALID|UNABLE_TO_VERIFY_LEAF_SIGNATURE/iu.test(code) || !retryable || attempt >= limit) throw error;
+    }
+    if (response) {
+      if (options.signal?.aborted || ![408, 429, 500, 502, 503, 504].includes(response.status) || attempt >= limit) return response;
+      const header = response.headers.get("retry-after");
+      if (header) {
+        const seconds = Number(header);
+        retryAfterMs = Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : Math.max(0, Date.parse(header) - Date.now());
+      }
+      // Release failed responses before retrying; never consume a successful stream here.
+      try { await response.body?.cancel(); } catch { /* The failed body may already be closed. */ }
+    }
+    const delay = Math.max(Math.min(1000 * 2 ** attempt, 10000), Number.isFinite(retryAfterMs) ? retryAfterMs : 0);
+    await wait(Math.min(delay, 2147483647), options.signal);
+  }
+}
+
 export function normalizeOpenRouterProvider(value = "") {
   const slug = String(value || "").trim().toLowerCase();
   if (slug && !/^[a-z0-9][a-z0-9._/-]{0,199}$/u.test(slug)) {

@@ -29,6 +29,7 @@
 | `PORT` | `3234` | 本地 HTTP server port。 |
 | `TIME_TAVERN_AUTO_UPDATE` | `1` | 每次 `npm start` 啟動時檢查 GitHub；`0`、`false`、`off` 關閉。 |
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`openrouter`、`custom`。 |
+| `CHAT_API_RETRY_COUNT` | `3` | 連線及暫時性 HTTP 失敗的額外重試次數，0–20；20 表示首次加上重試最多 21 次。 |
 | `CHAT_API_OPENROUTER_PROVIDER` | 空白 | OpenRouter 推理供應商 slug，例如 `deepinfra`；可選精確端點如 `deepinfra/fp8`。空白自動路由。 |
 | `CHAT_API_KEY` | 空 | Key 1 的主聊天、補寫及角色卡助手 Key。舊設定直接沿用，不需遷移。 |
 | `CHAT_API_BASE_URL` | 依 provider | 只有 `custom` 讀取此值；可填 Base URL 或完整 Chat Completions 路線。其他 provider 固定使用官方網址。 |
@@ -103,7 +104,13 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 
 環境設定的「測試連線」不傳 `temperature`，由 deployment 使用模型預設值；正式對話仍依 `CHAT_API_TEMPERATURE` 設定送出溫度。
 
-API 回應成功但 `content` 空白時，正文請求會原樣重試一次，不會重新執行該回合的壓縮、跑圖或其他前置動作。第二次仍空白才標記該回合無效。Discord 一般頻道對話的模型失敗會回覆在原訊息旁並自動刪除；其他未預期錯誤仍使用私人通知。
+環境設定的「API 失敗重試次數」對應 `CHAT_API_RETRY_COUNT`，保存後下一次請求生效。未設定、空白或無效值預設額外重試 3 次；0 關閉重試，整數上限 20，負數視為 0、過大值限制為 20。只重送同一份模型請求，沿用原 Key、模型、路由和訊息，不重跑整個對話工作流，不重複執行已完成的壓縮或跑圖動作。
+
+適用網頁／Discord／QQ 的主對話、助手、大模型處理、補寫及對話 API 連接測試；不影響專用圖片理解 API、NovelAI 生成、模型清單或 Bot 登入重試。重試 `fetch failed`、暫時性網路連線錯誤及 HTTP 408、429、500、502、503、504；400、401、403、404、無效網址、憑證錯誤不重試。已取得成功回應後的 JSON 解析錯誤、回應讀取失敗與串流中斷不重試，避免重複輸出。
+
+等待依序為 1、2、4、8、10 秒，之後維持 10 秒；上游提供有效 `Retry-After` 時至少等待指定時間。整組失敗重試共用該次 API 逾時上限；連接測試另受原有最多 30 秒限制，因此可能未跑滿設定次數便逾時。`/stop`、網頁停止及逾時都會中止等待，不再發出下一次請求。中間失敗不建立聊天紀錄或重複保存完整 AI log，最終失敗才沿用既有回滾／錯誤顯示。網路斷線無法保證上游尚未處理請求，重試可能重複計費。
+
+API 成功但 `content` 空白時，仍維持原有一次空白回應重試；輸出長度重試也維持原規則，與此失敗重試設定分開計算。Discord 頻道的最終錯誤維持回覆原頻道並自動刪除。
 
 舊變數如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY` 與 provider 專用 Base URL 仍會讀取；新設定建議統一用 `CHAT_API_*`。
 
@@ -135,6 +142,12 @@ GLM 與圖片輸入：
 - 智譜參考：[GLM-5.3](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3)、[GLM-5.3-Flash](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)。
 
 ## 主頁功能細節
+
+### 更新視窗
+
+「設定及其他雜項 → 更新」開啟左側標題列表、右側標題與內容，選中項目以粉色標示；手機仍保留左右分欄。每次進入主頁會讀取最新版列表，以最新項目的 ID 判斷是否自動開啟；提醒記錄保存在該瀏覽器，不影響對話、存檔或全局設定。清除瀏覽器資料或換瀏覽器會再次提醒；停用本機儲存時只能記錄本次頁面已提醒。
+
+更新項目保存在 `src/public/update-notes.json`，新項目放最前面並使用新的唯一 ID。不回填舊更新；從本次開始，新增項目的標題與內容先與作者商討再加入。手動按「更新」可以隨時重看。
 
 聊天區固定在面板寬度內，長文字、網址與時間切換提醒會自動換行；寬表格及程式碼區塊可獨立橫向捲動，不會將輸入列與送出按鈕擠出畫面。
 

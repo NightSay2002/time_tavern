@@ -57,6 +57,10 @@ const el = {
   novelAiImageBtn: document.getElementById("novelAiImageBtn"),
   novelAiStoryboardBtn: document.getElementById("novelAiStoryboardBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
+  updateNotesBtn: document.getElementById("updateNotesBtn"),
+  updateNotesDialog: document.getElementById("updateNotesDialog"),
+  updateNotesList: document.getElementById("updateNotesList"),
+  updateNotesContent: document.getElementById("updateNotesContent"),
   useDefaultsBtn: document.getElementById("useDefaultsBtn"),
   saveDefaultsBtn: document.getElementById("saveDefaultsBtn"),
   updateDefaultsBtn: document.getElementById("updateDefaultsBtn"),
@@ -552,6 +556,16 @@ const ENV_FIELD_GROUPS = [
         type: "number",
         placeholder: "600000",
         help: "單位毫秒。600000 = 10 分鐘。舊版 DEEPSEEK_REQUEST_TIMEOUT_MS 會自動帶入。"
+      },
+      {
+        key: "CHAT_API_RETRY_COUNT",
+        label: "API 失敗重試次數",
+        type: "number",
+        placeholder: "3",
+        min: "0",
+        max: "20",
+        step: "1",
+        help: "預設額外重試 3 次；0 不重試；20 表示首次之外最多再試 20 次。只處理暫時性連線與 HTTP 錯誤，逐次延後；重試仍受 API 請求逾時限制，可能增加等待與費用。"
       },
       {
         key: "CHAT_API_MAX_TOKENS",
@@ -1999,6 +2013,7 @@ function formatEnvValue(value = "") {
 }
 
 function getEnvFieldValue(parsedEnv, key) {
+  if (key === "CHAT_API_RETRY_COUNT" && !String(parsedEnv[key] ?? "").trim()) return "3";
   if (Object.prototype.hasOwnProperty.call(parsedEnv, key)) {
     return parsedEnv[key];
   }
@@ -6713,6 +6728,54 @@ function openModularPromptDialog() {
   lockModularPromptPageScroll();
 }
 
+const UPDATE_NOTES_SEEN_KEY = "time_tavern_update_notes_seen";
+let updateNotesShownThisPage = "";
+
+function renderUpdateNotes(notes, selectedId = notes[0]?.id) {
+  const selected = notes.find((note) => note.id === selectedId) || notes[0];
+  el.updateNotesList.replaceChildren(...notes.map((note) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "update-note-item";
+    button.setAttribute("aria-pressed", String(note.id === selected?.id));
+    const title = document.createElement("span");
+    title.textContent = getUiLanguageText(note.title);
+    button.append(title);
+    button.addEventListener("click", () => renderUpdateNotes(notes, note.id));
+    return button;
+  }));
+  el.updateNotesContent.replaceChildren();
+  if (selected) {
+    const title = document.createElement("h4");
+    title.textContent = getUiLanguageText(selected.title);
+    const date = document.createElement("p");
+    date.className = "update-note-date";
+    date.textContent = selected.date;
+    const content = document.createElement("p");
+    content.className = "update-note-body";
+    content.textContent = getUiLanguageText(selected.content);
+    el.updateNotesContent.append(title, date, content);
+  } else {
+    el.updateNotesContent.textContent = getUiLanguageText("目前沒有更新內容。");
+  }
+}
+
+async function openUpdateNotes(automatic = false) {
+  const notes = await request("/update-notes.json", { cache: "no-store" });
+  if (!Array.isArray(notes) || notes.some((note) => !note || ["id", "date", "title", "content"].some((key) => typeof note[key] !== "string"))) {
+    throw new Error("更新內容格式不正確。");
+  }
+  const latestId = notes[0]?.id || "";
+  let seen = updateNotesShownThisPage;
+  try { seen = localStorage.getItem(UPDATE_NOTES_SEEN_KEY) || seen; } catch { /* Page memory works when storage is blocked. */ }
+  if (automatic && (!latestId || seen === latestId)) return;
+  renderUpdateNotes(notes);
+  if (!el.updateNotesDialog.open) el.updateNotesDialog.showModal();
+  updateNotesShownThisPage = latestId;
+  try { localStorage.setItem(UPDATE_NOTES_SEEN_KEY, latestId); } catch { /* Keep the current-page marker. */ }
+  applyUiLanguage();
+}
+
 function isDialogBackdropPointer(dialog, event) {
   if (!dialog || !event || !dialog.open) {
     return false;
@@ -9985,6 +10048,14 @@ function bindEvents() {
     });
   }
 
+  el.updateNotesBtn?.addEventListener("click", async () => {
+    try {
+      await openUpdateNotes();
+    } catch (error) {
+      showToast(`讀取更新內容失敗：${error.message}`, "error");
+    }
+  });
+
   if (el.saveDefaultsBtn) {
     el.saveDefaultsBtn.addEventListener("click", saveDefaults);
   }
@@ -10371,6 +10442,7 @@ function bindEvents() {
   bindDialogBackdropClose(el.defaultsMenuDialog);
   bindDialogBackdropClose(el.novelAiMenuDialog);
   bindDialogBackdropClose(el.createMenuDialog);
+  bindDialogBackdropClose(el.updateNotesDialog);
 
 }
 
@@ -10382,6 +10454,11 @@ async function boot() {
     await refresh();
   } catch (error) {
     showToast(`初始化失敗：${error.message}`, "error");
+  }
+  try {
+    await openUpdateNotes(true);
+  } catch (error) {
+    showToast(`讀取更新內容失敗：${error.message}`, "error");
   }
 }
 
