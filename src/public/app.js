@@ -51,11 +51,6 @@ const el = {
   openDefaultsMenuBtn: document.getElementById("openDefaultsMenuBtn"),
   defaultsMenuDialog: document.getElementById("defaultsMenuDialog"),
   closeDefaultsMenuBtn: document.getElementById("closeDefaultsMenuBtn"),
-  openNovelAiMenuBtn: document.getElementById("openNovelAiMenuBtn"),
-  novelAiMenuDialog: document.getElementById("novelAiMenuDialog"),
-  closeNovelAiMenuBtn: document.getElementById("closeNovelAiMenuBtn"),
-  novelAiImageBtn: document.getElementById("novelAiImageBtn"),
-  novelAiStoryboardBtn: document.getElementById("novelAiStoryboardBtn"),
   envSettingsBtn: document.getElementById("envSettingsBtn"),
   updateNotesBtn: document.getElementById("updateNotesBtn"),
   updateNotesDialog: document.getElementById("updateNotesDialog"),
@@ -277,6 +272,7 @@ let coverCropConfirmHandler = null;
 let coverCropChangeImageHandler = null;
 let envExtraEntries = [];
 let chatStreamRenderFrame = 0;
+let pendingChatStreamMessage = null;
 let isChatStreaming = false;
 let pendingChatImages = [];
 let dailyWelcomeAudioArmed = false;
@@ -4458,10 +4454,6 @@ async function startCurrentChatTarget() {
   showToast("請先選擇要開始的角色卡");
 }
 
-function openNovelAiDialog() {
-  window.location.href = "/novelai.html";
-}
-
 async function stopActiveChatGeneration() {
   const payload = await request("/api/chat/stop", { method: "POST" });
   showToast(payload?.message || "已送出停止要求");
@@ -5740,8 +5732,21 @@ function renderChatHeader(state = appState) {
   }
 }
 
+function renderMessageText(message, content, textBody) {
+  const reasoning = getMessageStreamingReasoningText(message);
+  const showReasoning = Boolean(message.role === "assistant" && message.streaming &&
+    !String(message.content || "").trim() && reasoning);
+  content.classList.toggle("streaming-reasoning", showReasoning);
+  const text = showReasoning ? reasoning : message.content || (
+    message.phase === "compression" ? "正在處理模型內容..." : "正在生成回覆..."
+  );
+  textBody.innerHTML = renderMarkdownToHtml(getUiLanguageText(text), {
+    allowHtml: message.role === "assistant"
+  });
+}
+
 function renderMessages(state, options = {}) {
-  const conversation = Array.isArray(state.conversation) ? [...state.conversation] : [];
+  const conversation = Array.isArray(state.conversation) ? state.conversation : [];
   renderChatHeader(state);
 
   if (!conversation.length) {
@@ -5835,24 +5840,9 @@ function renderMessages(state, options = {}) {
 
     const content = document.createElement("div");
     content.className = "message-content discord-message-content";
-    const streamingReasoning = getMessageStreamingReasoningText(message);
-    const showStreamingReasoning = message.role === "assistant"
-      && message.streaming
-      && !String(message.content || "").trim()
-      && Boolean(streamingReasoning);
-    if (showStreamingReasoning) {
-      content.classList.add("streaming-reasoning");
-    }
-    const fullContent = showStreamingReasoning ? streamingReasoning : message.content || (
-      message.phase === "compression"
-        ? "正在處理模型內容..."
-        : "正在生成回覆..."
-    );
     const fullContentBody = document.createElement("div");
     fullContentBody.className = "markdown-body";
-    fullContentBody.innerHTML = renderMarkdownToHtml(getUiLanguageText(fullContent), {
-      allowHtml: message.role === "assistant"
-    });
+    renderMessageText(message, content, fullContentBody);
     if (message.role === "assistant" && (message.compressionNotice || message.extra?.compressionNotice)) {
       const compressionNotice = document.createElement("div");
       compressionNotice.className = "compression-notice";
@@ -6138,6 +6128,27 @@ function populateAiLogBody(body, log, contentStore, usageText) {
   body.append(responseLabel);
 }
 
+async function loadAiLogBody(body, log, contentStore, usageText) {
+  if (body.dataset.rendered === "true" || body.dataset.loading === "true") return;
+  body.dataset.loading = "true";
+  try {
+    if (log.detailsOmitted) {
+      body.textContent = getUiLanguageText("讀取紀錄中...");
+      const payload = await request(`/api/ai-logs/${encodeURIComponent(log.id)}`);
+      if (!payload?.log || payload.log.id !== log.id) throw new Error("AI 呼叫紀錄格式不正確。");
+      log = payload.log;
+      contentStore = {};
+    }
+    body.replaceChildren();
+    populateAiLogBody(body, log, contentStore, usageText);
+    body.dataset.rendered = "true";
+  } catch (error) {
+    body.textContent = getUiLanguageText(`讀取失敗：${error.message} 關閉後重新展開可重試。`);
+  } finally {
+    delete body.dataset.loading;
+  }
+}
+
 function renderAiLogs(state) {
   const logs = Array.isArray(state.aiLogs) ? [...state.aiLogs].reverse() : [];
   const contentStore = state.aiLogContentStore && typeof state.aiLogContentStore === "object"
@@ -6204,11 +6215,7 @@ function renderAiLogs(state) {
     const body = document.createElement("div");
     body.className = "ai-log-body";
     wrapper.addEventListener("toggle", () => {
-      if (!wrapper.open || body.dataset.rendered === "true") {
-        return;
-      }
-      body.dataset.rendered = "true";
-      populateAiLogBody(body, log, contentStore, usageText);
+      if (wrapper.open) void loadAiLogBody(body, log, contentStore, usageText);
     });
     wrapper.append(summary, body);
     el.aiLogs.appendChild(wrapper);
@@ -6349,7 +6356,7 @@ function createClientMessageId(prefix = "msg") {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function renderChatStreamNow() {
+function renderChatStreamNow(message = null) {
   if (!appState) {
     return;
   }
@@ -6357,24 +6364,35 @@ function renderChatStreamNow() {
     window.cancelAnimationFrame(chatStreamRenderFrame);
   }
   chatStreamRenderFrame = 0;
+  pendingChatStreamMessage = null;
+  if (message?.streaming) {
+    if (!appState.conversation.includes(message)) return;
+    const wrapper = Array.from(el.messages.querySelectorAll(".discord-message"))
+      .find((node) => node.dataset.messageId === message.id);
+    const content = wrapper?.querySelector(".discord-message-content");
+    const textBody = content?.querySelector(":scope > .markdown-body");
+    // Keep earlier messages and the user's history position intact during streaming.
+    if (!textBody) return;
+    const latestStart = Math.max(0, appState.conversation.length - CONVERSATION_RENDER_WINDOW_SIZE);
+    const followLatest = conversationRenderStart === latestStart &&
+      el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight <= 80;
+    renderMessageText(message, content, textBody);
+    if (followLatest) scrollMessagesToBottom();
+    return;
+  }
   renderMessages(appState);
   renderStatus(appState);
-  realignMobileChat({ scroll: true });
 }
 
-function scheduleChatStreamRender() {
+function scheduleChatStreamRender(message) {
   if (!appState) {
     return;
   }
+  pendingChatStreamMessage = message;
   if (chatStreamRenderFrame) {
     return;
   }
-  const render = () => {
-    chatStreamRenderFrame = 0;
-    renderMessages(appState);
-    renderStatus(appState);
-    realignMobileChat({ scroll: true });
-  };
+  const render = () => renderChatStreamNow(pendingChatStreamMessage);
   if (typeof window.requestAnimationFrame === "function") {
     chatStreamRenderFrame = window.requestAnimationFrame(render);
   } else {
@@ -6428,14 +6446,14 @@ function applyChatStreamEventToMessage(event = {}, assistantMessage = null) {
   }
   if (event.type === "status") {
     assistantMessage.phase = event.phase === "before_reasoner" ? "compression" : event.phase || "";
-    scheduleChatStreamRender();
+    scheduleChatStreamRender(assistantMessage);
     return;
   }
   if (event.type === "reasoning_delta") {
     if (!assistantMessage.content) {
       assistantMessage.extra = assistantMessage.extra || {};
       assistantMessage.extra.streamingReasoning = `${assistantMessage.extra.streamingReasoning || ""}${event.delta || ""}`;
-      scheduleChatStreamRender();
+      scheduleChatStreamRender(assistantMessage);
     }
     return;
   }
@@ -6445,7 +6463,7 @@ function applyChatStreamEventToMessage(event = {}, assistantMessage = null) {
     if (assistantMessage.extra) {
       assistantMessage.extra.streamingReasoning = "";
     }
-    scheduleChatStreamRender();
+    scheduleChatStreamRender(assistantMessage);
     return;
   }
   if (event.type === "error") {
@@ -8602,7 +8620,7 @@ async function removeAssistantCard(assistantCard) {
 }
 
 async function refresh() {
-  const state = await request("/api/state", { method: "GET" });
+  const state = await request("/api/state?aiLogs=summary", { method: "GET" });
   appState = state;
   uiLanguageController.setLanguage(normalizeUiLanguage(state.uiLanguage));
   updateUiLanguageToggleButton();
@@ -10006,35 +10024,9 @@ function bindEvents() {
     });
   }
 
-  if (el.openNovelAiMenuBtn) {
-    el.openNovelAiMenuBtn.addEventListener("click", () => {
-      el.otherActionsDialog?.close();
-      el.novelAiMenuDialog?.showModal();
-    });
-  }
-
-  if (el.closeNovelAiMenuBtn) {
-    el.closeNovelAiMenuBtn.addEventListener("click", () => {
-      el.novelAiMenuDialog?.close();
-      el.otherActionsDialog?.showModal();
-    });
-  }
-
   el.feedbackLink?.addEventListener("click", () => {
     el.otherActionsDialog?.close();
   });
-
-  if (el.novelAiImageBtn) {
-    el.novelAiImageBtn.addEventListener("click", () => {
-      openNovelAiDialog();
-    });
-  }
-
-  if (el.novelAiStoryboardBtn) {
-    el.novelAiStoryboardBtn.addEventListener("click", () => {
-      window.location.href = "/NAI_storyboard";
-    });
-  }
 
   if (el.contextCompressionProfileSelect) {
     el.contextCompressionProfileSelect.addEventListener("change", () => {
@@ -10440,7 +10432,6 @@ function bindEvents() {
   bindDialogBackdropClose(el.sessionPickerDialog);
   bindDialogBackdropClose(el.otherActionsDialog);
   bindDialogBackdropClose(el.defaultsMenuDialog);
-  bindDialogBackdropClose(el.novelAiMenuDialog);
   bindDialogBackdropClose(el.createMenuDialog);
   bindDialogBackdropClose(el.updateNotesDialog);
 

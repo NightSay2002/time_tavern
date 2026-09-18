@@ -116,6 +116,7 @@ let novelAiRandomPromptSnippets = [];
 let novelAiLoopRunning = false;
 let novelAiLoopStopRequested = false;
 let novelAiLoopDelayTimer = null;
+let novelAiSettingsDraftTimer = null;
 let novelAiImageViewerState = {
   scale: 1,
   x: 0,
@@ -1996,8 +1997,6 @@ function setFormSettings(settings = {}, options = {}) {
   renderCostPreview();
   updateNovelAiDuplicateWarnings();
   if (options.save !== false) {
-    saveFixedPromptSnippets();
-    saveRandomPromptSnippets();
     saveSettingsDraft({
       includeReferenceImages: options.includeReferenceImages === true || options.includeBaseImage === true
     });
@@ -2012,7 +2011,14 @@ function hasSettingsDraft(settings = {}) {
   return Boolean(settings && typeof settings === "object" && !Array.isArray(settings) && Object.keys(settings).length > 0);
 }
 
+function scheduleSettingsDraft() {
+  window.clearTimeout(novelAiSettingsDraftTimer);
+  novelAiSettingsDraftTimer = window.setTimeout(saveSettingsDraft, 200);
+}
+
 function saveSettingsDraft(options = {}) {
+  window.clearTimeout(novelAiSettingsDraftTimer);
+  novelAiSettingsDraftTimer = null;
   const settings = getFormSettings();
   if (options.includeReferenceImages === true) {
     void saveReferenceImageDraft(settings).catch((error) => {
@@ -4019,7 +4025,11 @@ function handleReferenceListAction(type, event) {
       novelAiPreciseImages = [...list];
     }
     renderCostPreview();
-    saveSettingsDraft({ includeReferenceImages: event.type === "change" });
+    if (event.type === "input") {
+      scheduleSettingsDraft();
+    } else {
+      saveSettingsDraft({ includeReferenceImages: event.type === "change" });
+    }
     return;
   }
   const target = event.target?.closest?.("[data-reference-action]");
@@ -4214,7 +4224,11 @@ function bindEvents() {
     updateRangeValues();
     renderCostPreview();
     updateNovelAiDuplicateWarnings(event?.target);
-    saveSettingsDraft();
+    if (event?.type === "input") {
+      scheduleSettingsDraft();
+    } else {
+      saveSettingsDraft();
+    }
   };
   el.novelAiForm.addEventListener("input", onFormChange);
   el.novelAiForm.addEventListener("change", onFormChange);
@@ -4256,9 +4270,15 @@ function bindEvents() {
     el.novelAiHistoryGrid?.scrollTo?.({ top: 0 });
   });
   window.addEventListener("pagehide", () => {
+    if (novelAiSettingsDraftTimer !== null) saveSettingsDraft();
     releaseHistoryImageResources();
     releaseMainImageResource();
     releaseImageViewerResource();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && novelAiSettingsDraftTimer !== null) {
+      saveSettingsDraft();
+    }
   });
   window.addEventListener("keydown", onHistoryKeyboardNavigation);
   el.novelAiBaseImagePreview.addEventListener("click", (event) => {
@@ -4345,7 +4365,7 @@ function bindEvents() {
       }
     }
     novelAiFixedPromptSnippets = collectFixedPromptSnippets();
-    saveSettingsDraft();
+    scheduleSettingsDraft();
   });
   el.novelAiAddRandomPromptBtn.addEventListener("click", () => {
     const current = collectRandomPromptSnippets();
@@ -4409,7 +4429,7 @@ function bindEvents() {
       syncRandomPromptWeightBiasControl(target.closest(".nai-random-prompt-card"));
     }
     novelAiRandomPromptSnippets = collectRandomPromptSnippets();
-    saveSettingsDraft();
+    scheduleSettingsDraft();
   });
   el.novelAiRandomPromptList.addEventListener("compositionend", (event) => {
     const target = event.target?.closest?.('[data-random-prompt-field="randomText"]');

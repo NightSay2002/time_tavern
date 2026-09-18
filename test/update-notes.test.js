@@ -37,8 +37,11 @@ function setup({ blockedStorage = false } = {}) {
 
 test("published update notes use unique IDs and the agreed current title", () => {
   assert.equal(new Set(publishedNotes.map((note) => note.id)).size, publishedNotes.length);
-  assert.equal(publishedNotes[0].title, "自定義:重新請求的次數");
-  assert.match(publishedNotes[0].content, /默認次數為三次/u);
+  assert.equal(publishedNotes[0].title, "小優化");
+  assert.equal(publishedNotes[0].content, "進行了一些看不見的小優化");
+  const previous = publishedNotes.find((note) => note.id === "2026-09-14-api-retries");
+  assert.equal(previous.title, "自定義:重新請求的次數");
+  assert.match(previous.content, /默認次數為三次/u);
 });
 
 test("new notes automatically open once, manual review still opens and new IDs notify again", async () => {
@@ -56,9 +59,21 @@ test("new notes automatically open once, manual review still opens and new IDs n
   ui.setNotes([{ ...publishedNotes[0], id: "next-update" }, ...publishedNotes]);
   await ui.open(true);
   assert.equal(ui.el.updateNotesDialog.shows, 3);
-  assert.equal(ui.el.updateNotesList.children.length, 2);
+  assert.equal(ui.el.updateNotesList.children.length, publishedNotes.length + 1);
   ui.el.updateNotesList.children[1].listeners.click();
   assert.equal(ui.el.updateNotesList.children[1].attributes["aria-pressed"], "true");
+});
+
+test("readers of the previous announcement see the latest update once", async () => {
+  const ui = setup();
+  ui.storage.set("time_tavern_update_notes_seen", "2026-09-14-api-retries");
+  await ui.open(true);
+  assert.equal(ui.el.updateNotesDialog.shows, 1);
+  assert.equal(ui.el.updateNotesList.children.length, publishedNotes.length);
+  assert.equal(ui.storage.get("time_tavern_update_notes_seen"), publishedNotes[0].id);
+  ui.el.updateNotesDialog.open = false;
+  await ui.open(true);
+  assert.equal(ui.el.updateNotesDialog.shows, 1);
 });
 
 test("blocked browser storage falls back to the page marker", async () => {

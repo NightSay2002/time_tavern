@@ -21,7 +21,7 @@ test("conversation tools and global settings use separate sections", () => {
   assert.match(settingsBlock, /id="otherActionsBtn"[^>]*>亂七八糟/u);
   assert.match(otherMenu, /<h3>亂七八糟<\/h3>/u);
   assert.doesNotMatch(otherMenu, /openDefaultsMenuBtn|uiLanguageToggleBtn/u);
-  assert.match(otherMenu, /id="openNovelAiMenuBtn"[^>]*>NovelAI</u);
+  assert.match(otherMenu, /<a id="novelAiLink"[^>]*href="\/novelai.html"[^>]*>NovelAI<\/a>/u);
   assert.match(otherMenu, /id="feedbackLink"[^>]*>[\s\S]*問題反映/u);
   assert.match(defaultsMenu, /<h3>全局設定<\/h3>/u);
   assert.match(defaultsMenu, /id="useDefaultsBtn"[^>]*>匯入全局設定</u);
@@ -37,7 +37,9 @@ test("conversation tools and global settings use separate sections", () => {
   assert.match(appSource, /request\("\/api\/defaults\/import"/u);
   assert.match(appSource, /request\("\/api\/defaults\/author"/u);
   assert.doesNotMatch(appSource, /\/api\/defaults\/(?:save|apply|update)/u);
-  assert.doesNotMatch(appSource, /closeDefaultsMenuBtn[\s\S]{0,180}otherActionsDialog/u);
+  const closeDefaultsHandler = appSource.match(/closeDefaultsMenuBtn\.addEventListener\("click", \(\) => \{([\s\S]*?)\n\s*\}\);/u)?.[1] || "";
+  assert.match(closeDefaultsHandler, /defaultsMenuDialog\?\.close\(\)/u);
+  assert.doesNotMatch(closeDefaultsHandler, /otherActionsDialog/u);
 });
 
 test("role-card picker uses the compact label and highlighted entry", () => {

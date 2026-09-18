@@ -6,7 +6,10 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260914-update-notes" />
+    <link rel="stylesheet" href="/styles.css?v=20260918-novelai-cleanup" />
+    <link rel="modulepreload" href="/ui-language.js" />
+    <link rel="modulepreload" href="/vendor/opencc-t2cn.js" />
+    <link rel="modulepreload" href="/vendor/opencc-cn2t.js" />
   </head>
   <body>
     <canvas id="background-canvas" aria-hidden="true"></canvas>
@@ -152,7 +155,7 @@
         </div>
         <div class="compact-action-list">
           <a id="feedbackLink" class="button-link secondary" href="https://discord.gg/gYBBUgvEn6" target="_blank" rel="noopener noreferrer">問題反映</a>
-          <button id="openNovelAiMenuBtn" type="button" class="secondary">NovelAI</button>
+          <a id="novelAiLink" class="button-link secondary" href="/novelai.html">NovelAI</a>
         </div>
       </form>
     </dialog>
@@ -168,19 +171,6 @@
           <button id="saveDefaultsBtn" type="button" class="secondary">匯出當前全局設定</button>
           <button id="updateDefaultsBtn" type="button" class="secondary">使用作者預設</button>
           <input id="globalSettingsFileInput" type="file" class="hidden" accept=".json,application/json" />
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="novelAiMenuDialog" class="dialog compact-action-dialog">
-      <form method="dialog" class="stack compact-action-shell">
-        <div class="role-picker-header">
-          <h3>NovelAI</h3>
-          <button id="closeNovelAiMenuBtn" type="button" class="muted">返回</button>
-        </div>
-        <div class="compact-action-list">
-          <button id="novelAiImageBtn" type="button" class="secondary">NovelAI 跑圖</button>
-          <button id="novelAiStoryboardBtn" type="button" class="secondary">Storyboard</button>
         </div>
       </form>
     </dialog>
@@ -675,6 +665,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20260914-update-notes"></script>
+    <script type="module" src="/app.js?v=20260918-message-style"></script>
   </body>
 </html>

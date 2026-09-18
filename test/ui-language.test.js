@@ -108,13 +108,11 @@ test("Discord archive browser converts saved names and dialogue", () => {
 test("all web surfaces share the server-backed UI language controller", () => {
   const appSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
   const novelAiSource = fs.readFileSync(new URL("../src/public/novelai.js", import.meta.url), "utf8");
-  const storyboardSource = fs.readFileSync(new URL("../src/public/storyboard.js", import.meta.url), "utf8");
   const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
   assert.match(appSource, /createUiLanguageController/u);
   assert.doesNotMatch(appSource, /UI_T2S_CHARS|UI_T2S_PHRASES/u);
   assert.match(novelAiSource, /loadServerUiLanguage\(uiLanguageController\)/u);
-  assert.match(storyboardSource, /loadServerUiLanguage\(uiLanguageController\)/u);
   assert.match(serverSource, /pathname === "\/api\/ui-language" && method === "PUT"/u);
   assert.match(serverSource, /pathname === "\/vendor\/opencc-t2cn[.]js"/u);
   assert.match(serverSource, /pathname === "\/vendor\/opencc-cn2t[.]js"/u);
