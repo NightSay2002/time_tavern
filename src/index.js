@@ -13908,15 +13908,11 @@ async function sendDiscordLongMessage(message, text) {
   return sentMessages;
 }
 
-function scheduleDiscordErrorMessageDeletion(sentMessages = []) {
+function scheduleDiscordErrorMessageDeletion(sentMessages = [], delaySeconds = 15) {
   const messages = (Array.isArray(sentMessages) ? sentMessages : []).filter((item) => item?.delete);
   if (messages.length === 0) {
     return;
   }
-  const delayMs = Math.min(
-    envFirstNumber(["DISCORD_ERROR_AUTO_DELETE_SECONDS"], 15),
-    300
-  ) * 1000;
   const timer = setTimeout(() => {
     messages.forEach((item) => {
       void item.delete().catch((error) => {
@@ -13926,7 +13922,7 @@ function scheduleDiscordErrorMessageDeletion(sentMessages = []) {
         }
       });
     });
-  }, delayMs);
+  }, delaySeconds * 1000);
   timer.unref?.();
 }
 
@@ -14203,25 +14199,20 @@ function shouldDeferSlashCommandEarly(commandName = "") {
 }
 
 async function safeSendInteractionError(interaction, content) {
-  if (interaction?.guildId) {
-    const sentMessages = await sendInteractionChannelFallback(interaction, content);
-    if (sentMessages.length > 0) {
-      scheduleDiscordErrorMessageDeletion(sentMessages);
-      await discardDeferredInteractionReply(interaction);
-      return;
-    }
+  for (const chunk of splitForDiscord(content, 1800)) {
+    await safeSendInteractionText(interaction, chunk, { ephemeral: true });
   }
-  await safeSendInteractionText(interaction, content, { ephemeral: true });
 }
 
 async function safeSendInteractionText(interaction, content, options = {}) {
   const ephemeral = Boolean(options.ephemeral);
-  const payload = ephemeral
-    ? { content, flags: MessageFlags.Ephemeral }
-    : { content };
+  const payload = { content, allowedMentions: { parse: [] } };
+  if (ephemeral) {
+    payload.flags = MessageFlags.Ephemeral;
+  }
   try {
     if (interaction.deferred && !interaction.replied) {
-      await interaction.editReply(content);
+      await interaction.editReply({ content, allowedMentions: payload.allowedMentions });
       return;
     }
     if (interaction.replied) {
@@ -14265,10 +14256,23 @@ function getFailedConversationReplyText(result = {}) {
 }
 
 async function sendDiscordMessageError(message, content) {
-  const text = discordSystemText(content);
-  const sentMessages = await sendDiscordLongMessage(message, text);
-  if (message?.guildId) {
-    scheduleDiscordErrorMessageDeletion(sentMessages);
+  const delaySeconds = message?.guildId
+    ? Math.max(1, Math.min(envFirstNumber(["DISCORD_ERROR_AUTO_DELETE_SECONDS"], 15), 300))
+    : 0;
+  const text = discordSystemText(delaySeconds
+    ? `${content}\n\n此訊息將於 ${delaySeconds} 秒後自動刪除。`
+    : content);
+  const sentMessages = [];
+  for (const chunk of splitForDiscord(text, 1800)) {
+    const payload = { content: chunk || " ", allowedMentions: { parse: [], repliedUser: false } };
+    const sent = sentMessages.length === 0
+      ? await message.reply(payload)
+      : await message.channel.send(payload);
+    sentMessages.push(sent);
+    if (delaySeconds) {
+      // Schedule each chunk immediately, even if a later send fails.
+      scheduleDiscordErrorMessageDeletion([sent], delaySeconds);
+    }
   }
   return sentMessages;
 }
@@ -14587,6 +14591,16 @@ async function sendDiscordArchivePublicChunks(interaction, text, components = []
     for (let index = 0; index < chunks.length; index += 1) {
       await interaction.followUp(payloadFor(chunks[index], index));
     }
+    return;
+  }
+
+  if (interaction.deferred && !interaction.replied && interaction.ephemeral) {
+    // Complete the private defer before publishing follow-ups with different visibility.
+    await interaction.editReply({ content: discordSystemText("存檔已載入。"), allowedMentions: { parse: [] } });
+    for (let index = 0; index < chunks.length; index += 1) {
+      await interaction.followUp(payloadFor(chunks[index], index));
+    }
+    await discardDeferredInteractionReply(interaction);
     return;
   }
 
@@ -15523,7 +15537,7 @@ async function handleSlashCommand(interaction) {
     }
 
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await withStateLock(
       () => loadDiscordArchiveIntoCurrentChannel(
         resolved.session.id,
