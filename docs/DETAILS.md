@@ -19,6 +19,7 @@
 - NovelAI：會。後端先建立 `data/novelai-defaults.json`；`src/public/novelai.js` 在沒有 localStorage draft 時，會呼叫 `/api/novelai/defaults` 讀取本機預設。
 - 啟動器本身不需要呼叫「匯入全局設定」API；預設由 server 與 NovelAI 頁面自動讀取。
 - 缺少可用 Node.js 時，第一次啟動需要連線至 `nodejs.org`；缺少 npm 套件時也需要連線至 npm registry。之後可重用 `.runtime/node/` 與 `node_modules/`。
+- 目前發布預設包含 22 張角色卡、2 個助手及 5 種 Prompt 模式。
 
 ## 環境變數
 
@@ -51,7 +52,7 @@
 | `CHAT_IMAGE_API_OPENROUTER_PROVIDER` | 空白 | 圖片 API 獨立的 OpenRouter 推理供應商／端點；空白自動路由。 |
 | `CHAT_IMAGE_API_BASE_URL` | 依 provider | 只有圖片 provider 為 `custom` 時生效；官方 provider 使用固定網址。 |
 | `CHAT_IMAGE_API_MODEL` | 空 | 專用圖片模型；完整 deployment URL 已包含模型時可留空。 |
-| `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，可設 `none`、`low`、`high`、`max`。 |
+| `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，Gemini 可依模型選擇 `minimal`、`low`、`medium`、`high` 或 `none`。 |
 | `CHAT_IMAGE_API_TEMPERATURE` | API 預設 | 圖片模型獨立 temperature，範圍 `0–2`；思考開啟時不送出。 |
 | `CHAT_IMAGE_API_KEY` | 空 | 專用圖片 API Key；只保存於 `.env` 與 `data/environment.env`。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
@@ -349,7 +350,7 @@ QQ 私聊文字指令同時接受半形 `!` 與全形 `！`；`!開始` 與 `!�
 | `!ai_status 1` | 查看目前角色、故事狀態與回合。 |
 | `!ai_status 2 [頁數]` | 每頁列出 10 張角色卡及開場數量。 |
 | `!stop` | 停止目前 QQ 故事的生成；閒置時提示沒有正在生成的對話。 |
-| `!close` | 刪除目前 QQ 故事並釋放 Key；已建立存檔保留。 |
+| `!close` | 刪除目前 QQ 故事；已建立存檔及共用 Key 保留。 |
 | `!archive 0 [名稱]` | 保存目前 QQ 對話。 |
 | `!archive 1 [存檔編號]` | 查看指定存檔的資料及最後五回合；未填編號時查看最新一份。 |
 | `!archive_return <0\|1> <存檔編號>` | 載入存檔末端；`0` 顯示開頭五回合，`1` 顯示最後五回合，之後都可直接繼續。 |
@@ -397,7 +398,11 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 
 自動更新只處理 Git 追蹤的程式與發布預設。`data/`、`.env`、角色卡與目前對話不會被 Git 更新；舊版追蹤檔中的使用者預設或 Prompt 改動會先遷移到 `data/`。
 
+自動更新只在 `npm start` 啟動時檢查一次；工作區乾淨且分支可 fast-forward 時更新，離線、本機程式檔改動或分支分岔時保留現有版本。直接執行 `node src/index.js` 不會檢查更新；設定 `TIME_TAVERN_AUTO_UPDATE=0` 可關閉啟動時檢查。後端更新後需重啟服務，只刷新網頁不足以載入新後端。
+
 自動更新因本機程式檔改動而跳過時，可停止服務、備份整個 `data/`、取得乾淨的新版本，再只把 `data/` 放回新版本。啟動器會用 `data/environment.env` 還原缺少的 `.env`。備份包含 Token 與 API Key，不可公開。
+
+NovelAI 圖片歷史與參考圖草稿保存在瀏覽器，不包含在 `data/` 備份中；NovelAI 收藏則保存在 `data/novelai-album/`。
 
 ## HTTP API
 
