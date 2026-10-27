@@ -9410,7 +9410,7 @@ function resolveChatImageApiConfig(envSource = process.env) {
     configuredModel,
     model: resolveChatApiModelForEndpoint(configuredModel, "", completionsUrl, provider),
     reasoningEffort,
-    temperature,
+    temperature: reasoningEffort && reasoningEffort !== "none" ? null : temperature,
     requestTimeoutMs
   };
 }
@@ -9738,11 +9738,13 @@ function isActiveGenerationRunning(contextId = "") {
 
 function createTimeoutController(timeoutMs = getChatApiRequestTimeoutMs(), options = {}) {
   const controller = new AbortController();
+  const effectiveTimeoutMs = Math.max(1000, Math.min(timeoutMs, 2147483647));
   const generationEntry = options.trackGeneration
     ? {
         controller,
         contextId: getCurrentConversationContextId(),
         purpose: safeText(options.purpose),
+        timeoutMs: effectiveTimeoutMs,
         startedAt: nowIso(),
         stoppedByUser: false,
         timedOut: false
@@ -9756,10 +9758,11 @@ function createTimeoutController(timeoutMs = getChatApiRequestTimeoutMs(), optio
       generationEntry.timedOut = true;
     }
     controller.abort();
-  }, Math.max(1000, timeoutMs));
+  }, effectiveTimeoutMs);
   return {
     controller,
     timeout,
+    timeoutMs: effectiveTimeoutMs,
     generationEntry,
     cleanup: () => {
       clearTimeout(timeout);
@@ -9768,12 +9771,12 @@ function createTimeoutController(timeoutMs = getChatApiRequestTimeoutMs(), optio
   };
 }
 
-function formatFetchErrorMessage(error, generationEntry = null) {
+function formatFetchErrorMessage(error, generationEntry = null, timeoutMs = generationEntry?.timeoutMs || getChatApiRequestTimeoutMs()) {
   if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
     return GENERATION_STOPPED_MESSAGE;
   }
-  if (error?.name === "AbortError") {
-    return `請求逾時（${Math.round(getChatApiRequestTimeoutMs() / 1000)}秒未回應）`;
+  if (error?.name === "AbortError" || error?.name === "TimeoutError") {
+    return `請求逾時（${Math.ceil(timeoutMs / 1000)}秒內未完成）`;
   }
   return safeText(error?.message) || "請求在回傳完成前中斷";
 }
@@ -10087,13 +10090,10 @@ function resolveChatApiTestConfig(envSource = {}) {
   );
   const completionsUrl = getChatApiCompletionsUrlFromBaseUrl(baseUrl);
   const model = resolveChatApiModelForEndpoint(configuredModel, provider === "deepseek" ? DEFAULT_CHAT_API_MODEL : "", completionsUrl, provider);
-  const requestTimeoutMs = Math.min(
-    envObjectFirstNumber(
-      envSource,
-      ["CHAT_API_TEST_TIMEOUT_MS", "CHAT_API_REQUEST_TIMEOUT_MS", "CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
-      30000
-    ),
-    30000
+  const requestTimeoutMs = envObjectFirstNumber(
+    envSource,
+    ["CHAT_API_TEST_TIMEOUT_MS", "CHAT_API_REQUEST_TIMEOUT_MS", "CHAT_API_TIMEOUT_MS", "CONVERSATION_API_TIMEOUT_MS", "DEEPSEEK_REQUEST_TIMEOUT_MS"],
+    getChatApiRequestTimeoutMs()
   );
   const maxTokensParamName = normalizeChatApiMaxTokensParamName(
     envObjectFirstText(envSource, ["CHAT_API_MAX_TOKENS_PARAM", "CONVERSATION_API_MAX_TOKENS_PARAM"], "max_tokens")
@@ -10152,7 +10152,8 @@ async function testChatApiConnection(envSource = {}) {
     openrouterProvider: config.openrouterProvider,
     reasoningEffort: config.reasoningEffort,
     model: config.model,
-    maxTokens: ["deepseek", "zhipu"].includes(config.provider) && config.reasoningEffort !== "none" ? 1024 : 8,
+    maxTokens: config.provider === "gemini" ? 4096
+      : ["deepseek", "zhipu"].includes(config.provider) && config.reasoningEffort !== "none" ? 1024 : 8,
     maxTokensParamName: config.maxTokensParamName,
     messages: [
       {
@@ -10163,7 +10164,7 @@ async function testChatApiConnection(envSource = {}) {
   }), config.completionsUrl);
 
   let response;
-  const { controller, timeout } = createTimeoutController(config.requestTimeoutMs);
+  const { controller, timeout, timeoutMs: effectiveTimeoutMs } = createTimeoutController(config.requestTimeoutMs);
   try {
     response = await fetchChatApiWithRetry(config.completionsUrl, {
       method: "POST",
@@ -10178,7 +10179,7 @@ async function testChatApiConnection(envSource = {}) {
     clearTimeout(timeout);
     return {
       ok: false,
-      message: `連接失敗：${formatFetchErrorMessage(error)}`,
+      message: `連接失敗：${formatFetchErrorMessage(error, null, effectiveTimeoutMs)}`,
       durationMs: Date.now() - startedAt,
       ...publicConfig
     };
@@ -10191,7 +10192,7 @@ async function testChatApiConnection(envSource = {}) {
     clearTimeout(timeout);
     return {
       ok: false,
-      message: `連接失敗：回應讀取失敗：${formatFetchErrorMessage(error)}`,
+      message: `連接失敗：回應讀取失敗：${formatFetchErrorMessage(error, null, effectiveTimeoutMs)}`,
       durationMs: Date.now() - startedAt,
       ...publicConfig
     };
@@ -10218,10 +10219,12 @@ async function testChatApiConnection(envSource = {}) {
 
   const content = extractChatApiMessageText(payload?.choices?.[0]?.message?.content).trim();
   const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
-  if (!content && !finishReason) {
+  if (!content) {
     return {
       ok: false,
-      message: "連接失敗：API 回應格式不完整。",
+      message: /^(?:length|max_tokens)$/iu.test(finishReason)
+        ? "連接已建立，但模型用盡測試輸出預算，未回傳可見文字；思考模型的預算也包含思考 tokens。"
+        : "連接已建立，但 API 未回傳可見文字，無法確認生成成功。",
       status: response.status,
       durationMs: Date.now() - startedAt,
       responsePreview: safeText(text).slice(0, 220),
@@ -10311,7 +10314,7 @@ async function requestChatImageUnderstanding({
       }, targetState);
     }
   };
-  const { controller, generationEntry, cleanup } = createTimeoutController(
+  const { controller, generationEntry, cleanup, timeoutMs: effectiveTimeoutMs } = createTimeoutController(
     Number.isFinite(requestTimeoutMs) ? requestTimeoutMs : config.requestTimeoutMs,
     {
       trackGeneration,
@@ -10332,7 +10335,7 @@ async function requestChatImageUnderstanding({
     if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
       throw createGenerationStoppedError();
     }
-    const message = formatFetchErrorMessage(error, generationEntry);
+    const message = formatFetchErrorMessage(error, generationEntry, effectiveTimeoutMs);
     appendImageLog({ responseText: "", error: message, status: "error" });
     throw new Error(`圖片處理 API 請求失敗：${message}`);
   }
@@ -10345,7 +10348,7 @@ async function requestChatImageUnderstanding({
     if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
       throw createGenerationStoppedError();
     }
-    const message = formatFetchErrorMessage(error, generationEntry);
+    const message = formatFetchErrorMessage(error, generationEntry, effectiveTimeoutMs);
     appendImageLog({ responseText: "", error: message, status: "error" });
     throw new Error(`圖片處理 API 回應讀取失敗：${message}`);
   }
@@ -10406,7 +10409,7 @@ async function testChatImageApiConnection(envSource = {}) {
       }],
       userContent: "這是連接測試圖片，請簡短描述。",
       maxTokens: 1024,
-      requestTimeoutMs: Math.min(config.requestTimeoutMs, 30000)
+      requestTimeoutMs: config.requestTimeoutMs
     });
     return {
       ok: true,

@@ -38,8 +38,9 @@
 | `CHAT_API_BASE_URL` | 依 provider | 只有 `custom` 讀取此值；可填 Base URL 或完整 Chat Completions 路線。其他 provider 固定使用官方網址。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型；Base URL 是完整 deployment URL 時可留空。 |
 | `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `OPENROUTER_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前供應商的專屬 Key 優先，`CHAT_API_KEY` 只作舊設定後備，執行時不讀取其他供應商的 Key。官方 provider 的 Base URL 覆寫不再生效。 |
-| `CHAT_API_REASONING_EFFORT` | `high` | 共用思考欄位。DeepSeek 空值使用 `high`；GLM 4.5+、Gemini 2.5 Flash／Flash-Lite，以及支援 `none` 的 GPT-5.1+ 非 Pro 模型可選 `none`。模型不支援時不送關閉參數。關閉後啟用 temperature，且不附帶使用者自訂補充。舊版 provider 專用變數仍可讀取。 |
+| `CHAT_API_REASONING_EFFORT` | DeepSeek 為 `high`，其他為 API 預設 | 共用思考欄位。依模型選擇 `minimal`、`low`、`medium`、`high`、`max` 或 `none`，只送出該供應商與模型支援的值。關閉時不附帶使用者自訂補充。舊版 provider 專用變數仍可讀取。 |
 | `CHAT_API_REQUEST_TIMEOUT_MS` | `600000` | 對話 API 逾時，毫秒。 |
+| `CHAT_API_TEST_TIMEOUT_MS` | 沿用對話 API 逾時 | 選填，只覆寫對話連接測試的上限；不再固定限制為 30 秒。 |
 | `CHAT_API_MAX_TOKENS` | `32000` | 輸出 token 上限。 |
 | `CHAT_API_MAX_TOKENS_PARAM` | `max_tokens` | 可改 `max_completion_tokens`。 |
 | `CHAT_API_TEMPERATURE` | `0.5` | 一般對話 temperature，可設定 `0–2` 並支援小數；DeepSeek 思考模式開啟時不生效。 |
@@ -129,7 +130,9 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 
 適用網頁／Discord／QQ 的主對話、助手、大模型處理、補寫及對話 API 連接測試；不影響專用圖片理解 API、NovelAI 生成、模型清單或 Bot 登入重試。重試 `fetch failed`、暫時性網路連線錯誤及 HTTP 408、429、500、502、503、504；400、401、403、404、無效網址、憑證錯誤不重試。已取得成功回應後的 JSON 解析錯誤、回應讀取失敗與串流中斷不重試，避免重複輸出。
 
-等待依序為 1、2、4、8、10 秒，之後維持 10 秒；上游提供有效 `Retry-After` 時至少等待指定時間。整組失敗重試共用該次 API 逾時上限；連接測試另受原有最多 30 秒限制，因此可能未跑滿設定次數便逾時。`/stop`、網頁停止及逾時都會中止等待，不再發出下一次請求。中間失敗不建立聊天紀錄或重複保存完整 AI log，最終失敗才沿用既有回滾／錯誤顯示。網路斷線無法保證上游尚未處理請求，重試可能重複計費。
+等待依序為 1、2、4、8、10 秒，之後維持 10 秒；上游提供有效 `Retry-After` 時至少等待指定時間。整組失敗重試共用該次 API 逾時上限；對話連接測試使用尚未保存的 `CHAT_API_REQUEST_TIMEOUT_MS`（或明確設定的 `CHAT_API_TEST_TIMEOUT_MS`），圖片連接測試使用圖片 API 的有效逾時，不再額外截短為 30 秒。逾時包括等待、重試及完整回應讀取，錯誤訊息使用這次請求建立時的上限，不讀取之後變更的全局值。計時器最小 1 秒、最大 2,147,483,647 毫秒，避免溢位立即中斷。`/stop`、網頁停止及逾時都會中止等待，不再發出下一次請求。中間失敗不建立聊天紀錄或重複保存完整 AI log，最終失敗才沿用既有回滾／錯誤顯示。網路斷線無法保證上游尚未處理請求，重試可能重複計費。
+
+Gemini 連接測試允許最多 4096 個輸出 tokens（包含模型思考），仍只要求回答 `OK`；不改動正式對話的模型、思考設定或輸出長度。空白回應不再算測試成功，輸出預算耗盡時會單獨提示。Google 說明思考與輸出共用輸出預算，過小的上限可能只產生思考或空白正文，詳見[官方思考文件](https://ai.google.dev/gemini-api/docs/thinking#token-limits-and-max_output_tokens)。
 
 API 成功但 `content` 空白時，仍維持原有一次空白回應重試；輸出長度重試也維持原規則，與此失敗重試設定分開計算。Discord 一般頻道訊息的最終錯誤回覆原頻道並自動刪除；Slash 指令的錯誤則使用僅自己可見的隱藏回覆。
 
@@ -139,7 +142,9 @@ API 成功但 `content` 空白時，仍維持原有一次空白回應重試；�
 
 - DeepSeek 支援關閉及 `low`、`high`、`max`；未指定時維持高強度。
 - GLM 4.5 以上可關閉思考；`reasoning_effort` 強度只在 GLM 5.2 以上送出。
-- Gemini OpenAI-compatible API 目前只為 Gemini 2.5 Flash／Flash-Lite 提供可用的 `none`；Gemini 2.5 Pro 與 Gemini 3 不顯示關閉。
+- Google 對話及圖片 API 使用獨立的 `CHAT_API_REASONING_EFFORT` 與 `CHAT_IMAGE_API_REASONING_EFFORT`，透過 OpenAI-compatible `reasoning_effort` 傳送；不會同時加入 `thinking_level` 或 `thinking_budget`。前後端共用模型能力判斷，未知模型使用 API 預設，不猜測能力；未選或不支援的值不送出。完整設定可參考 [Google 相容介面](https://ai.google.dev/gemini-api/docs/openai#thinking)及[思考模型列表](https://ai.google.dev/gemini-api/docs/thinking#controlling-thinking)。
+- `gemini-4-argon`、Gemini 3.8 Flash、3.1 Pro 支援低／中／高；Argon 官方預設為中。Gemini 3 Pro 提供低／高。Gemini 3 Flash、3.1 Flash-Lite、3.5 Flash-Lite、3.6 Flash 及 Robotics ER 2 另提供 `minimal`（極低）；3.1 Flash-Lite Image 只提供極低／高。
+- Gemini 2.5 Pro／Flash／Flash-Lite 可選低／中／高，其中 Flash／Flash-Lite 可選 `none`；2.5 Pro、Gemini 3 及 Argon 不提供關閉。Google 不提供 `max`；切換供應商留下的 `max` 不會送到 Google。
 - OpenAI 只在支援 `reasoning_effort: none` 的 GPT-5.1 以上非 Pro 模型顯示關閉；其他模型與自訂 provider 保留 API 預設。
 - 只要目前請求實際解析為 `none`，網頁與 Discord 都不會把「使用者自訂補充」附加到該次模型輸入；使用者原訊息及已存資料不會刪除。
 
@@ -156,7 +161,7 @@ GLM 與圖片輸入：
 - 網頁與 Discord 支援 PNG、JPEG、WebP、GIF，可只傳圖片或同時輸入文字。圖片會隨 user 訊息保存，編輯重算與 `/reload` 會保留原附件。
 - `CHAT_IMAGE_INPUT_MODE=main` 時，圖片使用 OpenAI-compatible `messages[].content[]` 的 `image_url` Base64 Data URL 直接交給主要模型，維持舊版行為。
 - `CHAT_IMAGE_INPUT_MODE=specialist` 時，一次最多四張圖片會先交給獨立圖片 API，依序辨識人物、物件、文字、場景、動作與圖片間關係；主要模型、壓縮、補寫與助手只收到隱藏文字描述，不收到原圖。
-- 圖片 API 的思考強度與溫度完全獨立於主要對話。DeepSeek 空白思考設定解析為高強度；選擇 `none` 才會送出圖片溫度，明確選擇低／高／最大時溫度保留但不送出。
+- 圖片 API 的思考強度與溫度完全獨立於主要對話。DeepSeek 空白思考設定解析為高強度；有效思考強度為極低／低／中／高／最大時，溫度保留但不送出。`none` 或未明確控制的 API 預設可送出已設定的溫度。主要模型直接處理模式停用專用欄位，但保留目前內容。
 - 專用辨識結果與圖片及使用者文字的指紋保存在 user 訊息內；`/reload`、`/quick_send` 或訊息編輯的內容完全相同時直接複用，文字或圖片改變才重新辨識。原圖仍保留於聊天與對話存檔。
 - 專用圖片 API 缺少 Key／模型、連線失敗或回傳空白時會停止該回合並套用既有無效對話回滾，不會讓主要模型在沒有圖片資訊時猜測。環境設定的「測試圖片讀取」會實際傳送一張標準 RGBA 32×32 PNG。
 - AI 呼叫紀錄的 purpose 為 `image_understanding`，只保留圖片類型與大小，不保存第二份 Base64。`CHAT_IMAGE_API_KEY` 不加入故事 Key 分頁、作者預設或全局設定匯出。

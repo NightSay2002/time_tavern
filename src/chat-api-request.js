@@ -1,3 +1,5 @@
+import { getGeminiReasoningEfforts } from "./public/chat-api-provider-settings.js";
+
 const DEEPSEEK_REASONING_EFFORTS = new Set(["none", "low", "high", "max"]);
 const GLM_REASONING_EFFORTS = new Set(["none", "low", "high", "max"]);
 
@@ -31,7 +33,7 @@ export function canDisableChatApiReasoning(provider = "", model = "") {
     return major > 4 || (major === 4 && minor >= 5);
   }
   if (normalizedProvider === "gemini") {
-    return /^gemini-2[.]5-(?:flash|flash-lite)(?:-|$)/u.test(normalizedModel);
+    return getGeminiReasoningEfforts(normalizedModel).includes("none");
   }
   if (normalizedProvider === "openai") {
     if (/^gpt-5(?:[.]\d+)?-pro(?:-|$)/u.test(normalizedModel)) {
@@ -47,6 +49,9 @@ export function canSetChatApiReasoningStrength(provider = "", model = "") {
   const normalizedProvider = String(provider || "").trim().toLowerCase();
   if (normalizedProvider === "deepseek") {
     return true;
+  }
+  if (normalizedProvider === "gemini") {
+    return getGeminiReasoningEfforts(model).some((effort) => effort !== "none");
   }
   if (normalizedProvider !== "zhipu") {
     return false;
@@ -72,7 +77,11 @@ export function resolveChatApiReasoningEffort(provider = "", value = "", model =
     }
     return canSetChatApiReasoningStrength(normalizedProvider, model) ? normalized : "";
   }
-  if (["gemini", "openai"].includes(normalizedProvider)) {
+  if (normalizedProvider === "gemini") {
+    const normalized = String(value || "").trim().toLowerCase();
+    return getGeminiReasoningEfforts(model).includes(normalized) ? normalized : "";
+  }
+  if (normalizedProvider === "openai") {
     const normalized = String(value || "").trim().toLowerCase();
     return normalized === "none" && canDisableChatApiReasoning(normalizedProvider, model) ? "none" : "";
   }
@@ -202,7 +211,11 @@ export function buildChatApiRequestBody({
     }
   }
 
-  if (["gemini", "openai"].includes(normalizedProvider) && reasoningEffort === "none" && supportsThinkingToggle) {
+  if (normalizedProvider === "gemini") {
+    const effort = resolveChatApiReasoningEffort(normalizedProvider, reasoningEffort, model);
+    if (effort) requestBody.reasoning_effort = effort;
+  }
+  if (normalizedProvider === "openai" && reasoningEffort === "none" && supportsThinkingToggle) {
     requestBody.reasoning_effort = "none";
   }
 

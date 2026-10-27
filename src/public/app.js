@@ -2,10 +2,11 @@
   canDisableChatApiReasoning,
   createChatApiProviderDrafts,
   getChatApiProviderEnvEntries,
+  getGeminiReasoningEfforts,
   getOfficialChatApiBaseUrl,
   normalizeChatApiProviderSetting,
   resolveChatApiReasoningEffort
-} from "./chat-api-provider-settings.js?v=20261027-single-key";
+} from "./chat-api-provider-settings.js?v=20261028-gemini-reasoning";
 import {
   createUiLanguageController,
   normalizeUiLanguage,
@@ -540,7 +541,9 @@ const ENV_FIELD_GROUPS = [
         options: [
           ["", "使用 API 預設"],
           ["none", "關閉（使用溫度）"],
+          ["minimal", "極低"],
           ["low", "低"],
+          ["medium", "中"],
           ["high", "高"],
           ["max", "最大"]
         ],
@@ -648,7 +651,9 @@ const ENV_FIELD_GROUPS = [
         options: [
           ["", "使用 API 預設"],
           ["none", "關閉（使用溫度）"],
+          ["minimal", "極低"],
           ["low", "低"],
+          ["medium", "中"],
           ["high", "高"],
           ["max", "最大"]
         ],
@@ -2062,8 +2067,10 @@ function syncChatApiReasoningField() {
     return;
   }
   const canDisable = canDisableChatApiReasoning(provider, model);
-  const supportsStrength = provider === "deepseek" ||
-    (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model));
+  const strengths = provider === "gemini" ? getGeminiReasoningEfforts(model)
+    : provider === "deepseek" || (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model))
+      ? ["low", "high", "max"] : [];
+  const supportsStrength = strengths.length > 0;
   const defaultOption = Array.from(input.options || []).find((option) => option.value === "");
   if (defaultOption) {
     defaultOption.textContent = provider === "deepseek"
@@ -2081,12 +2088,13 @@ function syncChatApiReasoningField() {
     }
   }
   Array.from(input.options || []).forEach((option) => {
-    if (!["low", "high", "max"].includes(option.value)) {
+    if (!["minimal", "low", "medium", "high", "max"].includes(option.value)) {
       return;
     }
-    option.disabled = !supportsStrength;
-    option.hidden = !supportsStrength;
-    if (!supportsStrength && input.value === option.value) {
+    const supported = strengths.includes(option.value);
+    option.disabled = !supported;
+    option.hidden = !supported;
+    if (!supported && input.value === option.value) {
       input.value = "";
     }
   });
@@ -2832,8 +2840,10 @@ function syncChatImageApiFields() {
   const reasoningInput = document.getElementById("envField_CHAT_IMAGE_API_REASONING_EFFORT");
   const temperatureInput = document.getElementById("envField_CHAT_IMAGE_API_TEMPERATURE");
   const canDisable = canDisableChatApiReasoning(provider, model);
-  const supportsStrength = provider === "deepseek" ||
-    (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model));
+  const strengths = provider === "gemini" ? getGeminiReasoningEfforts(model)
+    : provider === "deepseek" || (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model))
+      ? ["low", "high", "max"] : [];
+  const supportsStrength = strengths.length > 0;
   [
     "CHAT_IMAGE_API_PROVIDER",
     "CHAT_IMAGE_API_BASE_URL",
@@ -2865,9 +2875,10 @@ function syncChatImageApiFields() {
     Array.from(reasoningInput.options || []).forEach((option) => {
       const supported = option.value === "" ||
         (option.value === "none" && canDisable) ||
-        (["low", "high", "max"].includes(option.value) && supportsStrength);
+        strengths.includes(option.value);
       option.disabled = !supported;
       option.hidden = !supported;
+      if (specialistEnabled && !supported && reasoningInput.value === option.value) reasoningInput.value = "";
     });
     const reasoningDisabled = !specialistEnabled || (!canDisable && !supportsStrength);
     reasoningInput.disabled = reasoningDisabled;
@@ -2880,7 +2891,7 @@ function syncChatImageApiFields() {
       ? selectedEffort || "high"
       : selectedEffort === "none" && canDisable
         ? "none"
-        : ["low", "high", "max"].includes(selectedEffort) && supportsStrength
+        : strengths.includes(selectedEffort)
           ? selectedEffort
           : "";
     const temperatureDisabled = !specialistEnabled || Boolean(effectiveEffort && effectiveEffort !== "none");

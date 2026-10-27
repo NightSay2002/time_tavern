@@ -296,6 +296,17 @@ test("all four real request paths send independently selected inference routes",
   await assert.rejects(scope.callChatApiCompletionStreamRaw({ messages: [] }), /mock transport stopped/u);
   assert.equal(sent.length, requestsBefore + 3, "deployment URL may omit the model");
   assert.ok(sent.slice(requestsBefore).every(request => !Object.hasOwn(request.body, "model")));
+
+  Object.assign(mainConfig, { provider: "gemini", model: "gemini-4-argon", reasoningEffort: "medium", completionsUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" });
+  scope.getChatApiModel = () => mainConfig.model;
+  scope.getChatApiReasoningEffort = () => mainConfig.reasoningEffort;
+  const googleRequestsBefore = sent.length;
+  await scope.testChatApiConnection();
+  await assert.rejects(scope.requestChatImageUnderstanding(), /mock transport stopped/u);
+  await assert.rejects(scope.callChatApiCompletionRaw({ messages: [] }), /mock transport stopped/u);
+  await assert.rejects(scope.callChatApiCompletionStreamRaw({ messages: [] }), /mock transport stopped/u);
+  assert.equal(sent.length, googleRequestsBefore + 4);
+  assert.ok(sent.slice(googleRequestsBefore).every(request => request.body.reasoning_effort === "medium" && request.body.model === "gemini-4-argon"));
 });
 
 test("all OpenRouter key groups are excluded from global and author defaults", () => {

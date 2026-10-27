@@ -63,6 +63,27 @@ export function normalizeChatApiProviderSetting(value = "") {
   return Object.hasOwn(PROVIDER_FIELDS, normalized) ? normalized : "deepseek";
 }
 
+export function getGeminiReasoningEfforts(model = "") {
+  const name = text(model).toLowerCase().replace(/^models\//u, "");
+  const gemini25 = name.match(/^gemini-2[.]5-(flash-lite|flash|pro)(?:-(?:preview(?:-[0-9-]+)?|[0-9-]+))?$/u);
+  if (gemini25) {
+    return [...(gemini25[1] === "pro" ? [] : ["none"]), "low", "medium", "high"];
+  }
+  if (/^gemini-3[.]1-flash-lite-image(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
+    return ["minimal", "high"];
+  }
+  if (/^gemini-3-pro(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
+    return ["low", "high"];
+  }
+  if (/^gemini-(?:4-argon|3[.]8-flash|3[.]1-pro)(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
+    return ["low", "medium", "high"];
+  }
+  if (/^gemini-(?:3[.]6-flash|3[.]5-flash-lite|3[.]1-flash-lite|3-flash|robotics-er-2)(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
+    return ["minimal", "low", "medium", "high"];
+  }
+  return [];
+}
+
 export function canDisableChatApiReasoning(provider = "", model = "") {
   const normalizedProvider = normalizeChatApiProviderSetting(provider);
   const normalizedModel = text(model).toLowerCase();
@@ -79,7 +100,7 @@ export function canDisableChatApiReasoning(provider = "", model = "") {
     return major > 4 || (major === 4 && minor >= 5);
   }
   if (normalizedProvider === "gemini") {
-    return /^gemini-2[.]5-(?:flash|flash-lite)(?:-|$)/u.test(normalizedModel);
+    return getGeminiReasoningEfforts(normalizedModel).includes("none");
   }
   if (normalizedProvider === "openai") {
     if (/^gpt-5(?:[.]\d+)?-pro(?:-|$)/u.test(normalizedModel)) {
