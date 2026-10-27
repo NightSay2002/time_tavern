@@ -29,33 +29,23 @@ test("chat API provider drafts preserve each provider key, model, and base URL",
 
   assert.equal(activeProvider, "deepseek");
   assert.deepEqual(drafts.deepseek, {
-    keyGroups: [{
-      key: "current-deepseek-key",
-      processingKeys: ["current-deepseek-processing-2", "current-deepseek-processing-3"]
-    }],
     key: "current-deepseek-key",
-    processingKeys: ["current-deepseek-processing-2", "current-deepseek-processing-3"],
     model: "deepseek-v4-pro",
     baseUrl: "https://api.deepseek.com"
   });
   assert.deepEqual(drafts.zhipu, {
-    keyGroups: [{
-      key: "saved-zhipu-key",
-      processingKeys: ["saved-zhipu-processing-2"]
-    }],
     key: "saved-zhipu-key",
-    processingKeys: ["saved-zhipu-processing-2"],
     model: "glm-5.3-flash",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4"
   });
 
   const entries = Object.fromEntries(getChatApiProviderEnvEntries(drafts));
   assert.equal(entries.DEEPSEEK_API_KEY, "current-deepseek-key");
-  assert.equal(entries.DEEPSEEK_API_KEY2, "current-deepseek-processing-2");
-  assert.equal(entries.DEEPSEEK_API_KEY3, "current-deepseek-processing-3");
+  assert.equal(entries.DEEPSEEK_API_KEY2, undefined);
+  assert.equal(entries.DEEPSEEK_API_KEY3, undefined);
   assert.equal(entries.DEEPSEEK_MODEL, "deepseek-v4-pro");
   assert.equal(entries.ZHIPU_API_KEY, "saved-zhipu-key");
-  assert.equal(entries.ZHIPU_API_KEY2, "saved-zhipu-processing-2");
+  assert.equal(entries.ZHIPU_API_KEY2, undefined);
   assert.equal(entries.ZHIPU_MODEL, "glm-5.3-flash");
 });
 
@@ -72,15 +62,12 @@ test("provider aliases and custom provider settings normalize without crossing p
   });
   assert.equal(activeProvider, "custom");
   assert.equal(drafts.custom.key, "active-custom-key");
-  assert.deepEqual(drafts.custom.keyGroups, [{ key: "active-custom-key", processingKeys: [] }]);
-  assert.deepEqual(drafts.custom.processingKeys, []);
   assert.equal(drafts.custom.model, "custom-model");
   assert.equal(drafts.custom.baseUrl, "https://example.test/v1");
   assert.equal(drafts.deepseek.key, "saved-deepseek-key");
-  assert.deepEqual(drafts.deepseek.processingKeys, []);
 });
 
-test("provider drafts keep separate large-model processing keys", () => {
+test("legacy processing keys do not replace a missing primary provider key", () => {
   const { activeProvider, drafts } = createChatApiProviderDrafts({
     CHAT_API_PROVIDER: "zhipu",
     CHAT_API_KEY2: "active-glm-processing-2",
@@ -90,9 +77,9 @@ test("provider drafts keep separate large-model processing keys", () => {
   });
 
   assert.equal(activeProvider, "zhipu");
-  assert.deepEqual(drafts.zhipu.processingKeys, ["saved-glm-processing-2"]);
-  assert.deepEqual(drafts.deepseek.processingKeys, ["saved-deepseek-processing-2"]);
-  assert.deepEqual(drafts.openai.processingKeys, ["saved-openai-processing-2"]);
+  assert.equal(drafts.zhipu.key, "");
+  assert.equal(drafts.deepseek.key, "");
+  assert.equal(drafts.openai.key, "");
 });
 
 test("one reasoning field migrates the old provider-specific values", () => {
@@ -106,16 +93,16 @@ test("one reasoning field migrates the old provider-specific values", () => {
 
   assert.equal((webSource.match(/label:\s*"思考模式強度"/gu) || []).length, 1);
   assert.match(webSource, /saveCurrentChatApiProviderDraft\(\);\s+showChatApiProviderDraft\(event\.target\.value\);/u);
-  assert.match(webSource, /processingKeys:\s*collectChatApiProcessingKeyValues\(\)/u);
-  assert.match(webSource, /renderChatApiKeyGroupControls\(\)/u);
+  assert.match(webSource, /key: document\.getElementById\("chatApiPrimaryKeyInput"\)/u);
+  assert.doesNotMatch(webSource, /activeChatApiKeyGroupIndex|chatApiProcessingKeyList/u);
   assert.match(webSource, /getChatApiProviderEnvEntries\(chatApiProviderDrafts\)/u);
   assert.match(webSource, /Object\.keys\(ENV_ALIAS_KEYS\)\.forEach\(\(key\) => ENV_KNOWN_KEYS\.add\(key\)\)/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "DEEPSEEK_REASONING_EFFORT"/u);
   assert.match(serverSource, /"CHAT_API_REASONING_EFFORT", "GLM_REASONING_EFFORT"/u);
-  assert.match(serverSource, /getChatApiProviderKeyAliases\(provider\)/u);
+  assert.match(serverSource, /resolveChatApiKey\(envSource, provider\)/u);
 });
 
-test("provider drafts preserve multiple general-purpose key groups", () => {
+test("provider drafts keep the primary key and drop old group credentials on save", () => {
   const { drafts } = createChatApiProviderDrafts({
     CHAT_API_PROVIDER: "deepseek",
     CHAT_API_KEY: "story-key-1",
@@ -123,16 +110,14 @@ test("provider drafts preserve multiple general-purpose key groups", () => {
     CHAT_API_KEY_GROUP2: "story-key-2",
     CHAT_API_KEY_GROUP2_2: "model-key-2"
   });
-  assert.deepEqual(drafts.deepseek.keyGroups, [
-    { key: "story-key-1", processingKeys: ["model-key-1"] },
-    { key: "story-key-2", processingKeys: ["model-key-2"] }
-  ]);
+  assert.equal(drafts.deepseek.key, "story-key-1");
   const entries = Object.fromEntries(getChatApiProviderEnvEntries(drafts));
-  assert.equal(entries.DEEPSEEK_API_KEY_GROUP2, "story-key-2");
-  assert.equal(entries.DEEPSEEK_API_KEY_GROUP2_2, "model-key-2");
+  assert.equal(entries.DEEPSEEK_API_KEY, "story-key-1");
+  assert.equal(entries.DEEPSEEK_API_KEY_GROUP2, undefined);
+  assert.equal(entries.DEEPSEEK_API_KEY_GROUP2_2, undefined);
 });
 
-test("provider key groups remain isolated after saving and switching providers", () => {
+test("provider keys remain isolated after saving and switching providers", () => {
   const initial = createChatApiProviderDrafts({
     CHAT_API_PROVIDER: "deepseek",
     CHAT_API_KEY: "stale-generic-1",
@@ -150,14 +135,8 @@ test("provider key groups remain isolated after saving and switching providers",
     CHAT_API_KEY_GROUP2: "another-stale-generic-2"
   });
 
-  assert.deepEqual(switched.drafts.deepseek.keyGroups.map((group) => group.key), [
-    "deepseek-active-1",
-    "deepseek-active-2"
-  ]);
-  assert.deepEqual(switched.drafts.zhipu.keyGroups.map((group) => group.key), [
-    "zhipu-saved-1",
-    "zhipu-saved-2"
-  ]);
+  assert.equal(switched.drafts.deepseek.key, "deepseek-active-1");
+  assert.equal(switched.drafts.zhipu.key, "zhipu-saved-1");
 });
 
 test("web reasoning controls use the same provider and model capability matrix", () => {

@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$MinimumNodeMajor = 18
+$MinimumNodeVersion = [version]"18.17.0"
 $NodeReleaseMajor = if ($env:TIME_TAVERN_NODE_RELEASE_MAJOR) {
   $env:TIME_TAVERN_NODE_RELEASE_MAJOR
 } else {
@@ -14,14 +14,14 @@ $RuntimeRoot = Join-Path $ProjectRoot ".runtime"
 $NodeHome = Join-Path $RuntimeRoot "node"
 $NodeBinary = Join-Path $NodeHome "node.exe"
 
-function Get-NodeMajor([string]$Executable) {
+function Get-NodeVersion([string]$Executable) {
   if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-    return 0
+    return [version]"0.0.0"
   }
   try {
-    return [int](& $Executable -p 'Number(process.versions.node.split(".")[0])')
+    return [version](& $Executable -p 'process.versions.node')
   } catch {
-    return 0
+    return [version]"0.0.0"
   }
 }
 
@@ -39,7 +39,7 @@ function Invoke-Download([string]$Uri, [string]$OutputFile) {
   }
 }
 
-if ((Get-NodeMajor $NodeBinary) -ge $MinimumNodeMajor) {
+if ((Get-NodeVersion $NodeBinary) -ge $MinimumNodeVersion) {
   exit 0
 }
 
@@ -100,8 +100,8 @@ try {
 
   $ExtractedNodeBinary = Join-Path $ExtractedNodeHome.FullName "node.exe"
   $ExtractedNpmCommand = Join-Path $ExtractedNodeHome.FullName "npm.cmd"
-  if ((Get-NodeMajor $ExtractedNodeBinary) -lt $MinimumNodeMajor) {
-    throw "The downloaded Node.js version does not satisfy Node.js >= $MinimumNodeMajor."
+  if ((Get-NodeVersion $ExtractedNodeBinary) -lt $MinimumNodeVersion) {
+    throw "The downloaded Node.js version does not satisfy Node.js >= $MinimumNodeVersion."
   }
   if (-not (Test-Path -LiteralPath $ExtractedNpmCommand -PathType Leaf)) {
     throw "The downloaded Node.js archive does not include npm."

@@ -7,7 +7,7 @@
 - 切到專案根目錄。
 - 根目錄缺少 `.env` 時，先從 `data/environment.env` 還原。
 - 從 `.env` 讀取 `PORT`，沒有就用 `3234`。
-- 檢查系統 `node` 是否至少為 18 且有 npm；不符合時從 Node.js 官方下載最新 24.x LTS 到 `.runtime/node/`。
+- 檢查系統 `node` 是否至少為 18.17 且有 npm；不符合時從 Node.js 官方下載最新 24.x LTS 到 `.runtime/node/`。
 - 下載的專案 Node.js 會比對官方 `SHASUMS256.txt`，不符合時停止啟動；不需要管理員權限，也不修改系統 Node.js。
 - 檢查 `node_modules/discord.js` 與 `node_modules/opencc-js` 等必要執行依賴，缺少時執行 `npm install`。
 - 打開 `http://localhost:<PORT>`。
@@ -31,7 +31,10 @@
 | `CHAT_API_PROVIDER` | `deepseek` | `deepseek`、`openai`、`gemini`、`zhipu`、`openrouter`、`custom`。 |
 | `CHAT_API_RETRY_COUNT` | `3` | 連線及暫時性 HTTP 失敗的額外重試次數，0–20；20 表示首次加上重試最多 21 次。 |
 | `CHAT_API_OPENROUTER_PROVIDER` | 空白 | OpenRouter 推理供應商 slug，例如 `deepinfra`；可選精確端點如 `deepinfra/fp8`。空白自動路由。 |
-| `CHAT_API_KEY` | 空 | Key 1 的主聊天、補寫及角色卡助手 Key。舊設定直接沿用，不需遷移。 |
+| `CHAT_API_KEY` | 空 | 正文、補寫、角色卡助手、壓縮、大模型處理與所有故事共用的對話 Key。舊版主 Key 直接沿用。 |
+| `API_PROXY_URL` | 空 | HTTP／HTTPS 網路代理網址，亦接受 `主機:連接埠`，未指定協定時使用 HTTP；留空直接連線。 |
+| `API_PROXY_USERNAME` | 空 | Proxy Basic 認證使用者名稱。 |
+| `API_PROXY_PASSWORD` | 空 | Proxy 密碼；無認證代理可留空。 |
 | `CHAT_API_BASE_URL` | 依 provider | 只有 `custom` 讀取此值；可填 Base URL 或完整 Chat Completions 路線。其他 provider 固定使用官方網址。 |
 | `CHAT_API_MODEL` | `deepseek-v4-pro` | 主對話模型；Base URL 是完整 deployment URL 時可留空。 |
 | `DEEPSEEK_*` / `OPENAI_*` / `GEMINI_*` / `ZHIPU_*` / `OPENROUTER_*` / `CUSTOM_*` | 空 | 網頁環境設定分開保存各供應商先前使用的 Key、模型與 Base URL；目前供應商的專屬 Key 優先，`CHAT_API_KEY` 只作舊設定後備，執行時不讀取其他供應商的 Key。官方 provider 的 Base URL 覆寫不再生效。 |
@@ -50,9 +53,6 @@
 | `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，可設 `none`、`low`、`high`、`max`。 |
 | `CHAT_IMAGE_API_TEMPERATURE` | API 預設 | 圖片模型獨立 temperature，範圍 `0–2`；思考開啟時不送出。 |
 | `CHAT_IMAGE_API_KEY` | 空 | 專用圖片 API Key；只保存於 `.env` 與 `data/environment.env`。 |
-| `CHAT_API_KEY2` / `CHAT_API_KEY3` | 空 | Key 1 組內的大模型內容處理 Key，按啟用的大模型順序使用；不足時沿用該組最後一把。 |
-| `CHAT_API_KEY_GROUP2` | 空 | Key 2 的主對話 Key；更多分頁依序使用 `CHAT_API_KEY_GROUP3...`。 |
-| `CHAT_API_KEY_GROUP2_2` / `CHAT_API_KEY_GROUP2_3` | 空 | Key 2 組內的大模型內容處理 Key；其他分頁使用相同命名規則。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
@@ -92,7 +92,7 @@ Provider 固定 Base URL（對話與圖片處理共用此對照）：
 
 舊設定若在官方 provider 填了代理、不同區域或 deployment 網址，請改選 `custom`，填回原網址及該服務的 Key／模型；不會自動搬移或混用不同供應商的 Key。圖片 API 同樣適用，且「主要模型直接處理」仍會停用專用欄位並保留內容。
 
-兩組模型欄位都有「取得模型清單」，由本地 server 以尚未保存的設定呼叫 `{base}/models`。對話清單使用目前 Key 分頁的主 Key，圖片清單使用獨立圖片 Key；不租用故事 Key、不呼叫生成、不寫入 AI logs、存檔或 localStorage。選項按模型 ID 排序，可搜尋及手動輸入；刷新不會改掉目前模型。切換供應商、Key 或網址會清掉舊選項，較晚返回的舊請求不會覆蓋新設定。
+兩組模型欄位都有「取得模型清單」，由本地 server 以尚未保存的設定呼叫 `{base}/models`。對話清單使用共用對話 Key，圖片清單使用獨立圖片 Key；不呼叫生成、不寫入 AI logs、存檔或 localStorage。選項按模型 ID 排序，可搜尋及手動輸入；刷新不會改掉目前模型。切換供應商、Key 或網址會清掉舊選項，較晚返回的舊請求不會覆蓋新設定。
 
 [DeepSeek](https://api-docs.deepseek.com/api/list-models)、[OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[Gemini](https://ai.google.dev/gemini-api/docs/openai#list_models) 與 [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/get-models) 提供模型列表介面。智譜目前未在官方文件公開通用 `/models`，因此停用清單按鈕，改連結[官方模型總覽](https://docs.bigmodel.cn/cn/guide/start/model-overview)，由使用者填入模型。自訂服務嘗試標準 `/models`；完整 deployment 網址不猜測清單路線。清單不保證聊天或圖片能力，圖片請另用「測試圖片讀取」驗證。DeepSeek、OpenAI、Gemini 的清單不含價格，介面提供官方計費連結，不估造價目。若顯示本機沒有清單介面，請重啟服務並重新整理頁面。
 
@@ -100,9 +100,17 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 
 端點表列出輸入、輸出、快取及其他已提供費率、上下文與輸出上限。token 費率由 USD/token 換算為 USD/百萬 tokens；圖片、請求、搜尋按次／張列出。缺少價格顯示「未提供」，只有明確的 0 才是免費。模型總清單的價格是跨供應商起價，不能當作指定端點價格；實際收費、長上下文與帳號限制以 OpenRouter 為準。AI logs 採用 OpenRouter 回傳的 `usage.cost`（USD），不套用直連 DeepSeek 價格表；未回傳費用不猜測。
 
-指定供應商時，連接測試、正文串流、助手、壓縮、補寫與圖片理解均送出 `provider.only`、`provider.order` 及 `allow_fallbacks:false`；根 slug 包含其區域／量化端點，選表格端點則固定完整 tag。空白使用 OpenRouter 自動路由。詳見[官方路由規則](https://openrouter.ai/docs/guides/routing/provider-selection)。兩組路由設定互相獨立，不改動故事 Key 租用；Key 仍不進入全局匯出或作者預設。清單請求只用目前欄位的 Key，不呼叫付費生成。
+指定供應商時，連接測試、正文串流、助手、壓縮、補寫與圖片理解均送出 `provider.only`、`provider.order` 及 `allow_fallbacks:false`；根 slug 包含其區域／量化端點，選表格端點則固定完整 tag。空白使用 OpenRouter 自動路由。詳見[官方路由規則](https://openrouter.ai/docs/guides/routing/provider-selection)。對話與圖片路由設定互相獨立；Key 仍不進入全局匯出或作者預設。清單請求只用目前欄位的 Key，不呼叫付費生成。
 
 環境設定的「測試連線」不傳 `temperature`，由 deployment 使用模型預設值；正式對話仍依 `CHAT_API_TEMPERATURE` 設定送出溫度。
+
+舊版 `CHAT_API_KEY2`、`CHAT_API_KEY_GROUP2` 及供應商的編號／分組 Key 已停用；原主 Key 與各供應商保存的主 Key 繼續使用，保存環境設定時會移除舊欄位。舊故事的 Key 租用資料不再讀取，頻道、對話與存檔維持原樣。專用圖片理解及 NovelAI 使用各自服務的憑證，不會將對話 Key 傳到不同服務。
+
+快取命中主要取決於模型、相同內容前綴、有效期及實際服務端路由。[DeepSeek](https://api-docs.deepseek.com/guides/kv_cache/) 說明自動前綴快取與 best-effort 命中，未承諾每個故事分配一把 API Key 能提升命中率；[OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching) 說明組織與區域隔離，以及模型相關的快取路由；[OpenRouter](https://openrouter.ai/docs/guides/best-practices/prompt-caching) 則受實際推理供應商與端點影響。因此本程式不再以分 Key 提高命中率，也不保證不同帳戶、組織或代理之間共用快取；`prompt_cache_key` 等快取參數與登入用的 API Key 不同。實際命中仍以 API 回傳的 usage 為準。
+
+「API Proxy」是連線代理，不是 API Base URL。所有供應商（包含使用固定官方網址者）的對話串流、正文、壓縮、大模型、補寫、專用圖片理解、NovelAI 及模型／供應商清單都會經過它。連接測試與清單查詢使用表單內尚未保存的 Proxy；保存後，下一次正式請求立即生效，原有請求可完成。關閉代理只需清空 `API_PROXY_URL`。Discord／QQ Bot、附件下載、Git、npm 與瀏覽器連線不套用此代理。
+
+例如 `API_PROXY_URL=http://proxy.example.com:8080`，帳號與密碼分別填入其他兩欄；也支援 `http://使用者:密碼@主機:連接埠`，特殊字元需 URL 編碼，兩個獨立認證欄位有值時優先使用。HTTPS 代理與上游 HTTPS 均維持憑證驗證；代理失敗不自動改成直連，生成仍受既有逾時、重試及停止控制。僅支援 HTTP／HTTPS，未支援 SOCKS。三項 Proxy 設定只保存於 `.env` 與 `data/environment.env`，不放入全局設定匯出、作者預設或 AI logs；匯入全局設定仍保留目前本機 Proxy。
 
 環境設定的「API 失敗重試次數」對應 `CHAT_API_RETRY_COUNT`，保存後下一次請求生效。未設定、空白或無效值預設額外重試 3 次；0 關閉重試，整數上限 20，負數視為 0、過大值限制為 20。只重送同一份模型請求，沿用原 Key、模型、路由和訊息，不重跑整個對話工作流，不重複執行已完成的壓縮或跑圖動作。
 
@@ -194,7 +202,7 @@ Prompt 與大模型：
 - 建立新助手時依序填寫名稱、簡介、Prompt 與開場對白；Prompt 不會自動帶入寫卡助手內容。
 - 助手模式把 `{{user}}` 當作普通字面內容，不會替換成使用者或角色名稱；角色卡模式維持原有模板替換。
 - 串流生成會先顯示思考/生成過程，正文出現後替換正式內容。
-- `/stop` 或網頁停止按鈕在生成中會取消目前生成；閒置時會釋放目前故事租用的對話 API Key，但不刪除故事或頻道。
+- `/stop` 或網頁停止按鈕會取消目前故事的生成；閒置時只提示沒有正在生成的對話，不修改 Key、故事或頻道。
 - 編輯網頁使用者訊息或 Discord 原始訊息時，會刪除後續分支並重新生成。
 - 編輯較早輸入時會回復該回合前的日期、時間段、切換計數、壓縮內容與目前角色劇情狀態；統計判斷的啟用狀態、時間段更改詞、其他關鍵詞、自動切換設定、正文模型、上下文輪數及其他角色卡狀態均保留目前值。
 - 網頁輸入列可預覽及移除待上傳圖片；Discord 私訊與已啟用頻道會讀取訊息中的支援圖片附件。
@@ -265,7 +273,7 @@ Slash 指令：
 | --- | --- | --- |
 | `/ai_start` | 選填 `num`、選填 `opening` | `num` 未填時等同 `0`，使用該頻道目前角色卡或助手；`1...N` 使用角色卡編號。`opening` 從 `1` 開始，未填時使用角色卡設定的預設開場。 |
 | `/ai_status` | `num` | 只接受數字 `1` 或 `2`：`1` 查看目前頻道狀態；`2` 使用四個按鈕分別切換角色卡及其開場預覽。 |
-| `/stop` | 無 | 生成中停止目前生成；閒置時釋放目前故事租用的 Key，故事仍保留。 |
+| `/stop` | 無 | 停止目前故事的生成；閒置時提示沒有正在生成的對話。 |
 | `/close` | 無 | 關閉並刪除目前 Discord 頻道或私訊的故事；已建立的對話存檔不受影響。 |
 | `/player_set` | `number` | 把自己設定為指定玩家。 |
 | `/reload` | `num`、`comment` | 直接改寫倒數第 `num` 次使用者輸入並重新生成；`1` 代表最近一次。 |
@@ -279,8 +287,8 @@ Discord 行為：
 - Bot 新加入伺服器時，會優先在系統頻道、否則在第一個有權發言的文字頻道送出私人聊天與 `/ai_start` 使用說明。
 - 應用程式安裝到使用者帳號時，`APPLICATION_AUTHORIZED` Webhook 會觸發 Bot 私訊使用說明。
 - 每個伺服器頻道與 Bot 私訊各自保存角色、對話、回合、時間、壓縮內容、模型狀態及玩家分配；在不同頻道使用 `/ai_start` 或 `/archive_return` 不會覆蓋其他頻道故事。AI 呼叫紀錄不按頻道拆分，所有故事共用同一份最近 200 筆紀錄。
-- 每個新故事自動租用目前對話 API 供應商最前面的閒置 Key 組，Key 1 優先；切換供應商會清除舊租用，現有故事在下一次呼叫時改用新供應商重新分配。其他供應商保存的 Key 與分頁不會加入租用，也不會作為失敗回退；新供應商沒有 Key 時會要求先到環境設定填寫。每次實際 AI 呼叫會延長 24 小時，超過 24 小時沒有 AI 活動的組可由新故事接手。所有已設定組都忙碌時會要求新增 Key 組，不會讓兩個活躍故事偷偷共用。
-- 使用網頁刪除或 `/close` 會立即釋放該故事的 Key 組；直接刪除 Discord 頻道也會由 Bot 收到的 `channelDelete` 事件釋放。Bot 重啟不會因頻道查詢失敗或暫時不可見而刪除故事。已建立的對話存檔不受影響。
+- 所有故事、正文、助手、壓縮、補寫及大模型處理共用目前對話供應商的一把主 Key。切換供應商後，所有故事的下一次請求立即使用新供應商的 Key；缺少 Key 時要求設定，不讀取其他供應商的 Key。已移除 Key 分組、額外處理 Key 與 24 小時租用限制；供應商自身的限流、餘額及模型權限仍然適用。
+- 使用網頁刪除、`/close` 或 Discord `channelDelete` 只移除對應故事，不修改共用 Key。Bot 重啟不會因頻道查詢失敗或暫時不可見而刪除故事。已建立的對話存檔不受影響。
 - `/ai_start` 使用目前角色卡及其預設開場；`/ai_start num:22` 使用第 22 張角色卡設定的預設開場；`/ai_start num:22 opening:2` 明確使用開場 2。明確指定的開場只屬於目前頻道，不修改角色卡的全域預設。
 - `/ai_status num:2` 顯示 `預覽（目前開場/開場總數）`；上一張／下一張會回到該卡開場 1，另外兩個按鈕只切換目前角色卡的開場。
 - 角色卡預覽的四個按鈕各自使用唯一 ID；即使位於第一張、最後一張或角色卡沒有多個開場，Discord 也不會因停用按鈕的 ID 重複而拒絕回覆。
@@ -309,7 +317,7 @@ Discord Developer Portal 設定：
 - 只訂閱與處理 `C2C_MESSAGE_CREATE`，不處理群聊、QQ 頻道或主動通知。
 - 在 QQ 開放平台建立官方機器人後，把 AppID 與 AppSecret 填入環境設定並重啟 server；本地 server 透過 Gateway WebSocket 收訊，不需要公開 webhook。
 - 使用者私訊時直接對話，不需要 QQ 指令。該 OpenID 尚未開始故事時，會自動使用網頁目前選中的角色卡或助手；完全未選卡時才提示回網頁選擇。
-- 每個 OpenID 使用獨立 `qq:c2c:*` context，分開保存對話、回合、時間、壓縮內容、角色 runtime、AI logs 與 API Key 租用狀態；網頁的故事選擇器可切換或刪除，已建立存檔不受影響。
+- 每個 OpenID 使用獨立 `qq:c2c:*` context，分開保存對話、回合、時間、壓縮內容及角色 runtime；AI logs 與對話 Key 共用。網頁的故事選擇器可切換或刪除，已建立存檔不受影響。
 - 支援私聊文字與 PNG、JPEG、WebP、GIF 圖片附件；背景跑圖屬於該次私聊回覆。QQ Bot 不支援 Discord Slash 指令、存檔瀏覽按鈕、玩家座位或反應回饋。
 - `QQ_ALLOWED_USER_OPENID` 留空時接受所有能私訊 Bot 的使用者；設定後，其他 OpenID 的訊息會直接忽略。
 
@@ -322,7 +330,7 @@ QQ 私聊文字指令同時接受半形 `!` 與全形 `！`；`!開始` 與 `!�
 | `!ai_start [角色卡編號] [開場編號]` | 開始或重新開始故事；未填角色卡編號時使用目前角色或助手。 |
 | `!ai_status 1` | 查看目前角色、故事狀態與回合。 |
 | `!ai_status 2 [頁數]` | 每頁列出 10 張角色卡及開場數量。 |
-| `!stop` | 生成中停止目前生成；閒置時釋放目前 QQ 故事租用的 Key。 |
+| `!stop` | 停止目前 QQ 故事的生成；閒置時提示沒有正在生成的對話。 |
 | `!close` | 刪除目前 QQ 故事並釋放 Key；已建立存檔保留。 |
 | `!archive 0 [名稱]` | 保存目前 QQ 對話。 |
 | `!archive 1 [存檔編號]` | 查看指定存檔的資料及最後五回合；未填編號時查看最新一份。 |
@@ -405,7 +413,7 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 | `POST` | `/api/messages/:id/replay-edit` | 編輯 user 訊息並重跑。 |
 | `POST` | `/api/messages/:id/feedback` | 喜歡 / 不喜歡 / 取消回饋。 |
 | `POST` | `/api/chat/send-stream` | 網頁串流送出一輪對話。 |
-| `POST` | `/api/chat/stop` | 生成中停止目前生成；閒置時釋放目前故事租用的 Key。 |
+| `POST` | `/api/chat/stop` | 停止目前故事的生成；閒置時不修改 Key 或故事。 |
 | `POST` | `/api/chat/reload` | 依 `num`、`comment` 改寫較早的使用者輸入並重算。 |
 | `GET` / `POST` | `/api/sessions`、`/api/sessions/save` | 列出或建立網頁對話存檔。 |
 | `GET` / `DELETE` | `/api/sessions/:id` | 預覽或刪除網頁對話存檔。 |

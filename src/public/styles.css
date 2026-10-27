@@ -582,33 +582,6 @@ button {
   color: #ffbadf;
 }
 
-.chat-api-key-groups {
-  display: grid;
-  gap: 10px;
-}
-
-.chat-api-key-tabs {
-  align-items: end;
-}
-
-.chat-api-key-tab-add {
-  width: 42px;
-  min-width: 42px;
-  min-height: 38px;
-  margin-left: 4px;
-  padding: 6px;
-}
-
-.chat-api-key-grid,
-.chat-api-processing-key-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.chat-api-processing-key-list {
-  display: contents;
-}
 
 .chat-api-key-field {
   min-width: 0;
@@ -634,22 +607,6 @@ button {
   min-width: 0;
 }
 
-.chat-api-key-field button {
-  width: auto;
-  min-width: 66px;
-}
-
-.chat-api-processing-key-add {
-  width: auto;
-  justify-self: start;
-}
-
-@media (max-width: 720px) {
-  .chat-api-key-grid,
-  .chat-api-processing-key-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 
 .mode-editor-row {
   display: grid;
@@ -3744,14 +3701,6 @@ body.novelai-studio-body .novelai-small-preview {
   flex-wrap: wrap;
 }
 
-.chat-api-processing-keys {
-  display: grid;
-  gap: 8px;
-}
-
-.chat-api-processing-key-list {
-  margin: 0;
-}
 
 .env-test-status {
   color: var(--muted);

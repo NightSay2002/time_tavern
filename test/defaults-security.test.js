@@ -17,6 +17,9 @@ test("published defaults exclude bot credentials and identifiers", () => {
   assert.equal(Object.hasOwn(environmentValues, "QQ_BOT_APP_SECRET"), false);
   assert.equal(Object.hasOwn(environmentValues, "QQ_ALLOWED_USER_OPENID"), false);
   assert.equal(Object.hasOwn(environmentValues, "CHAT_IMAGE_API_KEY"), false);
+  for (const key of ["API_PROXY_URL", "API_PROXY_USERNAME", "API_PROXY_PASSWORD"]) {
+    assert.equal(Object.hasOwn(environmentValues, key), false);
+  }
   assert.deepEqual(
     Object.keys(environmentValues).filter((key) => /(?:^|_)API_KEY$/u.test(key)),
     []

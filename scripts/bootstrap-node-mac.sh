@@ -13,9 +13,13 @@ node_major() {
   "$1" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || printf '0\n'
 }
 
+node_is_supported() {
+  "$1" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 18 || (major === 18 && minor >= 17) ? 0 : 1)' 2>/dev/null
+}
+
 if [ -x "$NODE_BINARY" ]; then
   INSTALLED_MAJOR=$(node_major "$NODE_BINARY")
-  if [[ "$INSTALLED_MAJOR" == <-> ]] && (( INSTALLED_MAJOR >= MINIMUM_NODE_MAJOR )); then
+  if [[ "$INSTALLED_MAJOR" == <-> ]] && (( INSTALLED_MAJOR >= MINIMUM_NODE_MAJOR )) && node_is_supported "$NODE_BINARY"; then
     exit 0
   fi
 fi
@@ -83,8 +87,8 @@ if [ -z "$EXTRACTED_NODE_DIR" ] ||
 fi
 
 DOWNLOADED_MAJOR=$(node_major "$EXTRACTED_NODE_DIR/bin/node")
-if [[ "$DOWNLOADED_MAJOR" != <-> ]] || (( DOWNLOADED_MAJOR < MINIMUM_NODE_MAJOR )); then
-  echo "The downloaded Node.js version does not satisfy Node.js >= ${MINIMUM_NODE_MAJOR}." >&2
+if [[ "$DOWNLOADED_MAJOR" != <-> ]] || (( DOWNLOADED_MAJOR < MINIMUM_NODE_MAJOR )) || ! node_is_supported "$EXTRACTED_NODE_DIR/bin/node"; then
+  echo "The downloaded Node.js version does not satisfy Node.js >= 18.17." >&2
   exit 1
 fi
 

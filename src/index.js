@@ -98,17 +98,8 @@ import {
   listOpenRouterModelEndpoints,
   resolveChatApiModelForEndpoint
 } from "./chat-api-endpoint.js";
-import {
-  claimConversationApiKeySlot,
-  normalizeConversationApiKeyAssignments,
-  releaseConversationApiKeySlot
-} from "./chat-api-key-leases.js";
-import {
-  getChatApiProviderKeyAliases,
-  listConfiguredChatApiKeyGroupSlots,
-  resolveChatApiKeyGroupPrimaryKey,
-  shouldResetConversationApiKeyAssignments
-} from "./chat-api-key-config.js";
+import { resolveChatApiKey } from "./chat-api-key-config.js";
+import { fetchModelApi } from "./api-proxy.js";
 import {
   appendChatImageAnalysisToModelContent,
   buildMultimodalMessageContent,
@@ -195,7 +186,10 @@ const DEFAULT_ENV_EXCLUDED_KEYS = new Set([
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
   "ZHIPU_API_KEY",
-  "BIGMODEL_API_KEY"
+  "BIGMODEL_API_KEY",
+  "API_PROXY_URL",
+  "API_PROXY_USERNAME",
+  "API_PROXY_PASSWORD"
 ]);
 let lastPersistedCardStateContent = "";
 let lastPersistedAiLogsFingerprint = "";
@@ -441,13 +435,13 @@ function isDefaultEnvSecretKey(key = "") {
   if (!normalizedKey) {
     return true;
   }
-  if (/^CHAT_API_KEY[2-9]\d*$/iu.test(normalizedKey)) {
+  if (/^CHAT_API_KEY[1-9]\d*$/iu.test(normalizedKey)) {
     return true;
   }
-  if (/^(?:CONVERSATION_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_KEY)[2-9]\d*$/iu.test(normalizedKey)) {
+  if (/^(?:CONVERSATION_API_KEY|DEEPSEEK_API_KEY|DEEPSEEK_KEY)[1-9]\d*$/iu.test(normalizedKey)) {
     return true;
   }
-  if (/^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|OPENROUTER_API_KEY|CUSTOM_API_KEY)_GROUP[2-9]\d*(?:_[2-9]\d*)?$/iu.test(normalizedKey)) {
+  if (/^(?:CHAT_API_KEY|CONVERSATION_API_KEY|DEEPSEEK_(?:API_)?KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZHIPU_API_KEY|BIGMODEL_API_KEY|OPENROUTER_API_KEY|CUSTOM_API_KEY)_GROUP[1-9]\d*(?:_[1-9]\d*)?$/iu.test(normalizedKey)) {
     return true;
   }
   if (DEFAULT_ENV_EXCLUDED_KEYS.has(normalizedKey.toUpperCase())) {
@@ -917,7 +911,7 @@ const DISCORD_SLASH_COMMANDS = [
   },
   {
     name: "stop",
-    description: "停止目前生成；閒置時釋放目前故事租用的 Key"
+    description: "停止目前生成"
   },
   {
     name: "close",
@@ -1225,7 +1219,6 @@ function createDefaultState() {
     activeSavedSessionId: null,
     selectedConversationContextId: LOCAL_CONVERSATION_CONTEXT_ID,
     conversationContextIndex: {},
-    conversationApiKeyAssignments: {},
     conversationContextStorageVersion: 0,
     sharedAiLogStorageVersion: 0,
     selectedOpeningDialogueId: "",
@@ -2049,7 +2042,6 @@ function loadState() {
       selectedConversationContextId: normalizeConversationContextId(parsed.selectedConversationContextId) ||
         LOCAL_CONVERSATION_CONTEXT_ID,
       conversationContextIndex: normalizeConversationContextIndex(parsed.conversationContextIndex),
-      conversationApiKeyAssignments: normalizeConversationApiKeyAssignments(parsed.conversationApiKeyAssignments),
       conversationContextStorageVersion: Math.max(0, Number.parseInt(parsed.conversationContextStorageVersion, 10) || 0),
       sharedAiLogStorageVersion: Math.max(0, Number.parseInt(parsed.sharedAiLogStorageVersion, 10) || 0),
       selectedOpeningDialogueId: safeText(parsed.selectedOpeningDialogueId)
@@ -2131,7 +2123,6 @@ function saveState(state) {
   state.selectedConversationContextId = normalizeConversationContextId(state.selectedConversationContextId) ||
     LOCAL_CONVERSATION_CONTEXT_ID;
   state.conversationContextIndex = normalizeConversationContextIndex(state.conversationContextIndex);
-  state.conversationApiKeyAssignments = normalizeConversationApiKeyAssignments(state.conversationApiKeyAssignments);
   state.conversationContextStorageVersion = CONVERSATION_CONTEXT_STORAGE_VERSION;
   state.turnState = normalizeTurnState(state.turnState, state);
   state.discordPlayers = normalizeDiscordPlayerState(state.discordPlayers);
@@ -2964,17 +2955,13 @@ function getConversationContextLabel(metadata = {}, language = UI_LANGUAGE_TRADI
 
 function listConversationContexts(currentState) {
   const language = normalizeUiLanguage(currentState.uiLanguage);
-  const assignments = normalizeConversationApiKeyAssignments(currentState.conversationApiKeyAssignments);
   const localMetadata = normalizeConversationContextMetadata({}, LOCAL_CONVERSATION_CONTEXT_ID);
   const remoteContexts = Object.values(normalizeConversationContextIndex(currentState.conversationContextIndex))
     .sort((left, right) => safeText(right.updatedAt).localeCompare(safeText(left.updatedAt)));
   return [localMetadata, ...remoteContexts].map((metadata) => {
-    const assignment = assignments[metadata.id];
     return {
       ...metadata,
-      label: getConversationContextLabel(metadata, language),
-      keyGroup: assignment?.slot || null,
-      keyLastUsedAt: assignment?.lastUsedAt || ""
+      label: getConversationContextLabel(metadata, language)
     };
   });
 }
@@ -3055,10 +3042,6 @@ function deleteConversationContext(currentState, requestedContextId = "") {
 
   currentState.conversationContextIndex = normalizeConversationContextIndex(currentState.conversationContextIndex);
   delete currentState.conversationContextIndex[contextId];
-  currentState.conversationApiKeyAssignments = releaseConversationApiKeySlot(
-    currentState.conversationApiKeyAssignments,
-    contextId
-  );
   fs.rmSync(getConversationContextFilePath(contextId), { force: true });
   conversationImageReferencesByContext.delete(contextId);
   saveState(currentState);
@@ -3859,7 +3842,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = NOVELAI_REQUEST_T
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
   try {
-    return await fetch(url, {
+    return await fetchModelApi(url, {
       ...options,
       signal: controller.signal
     });
@@ -8946,12 +8929,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         const imageContextId = normalizeConversationContextId(activeConversationExecutionContextId) ||
           normalizeConversationContextId(currentState.selectedConversationContextId) ||
           LOCAL_CONVERSATION_CONTEXT_ID;
-        const imageKeyAssignment = assignConversationApiKeyGroup(currentState, {
-          contextId: imageContextId
-        });
-        if (!imageKeyAssignment.ok) {
-          throw new Error(imageKeyAssignment.error);
-        }
+        getChatApiKey();
         const imageContext = {
           currentState: cloneData(currentState, {}),
           contextId: imageContextId,
@@ -9372,122 +9350,11 @@ function isModelImagePromptPurpose(purpose = "") {
   return isContextCompressionPurpose(purpose) && safeText(purpose).split(":").includes("image_prompt");
 }
 
-function getChatApiKeyGroupPrimaryKey(slot = 1, envSource = process.env) {
-  const groupSlot = Math.max(1, Number.parseInt(slot, 10) || 1);
+function getPrimaryChatApiKey(envSource = process.env) {
   const provider = normalizeChatApiProvider(
     envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
-  return resolveChatApiKeyGroupPrimaryKey(envSource, provider, groupSlot);
-}
-
-function getPrimaryChatApiKey(slot = 1, envSource = process.env) {
-  return getChatApiKeyGroupPrimaryKey(slot, envSource);
-}
-
-function getChatApiProcessingKeyEntries(envSource = process.env, slot = 1) {
-  const source = envSource && typeof envSource === "object" ? envSource : {};
-  const collectEntries = (prefixes) => Object.entries(source)
-    .map(([key, value]) => {
-      const prefix = prefixes.find((candidate) => key.startsWith(candidate));
-      if (!prefix) {
-        return null;
-      }
-      const suffix = key.slice(prefix.length);
-      if (!/^[2-9]\d*$/u.test(suffix)) {
-        return null;
-      }
-      const text = safeText(value);
-      return text ? { index: Number(suffix), value: text } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.index - b.index);
-
-  const groupSlot = Math.max(1, Number.parseInt(slot, 10) || 1);
-  const provider = normalizeChatApiProvider(
-    envObjectFirstText(source, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
-  );
-  let providerPrefixes = getChatApiProviderKeyAliases(provider);
-  if (provider === "deepseek") {
-    providerPrefixes.push("DEEPSEEK_KEY", "deepseek_key");
-  }
-  if (groupSlot > 1) {
-    providerPrefixes = providerPrefixes.map((prefix) => `${prefix}_GROUP${groupSlot}_`);
-  }
-  const providerEntries = collectEntries(providerPrefixes);
-  if (providerEntries.length > 0) {
-    return providerEntries;
-  }
-  const genericPrefixes = groupSlot === 1
-    ? ["CHAT_API_KEY", "CONVERSATION_API_KEY"]
-    : [`CHAT_API_KEY_GROUP${groupSlot}_`, `CONVERSATION_API_KEY_GROUP${groupSlot}_`];
-  return collectEntries(genericPrefixes);
-}
-
-function getConfiguredChatApiKeyGroupSlots(envSource = process.env) {
-  const provider = normalizeChatApiProvider(
-    envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
-  );
-  return listConfiguredChatApiKeyGroupSlots(envSource, provider);
-}
-
-function getChatApiKeyGroupFingerprints(envSource = process.env) {
-  return Object.fromEntries(getConfiguredChatApiKeyGroupSlots(envSource).map((slot) => {
-    const primaryKey = getChatApiKeyGroupPrimaryKey(slot, envSource);
-    const processingKeys = getChatApiProcessingKeyEntries(envSource, slot).map((entry) => entry.value);
-    const fingerprint = crypto.createHash("sha256")
-      .update(JSON.stringify([primaryKey, ...processingKeys]))
-      .digest("hex");
-    return [slot, fingerprint];
-  }));
-}
-
-function assignConversationApiKeyGroup(currentState = state, options = {}) {
-  const contextId = normalizeConversationContextId(options.contextId) || getCurrentConversationContextId();
-  const result = claimConversationApiKeySlot(currentState.conversationApiKeyAssignments, {
-    contextId,
-    availableSlots: getConfiguredChatApiKeyGroupSlots(options.envSource || process.env),
-    forceNew: options.forceNew,
-    now: options.now
-  });
-  currentState.conversationApiKeyAssignments = result.assignments;
-  return result;
-}
-
-function getContextCompressionProfileIdFromPurpose(purpose = "") {
-  const normalizedPurpose = safeText(purpose);
-  if (!isContextCompressionPurpose(normalizedPurpose)) {
-    return "";
-  }
-  const [, profileId = ""] = normalizedPurpose.split(":");
-  return profileId ? normalizeCompressionProfileId(profileId) : STANDARD_COMPRESSION_PROFILE_ID;
-}
-
-function getContextCompressionProfileOrderIndex(purpose = "", currentState = state) {
-  const profileId = getContextCompressionProfileIdFromPurpose(purpose);
-  if (!profileId) {
-    return 0;
-  }
-  const profiles = getEnabledCompressionProfiles(currentState);
-  const index = profiles.findIndex((profile) => normalizeCompressionProfileId(profile.id) === profileId);
-  return index >= 0 ? index : 0;
-}
-
-function getContextCompressionChatApiKey(
-  purpose = "context_compression",
-  currentState = state,
-  contextId = ""
-) {
-  const assignment = assignConversationApiKeyGroup(currentState, { contextId });
-  if (!assignment.ok) {
-    throw new Error(assignment.error);
-  }
-  const processingKeys = getChatApiProcessingKeyEntries(process.env, assignment.slot);
-  if (processingKeys.length === 0) {
-    return getPrimaryChatApiKey(assignment.slot);
-  }
-  const profileIndex = getContextCompressionProfileOrderIndex(purpose, currentState);
-  const keyIndex = Math.min(profileIndex, processingKeys.length - 1);
-  return processingKeys[keyIndex]?.value || getPrimaryChatApiKey(assignment.slot);
+  return resolveChatApiKey(envSource, provider);
 }
 
 function getChatApiModel(purpose = "chat") {
@@ -9504,15 +9371,12 @@ function getChatApiModel(purpose = "chat") {
   );
 }
 
-function getChatApiKey(purpose = "chat", currentState = state, contextId = "") {
-  if (isContextCompressionPurpose(purpose)) {
-    return getContextCompressionChatApiKey(purpose, currentState, contextId);
+function getChatApiKey() {
+  const key = getPrimaryChatApiKey();
+  if (!key) {
+    throw new Error("目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。");
   }
-  const assignment = assignConversationApiKeyGroup(currentState, { contextId });
-  if (!assignment.ok) {
-    throw new Error(assignment.error);
-  }
-  return getPrimaryChatApiKey(assignment.slot);
+  return key;
 }
 
 function getChatApiTemperature(purpose = "chat", temperature = null) {
@@ -9777,39 +9641,16 @@ function requestStopActiveGeneration(contextId = "") {
   return true;
 }
 
-function releaseConversationApiKeyLease(currentState, contextId = "") {
+function stopConversationGeneration(contextId = "") {
   const normalizedContextId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
-  const assignments = normalizeConversationApiKeyAssignments(currentState.conversationApiKeyAssignments);
-  if (!assignments[normalizedContextId]) {
-    return false;
-  }
-  currentState.conversationApiKeyAssignments = releaseConversationApiKeySlot(
-    assignments,
-    normalizedContextId
-  );
-  saveState(currentState);
-  return true;
-}
-
-async function stopGenerationOrReleaseKey(contextId = "") {
-  const normalizedContextId = normalizeConversationContextId(contextId) || LOCAL_CONVERSATION_CONTEXT_ID;
-  if (requestStopActiveGeneration(normalizedContextId)) {
-    return { stopped: true, releasedKey: false };
-  }
-  const releasedKey = await withStateLock(
-    () => releaseConversationApiKeyLease(state, normalizedContextId)
-  );
-  return { stopped: false, releasedKey };
+  return { stopped: requestStopActiveGeneration(normalizedContextId), releasedKey: false };
 }
 
 function getStopActionMessage(result = {}) {
   if (result.stopped) {
     return GENERATION_STOPPED_MESSAGE;
   }
-  if (result.releasedKey) {
-    return "已釋放目前故事租用的對話 API Key；故事與頻道仍然保留。";
-  }
-  return "目前沒有正在生成的對話，也沒有租用中的 Key。";
+  return "目前沒有正在生成的對話。";
 }
 
 function isActiveGenerationRunning(contextId = "") {
@@ -10155,7 +9996,7 @@ function getChatApiProviderBaseUrlAliases(provider = DEFAULT_CHAT_API_PROVIDER) 
   return [];
 }
 
-function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
+function resolveChatApiTestConfig(envSource = {}) {
   const provider = normalizeChatApiProvider(
     envObjectFirstText(envSource, ["CHAT_API_PROVIDER", "CONVERSATION_API_PROVIDER"], DEFAULT_CHAT_API_PROVIDER)
   );
@@ -10164,7 +10005,7 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
     ["CHAT_API_BASE_URL", "CONVERSATION_API_BASE_URL", ...getChatApiProviderBaseUrlAliases(provider)],
     getDefaultChatApiBaseUrl(provider)
   );
-  const apiKey = getChatApiKeyGroupPrimaryKey(keyGroupSlot, envSource);
+  const apiKey = getPrimaryChatApiKey(envSource);
   const configuredModel = envObjectFirstText(
     envSource,
     ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
@@ -10198,9 +10039,9 @@ function resolveChatApiTestConfig(envSource = {}, keyGroupSlot = 1) {
   };
 }
 
-async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
+async function testChatApiConnection(envSource = {}) {
   const startedAt = Date.now();
-  const config = resolveChatApiTestConfig(envSource, keyGroupSlot);
+  const config = resolveChatApiTestConfig(envSource);
   const publicConfig = {
     provider: config.provider,
     baseUrl: config.baseUrl,
@@ -10247,7 +10088,10 @@ async function testChatApiConnection(envSource = {}, keyGroupSlot = 1) {
       headers: buildChatApiRequestHeaders(config.apiKey, config.completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    }, { retries: config.failureRetryCount });
+    }, {
+      retries: config.failureRetryCount,
+      fetchImpl: (url, options) => fetchModelApi(url, options, envSource)
+    });
   } catch (error) {
     clearTimeout(timeout);
     return {
@@ -10395,12 +10239,12 @@ async function requestChatImageUnderstanding({
 
   let response;
   try {
-    response = await fetch(config.completionsUrl, {
+    response = await fetchModelApi(config.completionsUrl, {
       method: "POST",
       headers: buildChatApiRequestHeaders(config.apiKey, config.completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    });
+    }, envSource);
   } catch (error) {
     cleanup();
     if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
@@ -10623,7 +10467,7 @@ async function callChatApiCompletionRaw({
       headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT) });
+    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT), fetchImpl: fetchModelApi });
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);
@@ -10997,7 +10841,7 @@ async function callChatApiCompletionStreamRaw({
       headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT) });
+    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT), fetchImpl: fetchModelApi });
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);
@@ -12613,22 +12457,8 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/env" && method === "PUT") {
       const body = await readBody(req);
       const previousNovelAiConfigured = Boolean(getNovelAiToken());
-      const previousChatApiProvider = getChatApiProvider();
-      const previousChatApiKeyGroups = getChatApiKeyGroupFingerprints(process.env);
       const content = saveEnvFileContent(body?.content);
       const novelAiConfigured = Boolean(getNovelAiToken());
-      const nextChatApiProvider = getChatApiProvider();
-      const nextChatApiKeyGroups = getChatApiKeyGroupFingerprints(process.env);
-      const chatApiKeyAssignmentsReset = shouldResetConversationApiKeyAssignments({
-        previousProvider: previousChatApiProvider,
-        nextProvider: nextChatApiProvider,
-        previousGroups: previousChatApiKeyGroups,
-        nextGroups: nextChatApiKeyGroups
-      });
-      if (chatApiKeyAssignmentsReset) {
-        state.conversationApiKeyAssignments = {};
-        saveState(state);
-      }
       const promptImageActions = shouldSyncPromptImageActionAvailability(
         previousNovelAiConfigured,
         novelAiConfigured
@@ -12642,7 +12472,7 @@ const server = http.createServer(async (req, res) => {
           };
       sendJson(res, 200, {
         content,
-        chatApiKeyAssignmentsReset,
+        chatApiKeyAssignmentsReset: false,
         promptImageActions,
         state: statePayload(state),
         restartHint: "已保存 .env。對話 API key、Base URL、API輸出模型等多數設定會立即同步；Discord／QQ Bot 憑證、Port、Slash 指令註冊等啟動期設定需要重啟 npm start。"
@@ -12655,7 +12485,7 @@ const server = http.createServer(async (req, res) => {
       const envSource = body?.env && typeof body.env === "object"
         ? body.env
         : parseEnvContent(body?.content || "");
-      const result = await testChatApiConnection(envSource, body?.keyGroup);
+      const result = await testChatApiConnection(envSource);
       sendJson(res, 200, result);
       return;
     }
@@ -12667,15 +12497,16 @@ const server = http.createServer(async (req, res) => {
         : parseEnvContent(body?.content || "");
       const config = pathname.startsWith("/api/chat-image-api/")
         ? resolveChatImageApiConfig(envSource)
-        : resolveChatApiTestConfig(envSource, body?.keyGroup);
+        : resolveChatApiTestConfig(envSource);
       config.imageOnly = pathname.startsWith("/api/chat-image-api/");
+      const fetchApi = (url, options) => fetchModelApi(url, options, envSource);
       try {
         if (pathname.endsWith("/providers")) {
-          sendJson(res, 200, { ok: true, providers: await listOpenRouterProviders(config) });
+          sendJson(res, 200, { ok: true, providers: await listOpenRouterProviders(config, fetchApi) });
         } else if (pathname.endsWith("/model-endpoints")) {
-          sendJson(res, 200, { ok: true, ...await listOpenRouterModelEndpoints(config) });
+          sendJson(res, 200, { ok: true, ...await listOpenRouterModelEndpoints(config, fetchApi) });
         } else {
-          sendJson(res, 200, { ok: true, models: await listChatApiModels(config) });
+          sendJson(res, 200, { ok: true, models: await listChatApiModels(config, fetchApi) });
         }
       } catch (error) {
         sendJson(res, 200, { ok: false, message: error.message });
@@ -13120,9 +12951,8 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === "/api/assistant-modes/character-card-creation/start" && method === "POST") {
       const result = await withStateLock(async () => {
-        const keyAssignment = assignConversationApiKeyGroup(state, { forceNew: true });
-        if (!keyAssignment.ok) {
-          return { error: keyAssignment.error, status: 409 };
+        if (!getPrimaryChatApiKey()) {
+          return { error: "目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。", status: 409 };
         }
         const assistant = startAssistantCard(state, CHARACTER_CARD_CREATION_ASSISTANT_MODE);
         const openingMessage = appendAssistantOpeningMessage(state, assistant, { platform: "web" });
@@ -13209,9 +13039,8 @@ const server = http.createServer(async (req, res) => {
         if (!getAssistantCardById(state, assistantStartMatch[1])) {
           return { error: "助手不存在", status: 404 };
         }
-        const keyAssignment = assignConversationApiKeyGroup(state, { forceNew: true });
-        if (!keyAssignment.ok) {
-          return { error: keyAssignment.error, status: 409 };
+        if (!getPrimaryChatApiKey()) {
+          return { error: "目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。", status: 409 };
         }
         const assistant = startAssistantCard(state, assistantStartMatch[1]);
         const openingMessage = appendAssistantOpeningMessage(state, assistant, { platform: "web" });
@@ -13427,9 +13256,8 @@ const server = http.createServer(async (req, res) => {
           return { error: "角色卡不存在", status: 404 };
         }
 
-        const keyAssignment = assignConversationApiKeyGroup(state, { forceNew: true });
-        if (!keyAssignment.ok) {
-          return { error: keyAssignment.error, status: 409 };
+        if (!getPrimaryChatApiKey()) {
+          return { error: "目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。", status: 409 };
         }
 
         state.activeRoleCardId = cardId;
@@ -13604,7 +13432,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/chat/stop" && method === "POST") {
-      const result = await stopGenerationOrReleaseKey(state.selectedConversationContextId);
+      const result = stopConversationGeneration(state.selectedConversationContextId);
       sendJson(res, 200, {
         ...result,
         message: getStopActionMessage(result)
@@ -14394,12 +14222,8 @@ async function startSessionFromDiscord(
       selectedOpening = openings[openingNumber - 1];
     }
 
-    const keyAssignment = assignConversationApiKeyGroup(state, {
-      contextId: getDiscordConversationContextId(channelId),
-      forceNew: true
-    });
-    if (!keyAssignment.ok) {
-      return { ok: false, error: keyAssignment.error };
+    if (!getPrimaryChatApiKey()) {
+      return { ok: false, error: "目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。" };
     }
 
     if (requestedCard) {
@@ -14927,9 +14751,8 @@ function startQqSessionLocked({
     }
   }
 
-  const keyAssignment = assignConversationApiKeyGroup(state, { contextId, forceNew: true });
-  if (!keyAssignment.ok) {
-    return { ok: false, error: keyAssignment.error };
+  if (!getPrimaryChatApiKey()) {
+    return { ok: false, error: "目前對話 API 供應商沒有已設定的 Key，請先到環境設定填寫。" };
   }
 
   state.activeRoleCardId = card?.id || null;
@@ -15138,7 +14961,7 @@ async function handleQqTextCommand(command, { userOpenId, userName, qqMessageId,
 
   const contextId = getQqConversationContextId(userOpenId);
   if (command.name === "stop") {
-    const result = await stopGenerationOrReleaseKey(contextId);
+    const result = stopConversationGeneration(contextId);
     await reply(qqSystemText(getStopActionMessage(result)));
     return;
   }
@@ -15595,7 +15418,7 @@ async function handleSlashCommand(interaction) {
   }
 
   if (name === "stop") {
-    const result = await stopGenerationOrReleaseKey(
+    const result = stopConversationGeneration(
       getDiscordConversationContextId(interaction.channelId)
     );
     await safeSendInteractionText(

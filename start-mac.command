@@ -23,13 +23,11 @@ fi
 node_is_usable() {
   command -v node >/dev/null 2>&1 || return 1
   command -v npm >/dev/null 2>&1 || return 1
-  local node_major
-  node_major=$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || printf '0\n')
-  [[ "$node_major" == <-> ]] && (( node_major >= 18 ))
+  node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 18 || (major === 18 && minor >= 17) ? 0 : 1)' 2>/dev/null
 }
 
 if ! node_is_usable; then
-  echo "Node.js 18 or newer was not found. Installing a project Node.js runtime..."
+  echo "Node.js 18.17 or newer was not found. Installing a project Node.js runtime..."
   zsh "scripts/bootstrap-node-mac.sh" "$(pwd)" || {
     echo "Project Node.js installation failed."
     read "REPLY?Press Enter to close..."
@@ -39,12 +37,12 @@ if ! node_is_usable; then
 fi
 
 if ! node_is_usable; then
-  echo "Node.js 18 or newer and npm are required."
+  echo "Node.js 18.17 or newer and npm are required."
   read "REPLY?Press Enter to close..."
   exit 1
 fi
 
-if [ ! -d "node_modules/discord.js" ] || [ ! -d "node_modules/opencc-js" ]; then
+if [ ! -d "node_modules/discord.js" ] || [ ! -d "node_modules/opencc-js" ] || [ ! -d "node_modules/undici" ]; then
   echo "Installing dependencies..."
   npm install || {
     echo "npm install failed."

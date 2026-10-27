@@ -24,7 +24,7 @@ set PORT_VALUE=%PORT_VALUE:'=%
 
 call :has_usable_node
 if errorlevel 1 (
-  echo Node.js 18 or newer was not found. Installing a project Node.js runtime...
+  echo Node.js 18.17 or newer was not found. Installing a project Node.js runtime...
   powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\bootstrap-node-win.ps1" -ProjectRoot "%CD%"
   if errorlevel 1 (
     echo Project Node.js installation failed.
@@ -36,13 +36,14 @@ if errorlevel 1 (
 
 call :has_usable_node
 if errorlevel 1 (
-  echo Node.js 18 or newer and npm are required.
+  echo Node.js 18.17 or newer and npm are required.
   pause
   exit /b 1
 )
 
 if not exist "node_modules\discord.js" goto install_dependencies
 if not exist "node_modules\opencc-js" goto install_dependencies
+if not exist "node_modules\undici" goto install_dependencies
 goto dependencies_ready
 
 :install_dependencies
@@ -66,11 +67,10 @@ pause
 exit /b %EXIT_CODE%
 
 :has_usable_node
-set "NODE_MAJOR=0"
 where node >nul 2>nul
 if errorlevel 1 exit /b 1
-for /f "delims=" %%V in ('node -p "Number(process.versions.node.split('.')[0])" 2^>nul') do set "NODE_MAJOR=%%V"
-if %NODE_MAJOR% LSS 18 exit /b 1
+node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit(major > 18 || (major === 18 && minor >= 17) ? 0 : 1)" >nul 2>nul
+if errorlevel 1 exit /b 1
 where npm >nul 2>nul
 if errorlevel 1 exit /b 1
 exit /b 0

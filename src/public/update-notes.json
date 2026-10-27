@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-10-27-shared-key-proxy",
+    "date": "2026-10-27",
+    "title": "現在全部共用key和可設定proxy",
+    "content": "emmm...那個..發現了其實key不會影響命中率,所以現在全部共用吧~\n還有因為某些供應商在某些地區不提供服務,所以就弄了proxy 可在環境設定 .env裡面設定"
+  },
+  {
     "id": "2026-09-18-small-optimizations",
     "date": "2026-09-18",
     "title": "小優化",

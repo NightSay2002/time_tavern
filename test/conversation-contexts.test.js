@@ -65,13 +65,13 @@ test("web exposes and controls the selected conversation context", () => {
   assert.match(webSource, /DELETE[\s\S]*contextId/u);
 });
 
-test("deleting a Discord story preserves archives and releases its key group", () => {
+test("deleting a Discord story preserves archives and shared credentials", () => {
   const startIndex = serverSource.indexOf("function deleteConversationContext");
   const endIndex = serverSource.indexOf("function ensureSavedSessionsDir", startIndex);
   const deleteSource = serverSource.slice(startIndex, endIndex);
   assert.match(deleteSource, /本地對話不可刪除/u);
   assert.match(deleteSource, /delete currentState\.conversationContextIndex\[contextId\]/u);
-  assert.match(deleteSource, /releaseConversationApiKeySlot\([\s\S]*contextId/u);
+  assert.doesNotMatch(deleteSource, /ApiKeySlot|process\.env|API_KEY/u);
   assert.match(deleteSource, /fs\.rmSync\(getConversationContextFilePath\(contextId\)/u);
   assert.doesNotMatch(deleteSource, /savedSessions|SAVED_SESSIONS/u);
   assert.match(serverSource, /requireExistingContext: true/u);
@@ -97,36 +97,31 @@ test("QQ private chats use isolated hashed conversation contexts", () => {
   assert.match(serverSource, /parseQqTextCommand\(message\.content\)[\s\S]*?handleQqTextCommand/u);
 });
 
-test("conversation contexts lease independent chat API key groups", () => {
-  assert.match(serverSource, /conversationApiKeyAssignments: normalizeConversationApiKeyAssignments/u);
-  assert.match(serverSource, /assignConversationApiKeyGroup\(state, \{ forceNew: true \}\)/u);
-  assert.match(serverSource, /contextId: getDiscordConversationContextId\(channelId\),[\s\S]*forceNew: true/u);
+test("conversation contexts share the primary chat API key without leases", () => {
+  assert.doesNotMatch(serverSource, /assignConversationApiKeyGroup|conversationApiKeyAssignments|claimConversationApiKeySlot/u);
   assert.match(serverSource, /getChatApiKey\(purpose, targetState, conversationContextId\)/u);
-  assert.match(webSource, /對話 API Key 組切換/u);
-  assert.match(webSource, /CHAT_API_KEY_GROUP\$\{groupNumber\}/u);
+  assert.doesNotMatch(webSource, /Key 組切換|keyGroupLabel|activeChatApiKeyGroupIndex/u);
 });
 
-test("stop releases only the current story key lease when generation is idle", () => {
-  assert.match(serverSource, /function stopGenerationOrReleaseKey/u);
+test("stop only cancels generation in the requested story", () => {
+  assert.match(serverSource, /function stopConversationGeneration/u);
   assert.match(serverSource, /requestStopActiveGeneration\(normalizedContextId\)/u);
-  assert.match(serverSource, /releaseConversationApiKeyLease\(state, normalizedContextId\)/u);
-  assert.match(serverSource, /故事與頻道仍然保留/u);
   assert.doesNotMatch(
     serverSource.slice(
-      serverSource.indexOf("function releaseConversationApiKeyLease"),
+      serverSource.indexOf("function stopConversationGeneration"),
       serverSource.indexOf("function getStopActionMessage")
     ),
-    /deleteConversationContext|rmSync/u
+    /deleteConversationContext|rmSync|saveState|ApiKeyLease/u
   );
 });
 
-test("Discord start validates a free key group before changing the active story", () => {
+test("Discord start requires the primary key before changing the active story", () => {
   const startIndex = serverSource.indexOf("async function startSessionFromDiscord");
   const endIndex = serverSource.indexOf("function buildDiscordStatusText", startIndex);
   const startSource = serverSource.slice(startIndex, endIndex);
-  const assignmentIndex = startSource.indexOf("const keyAssignment = assignConversationApiKeyGroup");
+  const assignmentIndex = startSource.indexOf("if (!getPrimaryChatApiKey())");
   const roleMutationIndex = startSource.indexOf("state.activeRoleCardId = requestedCard.id");
   assert.ok(assignmentIndex >= 0);
   assert.ok(roleMutationIndex > assignmentIndex);
-  assert.match(startSource, /if \(!keyAssignment\.ok\) \{[\s\S]*return \{ ok: false/u);
+  assert.match(startSource, /if \(!getPrimaryChatApiKey\(\)\) \{[\s\S]*return \{ ok: false/u);
 });

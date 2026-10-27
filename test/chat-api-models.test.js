@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { listChatApiModels, listOpenRouterProviders, listOpenRouterModelEndpoints, normalizeOpenRouterPricing, buildChatApiCompletionsUrl, isDeploymentChatCompletionsUrl, resolveChatApiModelForEndpoint, adaptChatApiRequestBody, buildChatApiRequestHeaders } from "../src/chat-api-endpoint.js";
 import { buildChatApiRequestBody, fetchChatApiWithRetry, normalizeChatApiRetryCount } from "../src/chat-api-request.js";
 import { createChatApiProviderDrafts, getChatApiProviderEnvEntries, getOfficialChatApiBaseUrl } from "../src/public/chat-api-provider-settings.js";
-import { resolveChatApiKeyGroupPrimaryKey } from "../src/chat-api-key-config.js";
+import { resolveChatApiKey } from "../src/chat-api-key-config.js";
 
 const config = { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", apiKey: "test-only-key" };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status });
@@ -88,17 +88,18 @@ test("model list aborts a slow upstream after 15 seconds", async () => {
   await assert.rejects(pending, /逾時/u);
 });
 
-test("OpenRouter key groups and models survive switching without borrowing another provider key", () => {
+test("OpenRouter primary key and model survive switching without retaining old groups", () => {
   const { drafts } = createChatApiProviderDrafts({
     CHAT_API_PROVIDER: "openrouter", OPENROUTER_API_KEY: "router-1", OPENROUTER_API_KEY2: "router-processing",
     OPENROUTER_API_KEY_GROUP2: "router-2", OPENROUTER_MODEL: "openai/gpt-4.1", DEEPSEEK_API_KEY: "deepseek-1"
   });
   const env = Object.fromEntries(getChatApiProviderEnvEntries(drafts));
   assert.equal(env.OPENROUTER_MODEL, "openai/gpt-4.1");
-  assert.equal(env.OPENROUTER_API_KEY2, "router-processing");
-  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "openrouter", 2), "router-2");
-  assert.equal(resolveChatApiKeyGroupPrimaryKey({ DEEPSEEK_API_KEY: "other" }, "openrouter"), "");
-  assert.equal(resolveChatApiKeyGroupPrimaryKey(env, "deepseek"), "deepseek-1");
+  assert.equal(env.OPENROUTER_API_KEY2, undefined);
+  assert.equal(env.OPENROUTER_API_KEY_GROUP2, undefined);
+  assert.equal(resolveChatApiKey(env, "openrouter"), "router-1");
+  assert.equal(resolveChatApiKey({ DEEPSEEK_API_KEY: "other" }, "openrouter"), "");
+  assert.equal(resolveChatApiKey(env, "deepseek"), "deepseek-1");
 });
 
 test("OpenRouter provider catalog and provider-filtered vision models use separate official APIs", async () => {
@@ -199,6 +200,7 @@ test("all four real request paths send independently selected inference routes",
     safeText: (value) => String(value ?? "").trim(),
     fetch: async (url, options) => { sent.push({ url, body: JSON.parse(options.body) }); throw new Error("mock transport stopped"); }
   });
+  scope.fetchModelApi = scope.fetch;
   for (const name of ["testChatApiConnection", "requestChatImageUnderstanding", "callChatApiCompletionRaw", "callChatApiCompletionStreamRaw"]) {
     const start = source.indexOf(`async function ${name}(`);
     vm.runInContext(source.slice(start, source.indexOf("\n}\n", start) + 2), scope);
@@ -223,7 +225,7 @@ test("all OpenRouter key groups are excluded from global and author defaults", (
   vm.runInContext(source.slice(constants, source.indexOf("\n]);", constants) + 4), scope);
   const start = source.indexOf("function isDefaultEnvSecretKey(");
   vm.runInContext(source.slice(start, source.indexOf("\n}", start) + 2), scope);
-  for (const key of ["OPENROUTER_API_KEY", "OPENROUTER_API_KEY2", "OPENROUTER_API_KEY_GROUP2", "OPENROUTER_API_KEY_GROUP2_2", "CHAT_IMAGE_API_KEY"]) {
+  for (const key of ["OPENROUTER_API_KEY", "OPENROUTER_API_KEY2", "OPENROUTER_API_KEY_GROUP2", "OPENROUTER_API_KEY_GROUP2_2", "OPENROUTER_API_KEY_GROUP10", "CHAT_API_KEY_GROUP10_12", "deepseek_key12", "CHAT_IMAGE_API_KEY", "API_PROXY_URL", "API_PROXY_USERNAME", "API_PROXY_PASSWORD"]) {
     assert.equal(scope.isDefaultEnvSecretKey(key), true, key);
   }
   assert.equal(scope.isDefaultEnvSecretKey("OPENROUTER_MODEL"), false);
@@ -236,10 +238,10 @@ test("runtime, connection tests and image config enforce official URLs but prese
     process: { env }, DEFAULT_CHAT_API_PROVIDER: "deepseek", DEFAULT_CHAT_API_MODEL: "default",
     normalizeChatApiRetryCount,
     safeText: (value) => String(value ?? "").trim(), buildChatApiCompletionsUrl, resolveChatApiModelForEndpoint,
-    resolveChatApiKeyGroupPrimaryKey, resolveChatApiReasoningEffort: () => "", getChatApiRequestTimeoutMs: () => 30000,
+    resolveChatApiKey, resolveChatApiReasoningEffort: () => "", getChatApiRequestTimeoutMs: () => 30000,
     getChatApiReasoningEffort: () => "", normalizeChatApiMaxTokensParamName: () => "max_tokens"
   });
-  for (const name of ["envFirstText", "envObjectFirstText", "envObjectFirstNumber", "normalizeChatApiProvider", "getChatApiProvider", "getDefaultChatApiBaseUrl", "getChatApiBaseUrl", "getChatApiCompletionsUrlFromBaseUrl", "getChatApiProviderBaseUrlAliases", "getChatApiProviderModelAliases", "getChatApiKeyGroupPrimaryKey", "resolveChatImageApiConfig", "resolveChatApiTestConfig"]) {
+  for (const name of ["envFirstText", "envObjectFirstText", "envObjectFirstNumber", "normalizeChatApiProvider", "getChatApiProvider", "getDefaultChatApiBaseUrl", "getChatApiBaseUrl", "getChatApiCompletionsUrlFromBaseUrl", "getChatApiProviderBaseUrlAliases", "getChatApiProviderModelAliases", "getPrimaryChatApiKey", "resolveChatImageApiConfig", "resolveChatApiTestConfig"]) {
     const start = source.indexOf(`function ${name}(`);
     assert.ok(start >= 0, name);
     vm.runInContext(source.slice(start, source.indexOf("\n}", start) + 2), scope);
