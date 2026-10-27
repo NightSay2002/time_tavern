@@ -52,6 +52,15 @@ test("ordinary OpenAI-compatible endpoints retain Bearer auth and model", () => 
   assert.equal(resolveChatApiModelForEndpoint("", "fallback-model", url), "fallback-model");
 });
 
+test("Gemini resource model names normalize without changing other providers or deployment URLs", () => {
+  const url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+  assert.equal(resolveChatApiModelForEndpoint("models/gemini-2.5-flash", "", url, "gemini"), "gemini-2.5-flash");
+  assert.equal(resolveChatApiModelForEndpoint("gemini-2.5-pro", "", url, "gemini"), "gemini-2.5-pro");
+  assert.equal(resolveChatApiModelForEndpoint("", "", url, "gemini"), "");
+  assert.equal(resolveChatApiModelForEndpoint("models/custom-model", "", url, "custom"), "models/custom-model");
+  assert.equal(resolveChatApiModelForEndpoint("models/gemini-2.5-pro", "", deploymentUrl, "gemini"), "");
+});
+
 test("empty completion content retries once before returning an actionable error", () => {
   assert.match(serverSource, /CHAT_API_EMPTY_RESPONSE_RETRY_LIMIT = 1/u);
   assert.match(serverSource, /shouldRetryChatApiEmptyResponse\(trimmed, emptyRetryCount\)/u);

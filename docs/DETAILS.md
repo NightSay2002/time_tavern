@@ -92,13 +92,26 @@ Provider 固定 Base URL（對話與圖片處理共用此對照）：
 
 舊設定若在官方 provider 填了代理、不同區域或 deployment 網址，請改選 `custom`，填回原網址及該服務的 Key／模型；不會自動搬移或混用不同供應商的 Key。圖片 API 同樣適用，且「主要模型直接處理」仍會停用專用欄位並保留內容。
 
-兩組模型欄位都有「取得模型清單」，由本地 server 以尚未保存的設定呼叫 `{base}/models`。對話清單使用共用對話 Key，圖片清單使用獨立圖片 Key；不呼叫生成、不寫入 AI logs、存檔或 localStorage。選項按模型 ID 排序，可搜尋及手動輸入；刷新不會改掉目前模型。切換供應商、Key 或網址會清掉舊選項，較晚返回的舊請求不會覆蓋新設定。
+兩組模型欄位都有「取得模型清單」，由本地 server 以尚未保存的設定（包含 Proxy 網址、帳號及密碼）呼叫 `{base}/models`。對話清單使用共用對話 Key，圖片清單使用獨立圖片 Key；不呼叫生成、不寫入 AI logs、存檔或 localStorage。選項按模型 ID 排序，可搜尋及手動輸入；刷新不會改掉目前模型。切換供應商、Key、網址或 Proxy 會清掉舊選項，較晚返回的舊請求不會覆蓋新設定。Gemini 官方回傳的 `models/` 前綴會移除，顯示名稱採用官方 `display_name`，聊天與圖片處理都使用正規化後的模型 ID。
+
+只有 DeepSeek 保留舊版未填模型時的預設；其他供應商模型留空時，連接測試與生成會先提示設定模型，不會退回 DeepSeek 模型。模型清單仍可在模型尚未填寫時取得；完整 deployment URL 內含模型的例外維持原狀。Gemini 若在不支援的地區直連，模型清單也可能回傳 HTTP 400；需要 Proxy 時應先填好 Proxy，再取得清單。
 
 [DeepSeek](https://api-docs.deepseek.com/api/list-models)、[OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[Gemini](https://ai.google.dev/gemini-api/docs/openai#list_models) 與 [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/get-models) 提供模型列表介面。智譜目前未在官方文件公開通用 `/models`，因此停用清單按鈕，改連結[官方模型總覽](https://docs.bigmodel.cn/cn/guide/start/model-overview)，由使用者填入模型。自訂服務嘗試標準 `/models`；完整 deployment 網址不猜測清單路線。清單不保證聊天或圖片能力，圖片請另用「測試圖片讀取」驗證。DeepSeek、OpenAI、Gemini 的清單不含價格，介面提供官方計費連結，不估造價目。若顯示本機沒有清單介面，請重啟服務並重新整理頁面。
 
 OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[供應商 API](https://openrouter.ai/docs/api/api-reference/providers/list-all-providers)取得清單，再用 `/models?providers=<slug>` 篩選模型；圖片清單另加 `input_modalities=image`。選模型後只查該模型的[端點 API](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model)，不逐一查詢全部模型，避免延遲。選單保留原模型／端點，清單缺項時警告，不自動替換。
 
-端點表列出輸入、輸出、快取及其他已提供費率、上下文與輸出上限。token 費率由 USD/token 換算為 USD/百萬 tokens；圖片、請求、搜尋按次／張列出。缺少價格顯示「未提供」，只有明確的 0 才是免費。模型總清單的價格是跨供應商起價，不能當作指定端點價格；實際收費、長上下文與帳號限制以 OpenRouter 為準。AI logs 採用 OpenRouter 回傳的 `usage.cost`（USD），不套用直連 DeepSeek 價格表；未回傳費用不猜測。
+端點表列出輸入、輸出、快取及其他已提供費率、上下文與輸出上限。token 費率由 USD/token 換算為 USD/百萬 tokens；圖片、請求、搜尋按次／張列出。缺少價格顯示「未提供」，只有明確的 0 才是免費。模型總清單的價格是跨供應商起價，不能當作指定端點價格；實際收費、長上下文與帳號限制以 OpenRouter 為準。
+
+### 費用與估算
+
+對話、壓縮、助手與圖片理解共用以下計價規則；AI 紀錄的「實際費用」及「估算費用」按幣種分開加總，未知顯示筆數並排除於總金額，明確回傳的 0 仍保留。
+
+- 實際費用優先：OpenRouter 回傳的 `usage.cost` 數值按 USD 記錄；其他平台可使用 `usage.cost: { "amount": 0.01, "currency": "USD" }` 明確回報金額與幣種。未知格式或沒有幣種的非 OpenRouter 數值不猜測。串流最後只回傳 cost 的事件也會保留，不覆蓋先前 Token 數。
+- 官方牌價估算：只限供應商與模型 ID 同時精確匹配的已核對項目，沒有匹配就顯示「價格未知」。不以名稱子字串配對，也不讓自訂服務或 OpenRouter 借用直連平台價格。估算記錄來源網址、核對日期、費率及限制；圖片處理使用自己的供應商，而不是主對話設定。
+- OpenRouter 端點估算：讀取指定模型的端點價格時，在記憶體快取最多 50 個模型、一小時。沒有實際費用時，只有目前明確指定的完整端點 tag 與快取精確匹配、Token 及費率足夠、且沒有另外的非零圖片／請求／搜尋／思考／快取寫入費率，才估算。自動路由、端點根名稱、過期價格或缺少必要資料均顯示未知；不為每次生成額外查價。
+- 牌價快照於 2026-10-27 核對：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[Gemini](https://ai.google.dev/gemini-api/docs/pricing)、[GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4)、[GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini)、[GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5)。DeepSeek 使用高峰牌價作保守估算，空閒及中國法定假日實扣可能減半；Gemini 與 OpenAI 使用標準付費方案，包含已列出的長上下文階梯，不推測免費額度、折扣或特殊服務層級。
+- DeepSeek、Gemini、OpenAI 的牌價快照不是即時帳單，也不會因取得 `/models` 自動更新；沒有可靠價格 API 時，不抓取網頁或混用 OpenRouter 價格。新模型或未核對版本維持未知，快照隨程式版本更新。
+- 歷史紀錄保留當次已記錄的金額及價格來源，不因切換供應商、查詢新價格或重新啟動而重算。舊紀錄沒有可確認來源的金額標示為估算，核對日期留空；舊紀錄也不根據目前環境設定推測來源。沒有足夠價格的紀錄不會被填入 0。
 
 指定供應商時，連接測試、正文串流、助手、壓縮、補寫與圖片理解均送出 `provider.only`、`provider.order` 及 `allow_fallbacks:false`；根 slug 包含其區域／量化端點，選表格端點則固定完整 tag。空白使用 OpenRouter 自動路由。詳見[官方路由規則](https://openrouter.ai/docs/guides/routing/provider-selection)。對話與圖片路由設定互相獨立；Key 仍不進入全局匯出或作者預設。清單請求只用目前欄位的 Key，不呼叫付費生成。
 

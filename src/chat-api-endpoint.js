@@ -35,11 +35,12 @@ export function buildChatApiCompletionsUrl(baseUrl = "") {
   return url.toString();
 }
 
-export function resolveChatApiModelForEndpoint(configuredModel = "", fallbackModel = "", completionsUrl = "") {
+export function resolveChatApiModelForEndpoint(configuredModel = "", fallbackModel = "", completionsUrl = "", provider = "") {
   if (isDeploymentChatCompletionsUrl(completionsUrl)) {
     return "";
   }
-  return text(configuredModel) || text(fallbackModel);
+  const model = text(configuredModel) || text(fallbackModel);
+  return provider === "gemini" ? model.replace(/^models\//u, "") : model;
 }
 
 export function buildChatApiRequestHeaders(apiKey = "", completionsUrl = "") {
@@ -105,6 +106,12 @@ export async function listChatApiModels(config = {}, fetchImpl = fetch) {
         throw new Error(controller.signal.aborted ? "取得模型清單逾時。" : "無法連接模型清單 API。");
       }
       if (!response.ok) {
+        if (config.provider === "gemini" && response.status === 400) {
+          const errorPayload = await response.json().catch(() => null);
+          if (/User location is not supported/iu.test(text(errorPayload?.error?.message))) {
+            throw new Error("取得模型清單失敗（HTTP 400）：Gemini 不支援目前連線地區，請檢查 API Proxy 設定與代理出口地區。");
+          }
+        }
         throw new Error(`取得模型清單失敗（HTTP ${response.status}）；請檢查 Key 與平台是否支援 /models，仍可手動填寫模型。`);
       }
       let payload;
@@ -117,10 +124,10 @@ export async function listChatApiModels(config = {}, fetchImpl = fetch) {
         throw new Error("平台未回傳標準模型清單，請手動填寫模型。");
       }
       for (const item of payload.data) {
-        const id = text(item?.id);
+        const id = config.provider === "gemini" ? text(item?.id).replace(/^models\//u, "") : text(item?.id);
         if (id && id.length <= 256) {
           models.set(id, {
-            id, name: text(item.name).slice(0, 256) || id,
+            id, name: text(item.name || (config.provider === "gemini" ? item.display_name : "")).slice(0, 256) || id,
             ...(config.provider === "openrouter" ? {
               pricing: normalizeOpenRouterPricing(item.pricing),
               inputModalities: Array.isArray(item.architecture?.input_modalities) ? item.architecture.input_modalities.filter((value) => typeof value === "string") : [],

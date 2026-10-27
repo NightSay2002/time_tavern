@@ -66,6 +66,10 @@ CHAT_API_MODEL=deepseek-v4-pro
 
 對話與圖片處理 API 支援 DeepSeek、OpenAI、Gemini、智譜 GLM、OpenRouter 及自訂服務。官方網址固定，自訂可修改；支援的平台可取得模型清單。OpenRouter 可按推理供應商選模型、比較端點價格並固定路由。設定與平台限制見 [細節文件](docs/DETAILS.md)。
 
+取得模型清單與連接測試都會套用環境設定中尚未保存的 Proxy。切換到 Gemini 等其他供應商後需選擇或填寫該平台模型；模型留空不會套用 DeepSeek 預設。
+
+AI 紀錄分別顯示「實際費用／估算費用／價格未知」，實際與估算按幣種分開加總；未知不當免費。估算顯示來源與核對日期，歷史金額不會被新牌價重算，自訂服務不套用官方模型價格。完整計價規則見 [細節文件](docs/DETAILS.md)。
+
 環境設定只需填一把對話 API Key，正文、壓縮、大模型處理及所有故事共用，不再分 Key 1／Key 2 或限制故事租用。切換供應商仍會帶回該供應商保存的 Key 與模型；舊版主 Key 直接沿用，額外編號 Key 不再生效，保存環境設定後會移除。代理及完整 deployment 網址請選「自訂」，詳見細節文件。
 
 需要網路代理時，在「環境設定 → API Proxy」或 `.env` 填寫 `API_PROXY_URL`，認證另填 `API_PROXY_USERNAME` 與 `API_PROXY_PASSWORD`。支援 HTTP／HTTPS，套用到對話、圖片處理、NovelAI 與模型清單；留空直接連線，設定只保存在本機。

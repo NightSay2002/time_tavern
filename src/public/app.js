@@ -530,7 +530,7 @@ const ENV_FIELD_GROUPS = [
         key: "CHAT_API_MODEL",
         label: "API輸出模型",
         type: "text",
-        placeholder: "deepseek-v4-pro / glm-5.3-flash / gpt-4.1",
+        placeholder: "deepseek-v4-pro / gemini-2.5-flash / glm-5.3-flash / gpt-4.1",
         help: "使用一般 Base URL 時需填寫模型；完整 deployment URL 已包含模型時可留空。主聊天、大模型處理、補寫與角色卡助手共用此設定。"
       },
       {
@@ -2670,6 +2670,9 @@ function syncApiCatalogControls(prefix) {
 
 function getApiModelListDraft(prefix) {
   return {
+    ...Object.fromEntries(["API_PROXY_URL", "API_PROXY_USERNAME", "API_PROXY_PASSWORD"].map((key) => [
+      key, document.getElementById(`envField_${key}`)?.value || ""
+    ])),
     [`${prefix}_PROVIDER`]: document.getElementById(`envField_${prefix}_PROVIDER`)?.value || "deepseek",
     [`${prefix}_BASE_URL`]: document.getElementById(`envField_${prefix}_BASE_URL`)?.value || "",
     [`${prefix}_MODEL`]: document.getElementById(`envField_${prefix}_MODEL`)?.value || "",
@@ -2957,8 +2960,15 @@ async function testChatImageApiConnection() {
 }
 
 function getUsageCost(usage) {
-  const amount = Number(usage?.cost?.amount ?? usage?.cost?.amountCny ?? usage?.costCny);
-  return Number.isFinite(amount) ? amount : null;
+  const raw = usage?.cost?.amount ?? usage?.cost?.amountCny ?? usage?.costCny;
+  if (!["number", "string"].includes(typeof raw) || String(raw).trim() === "") return null;
+  const amount = Number(raw);
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+function getUsageCostLabel(usage) {
+  if (getUsageCost(usage) === null) return "價格未知";
+  return usage?.cost?.type === "actual" ? "實際費用" : "估算費用";
 }
 
 function getUsageCostCurrency(usage) {
@@ -2966,11 +2976,12 @@ function getUsageCostCurrency(usage) {
 }
 
 function getCurrencySymbol(currency = "CNY") {
-  return String(currency).toUpperCase() === "USD" ? "$" : "¥";
+  const code = String(currency).toUpperCase();
+  return code === "USD" ? "$" : code === "CNY" ? "¥" : `${code} `;
 }
 
 function getPricingUnitLabel(unit = "") {
-  return unit === "per_million_tokens" || !unit ? "每百萬 tokens" : unit;
+  return unit === "per_request" ? "本次請求" : unit === "per_million_tokens" || !unit ? "每百萬 tokens" : unit;
 }
 
 function formatCurrencyAmount(value, currency = "CNY") {
@@ -2986,14 +2997,20 @@ function formatCurrencyAmount(value, currency = "CNY") {
 function formatUsageCostBreakdown(usage) {
   const cost = usage?.cost;
   if (!cost || typeof cost !== "object" || getUsageCost(usage) === null) {
-    return "";
+    return "價格未知：上游未提供可確認幣種的費用，且沒有適用的供應商／模型／端點價格；不計為免費。";
   }
   const currency = getUsageCostCurrency(usage);
   const unitLabel = getPricingUnitLabel(cost.pricingUnit);
   const lines = [
-    `使用金額：${formatCurrencyAmount(getUsageCost(usage), currency)}${cost.pricingModel ? `（${cost.pricingModel}）` : ""}`,
+    `${getUsageCostLabel(usage)}：${formatCurrencyAmount(getUsageCost(usage), currency)}${cost.pricingModel ? `（${cost.pricingModel}）` : ""}`,
     `計費單位：${currency} / ${unitLabel}`
   ];
+  const sources = { api_response: "上游 API 回傳", official_pricing: "官方牌價快照", openrouter_endpoint: "OpenRouter 指定端點 API", legacy: "舊紀錄，來源未確認" };
+  lines.push(`來源：${sources[cost.source] || sources.legacy}`);
+  if (cost.provider) lines.push(`供應商：${cost.provider}${cost.endpoint ? ` / ${cost.endpoint}` : ""}`);
+  if (cost.sourceUrl) lines.push(`價格來源：${cost.sourceUrl}`);
+  if (cost.updatedAt) lines.push(`${cost.type === "actual" ? "記錄時間" : "價格更新時間"}：${cost.updatedAt}`);
+  if (cost.note) lines.push(cost.note);
   if (Number.isFinite(cost.inputCacheHitTokens) && Number.isFinite(cost.inputCacheHitPerMillion)) {
     lines.push(`輸入（快取命中）：${cost.inputCacheHitTokens} tokens × ${formatCurrencyAmount(cost.inputCacheHitPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.inputCacheHitCost, currency)}`);
   }
@@ -3023,9 +3040,6 @@ function formatUsage(usage) {
     ? `${Math.round((cacheHit / cacheTotal) * 100)}%`
     : "";
   const cost = getUsageCost(usage);
-  if (prompt === null && completion === null && total === null && cacheHit === null && cacheMiss === null && cost === null) {
-    return "";
-  }
   return [
     prompt !== null ? `輸入 ${prompt}` : "",
     completion !== null ? `輸出 ${completion}` : "",
@@ -3033,8 +3047,29 @@ function formatUsage(usage) {
     cacheHit !== null ? `Cache Hit ${cacheHit}` : "",
     cacheMiss !== null ? `Cache Miss ${cacheMiss}` : "",
     cacheRate ? `命中率 ${cacheRate}` : "",
-    cost !== null ? `金額 ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : ""
+    cost !== null ? `${getUsageCostLabel(usage)} ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : "價格未知"
   ].filter(Boolean).join(" / ");
+}
+
+function formatAiLogCostTotals(logs) {
+  const totals = { actual: {}, estimated: {} };
+  let unknown = 0;
+  for (const log of logs) {
+    const amount = getUsageCost(log.usage);
+    if (amount === null) {
+      unknown += 1;
+      continue;
+    }
+    const group = log.usage?.cost?.type === "actual" ? totals.actual : totals.estimated;
+    const currency = getUsageCostCurrency(log.usage);
+    group[currency] = (group[currency] || 0) + amount;
+  }
+  return [
+    ...Object.entries(totals).flatMap(([type, currencies]) => Object.entries(currencies).map(([currency, amount]) =>
+      `${type === "actual" ? "實際費用" : "估算費用"}：${formatCurrencyAmount(amount, currency)}${["USD", "CNY"].includes(currency) ? ` ${currency}` : ""}`
+    )),
+    ...(unknown ? [`價格未知：${unknown} 筆（未計入金額）`] : [])
+  ].join(" / ");
 }
 
 function containsReplacementCharacter(input) {
@@ -5891,7 +5926,7 @@ function populateAiLogBody(body, log, contentStore, usageText) {
   const costText = formatUsageCostBreakdown(log.usage);
   if (costText) {
     const costLabel = document.createElement("label");
-    costLabel.textContent = "本次使用金額";
+    costLabel.textContent = getUsageCostLabel(log.usage);
     const costArea = document.createElement("pre");
     costArea.className = "ai-log-block cost";
     costArea.textContent = costText;
@@ -5971,22 +6006,11 @@ function renderAiLogs(state) {
     return;
   }
 
-  const totalsByCurrency = logs.reduce((totals, log) => {
-    const cost = getUsageCost(log.usage);
-    if (cost !== null) {
-      const currency = getUsageCostCurrency(log.usage);
-      totals[currency] = (totals[currency] || 0) + cost;
-    }
-    return totals;
-  }, {});
-  const totalCostText = Object.entries(totalsByCurrency)
-    .filter(([, amount]) => amount > 0)
-    .map(([currency, amount]) => `${formatCurrencyAmount(amount, currency)} ${currency}`)
-    .join(" / ");
+  const totalCostText = formatAiLogCostTotals(logs);
   if (totalCostText) {
     const total = document.createElement("div");
     total.className = "ai-log-cost-total";
-    total.textContent = `目前 AI 呼叫紀錄總金額：${totalCostText}（按幣種分開統計，只統計已有價格表的模型）`;
+    total.textContent = `目前 AI 呼叫紀錄｜${totalCostText}`;
     el.aiLogs.appendChild(total);
   }
 

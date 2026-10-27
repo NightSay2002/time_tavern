@@ -270,20 +270,31 @@ const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
   [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
 };
 const CHAT_API_COST_PRICING = [
-  { label: "DeepSeek-V4-Pro", aliases: ["deepseek-v4-pro"], currency: "CNY", inputCacheHitPerMillion: 0.025, inputCacheMissPerMillion: 3, outputPerMillion: 6 },
-  { label: "DeepSeek-V4-Flash", aliases: ["deepseek-v4-flash"], currency: "CNY", inputCacheHitPerMillion: 0.02, inputCacheMissPerMillion: 1, outputPerMillion: 2 },
-  { label: "Gemini 2.5 Flash-Lite", aliases: ["gemini-2.5-flash-lite", "gemini 2.5 flash-lite", "gemini-2.5-flash-lite-preview"], currency: "USD", inputCacheHitPerMillion: 0.01, inputCacheMissPerMillion: 0.10, outputPerMillion: 0.40 },
+  { provider: "deepseek", label: "DeepSeek-V4-Pro", aliases: ["deepseek-v4-pro"], currency: "CNY", inputCacheHitPerMillion: 0.30, inputCacheMissPerMillion: 9, outputPerMillion: 27 },
+  { provider: "deepseek", label: "DeepSeek Flash", aliases: ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"], currency: "CNY", inputCacheHitPerMillion: 0.04, inputCacheMissPerMillion: 2, outputPerMillion: 8 },
+  { label: "Gemini 2.5 Flash-Lite", aliases: ["gemini-2.5-flash-lite", "gemini 2.5 flash-lite"], currency: "USD", inputCacheHitPerMillion: 0.01, inputCacheMissPerMillion: 0.10, outputPerMillion: 0.40 },
   { label: "Gemini 2.5 Flash", aliases: ["gemini-2.5-flash", "gemini 2.5 flash"], currency: "USD", inputCacheHitPerMillion: 0.03, inputCacheMissPerMillion: 0.30, outputPerMillion: 2.50 },
   { label: "Gemini 3 Flash Preview", aliases: ["gemini-3-flash-preview", "gemini 3 flash preview"], currency: "USD", inputCacheHitPerMillion: 0.05, inputCacheMissPerMillion: 0.50, outputPerMillion: 3.00 },
   { label: "Gemini 2.5 Pro >200k prompt", aliases: ["gemini-2.5-pro", "gemini 2.5 pro"], currency: "USD", minPromptTokens: 200001, inputCacheHitPerMillion: 0.25, inputCacheMissPerMillion: 2.50, outputPerMillion: 15.00 },
   { label: "Gemini 2.5 Pro <=200k prompt", aliases: ["gemini-2.5-pro", "gemini 2.5 pro"], currency: "USD", maxPromptTokens: 200000, inputCacheHitPerMillion: 0.125, inputCacheMissPerMillion: 1.25, outputPerMillion: 10.00 },
-  { label: "GPT-5.4 mini", aliases: ["gpt-5.4-mini", "gpt-5.4 mini"], currency: "USD", inputCacheHitPerMillion: 0.075, inputCacheMissPerMillion: 0.75, outputPerMillion: 4.50 },
-  { label: "GPT-5.4", aliases: ["gpt-5.4"], currency: "USD", inputCacheHitPerMillion: 0.25, inputCacheMissPerMillion: 2.50, outputPerMillion: 15.00 },
-  { label: "GPT-5.5", aliases: ["gpt-5.5"], currency: "USD", inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5.00, outputPerMillion: 30.00 },
-  { label: "Claude Haiku 4.5", aliases: ["claude-haiku-4.5", "claude haiku 4.5"], currency: "USD", inputCacheHitPerMillion: 0.10, inputCacheMissPerMillion: 1.00, outputPerMillion: 5.00 },
-  { label: "Claude Sonnet 4.6 / 4.5", aliases: ["claude-sonnet-4.6", "claude sonnet 4.6", "claude-sonnet-4.5", "claude sonnet 4.5"], currency: "USD", inputCacheHitPerMillion: 0.30, inputCacheMissPerMillion: 3.00, outputPerMillion: 15.00 },
-  { label: "Claude Opus 4.7 / 4.6 / 4.5", aliases: ["claude-opus-4.7", "claude opus 4.7", "claude-opus-4.6", "claude opus 4.6", "claude-opus-4.5", "claude opus 4.5"], currency: "USD", inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5.00, outputPerMillion: 25.00 }
-];
+  { label: "GPT-5.4 mini", aliases: ["gpt-5.4-mini", "gpt-5.4 mini", "gpt-5.4-mini-2026-03-17"], currency: "USD", inputCacheHitPerMillion: 0.075, inputCacheMissPerMillion: 0.75, outputPerMillion: 4.50 },
+  { label: "GPT-5.4 >272k prompt", aliases: ["gpt-5.4", "gpt-5.4-2026-03-05"], currency: "USD", minPromptTokens: 272001, inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5, outputPerMillion: 22.50 },
+  { label: "GPT-5.4 <=272k prompt", aliases: ["gpt-5.4", "gpt-5.4-2026-03-05"], currency: "USD", maxPromptTokens: 272000, inputCacheHitPerMillion: 0.25, inputCacheMissPerMillion: 2.50, outputPerMillion: 15.00 },
+  { label: "GPT-5.5 >272k prompt", aliases: ["gpt-5.5", "gpt-5.5-2026-04-23"], currency: "USD", minPromptTokens: 272001, inputCacheHitPerMillion: 1, inputCacheMissPerMillion: 10, outputPerMillion: 45 },
+  { label: "GPT-5.5 <=272k prompt", aliases: ["gpt-5.5", "gpt-5.5-2026-04-23"], currency: "USD", maxPromptTokens: 272000, inputCacheHitPerMillion: 0.50, inputCacheMissPerMillion: 5.00, outputPerMillion: 30.00 }
+].map((pricing) => {
+  const provider = pricing.provider || (pricing.aliases[0].startsWith("gemini") ? "gemini" : "openai");
+  return {
+    ...pricing, provider, source: "official_pricing", updatedAt: "2026-10-27",
+    sourceUrl: provider === "deepseek" ? "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
+      : provider === "gemini" ? "https://ai.google.dev/gemini-api/docs/pricing"
+        : `https://developers.openai.com/api/docs/models/${pricing.aliases[0]}`,
+    note: provider === "deepseek"
+      ? "按高峰時段牌價作保守估算；空閒時段及中國法定假日實扣可能減半。"
+      : "按官方標準付費方案估算；免費額度、折扣、特殊服務層級及額外費用以平台帳單為準。"
+  };
+});
+const openRouterEndpointPricing = new Map();
 const DEFAULT_TIME_TRACKING_CONFIG = {
   periodAdvanceWords: [],
   nextDayWords: ["下一天", "第二天", "隔天", "翌日", "次日", "明天", "明日"],
@@ -1560,28 +1571,41 @@ function resetDiscordPlayerAssignments(currentState, channelId = "") {
   };
 }
 
+function nonNegativeUsageNumber(value) {
+  if (!["number", "string"].includes(typeof value) || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
 function normalizeAiUsageCost(input) {
   const source = input && typeof input === "object" ? input : {};
-  const amount = Number(source.amount ?? source.amountCny ?? source.amountUsd ?? source.costCny ?? source.costUsd);
-  if (!Number.isFinite(amount)) {
+  const amount = nonNegativeUsageNumber(source.amount ?? source.amountCny ?? source.amountUsd ?? source.costCny ?? source.costUsd);
+  if (amount === null) {
     return null;
   }
-  const inputCacheHitCost = Number(source.inputCacheHitCost ?? source.inputCacheHitCostCny ?? source.inputCacheHitCostUsd);
-  const inputCacheMissCost = Number(source.inputCacheMissCost ?? source.inputCacheMissCostCny ?? source.inputCacheMissCostUsd);
-  const outputCost = Number(source.outputCost ?? source.outputCostCny ?? source.outputCostUsd);
-  const inputCacheHitTokens = Number(source.inputCacheHitTokens);
-  const inputCacheMissTokens = Number(source.inputCacheMissTokens);
-  const outputTokens = Number(source.outputTokens);
-  const inputCacheHitPerMillion = Number(source.inputCacheHitPerMillion);
-  const inputCacheMissPerMillion = Number(source.inputCacheMissPerMillion);
-  const outputPerMillion = Number(source.outputPerMillion);
-  const inferredCurrency = source.amountUsd || source.costUsd ? "USD" : source.amountCny || source.costCny ? "CNY" : "CNY";
+  const inputCacheHitCost = nonNegativeUsageNumber(source.inputCacheHitCost ?? source.inputCacheHitCostCny ?? source.inputCacheHitCostUsd);
+  const inputCacheMissCost = nonNegativeUsageNumber(source.inputCacheMissCost ?? source.inputCacheMissCostCny ?? source.inputCacheMissCostUsd);
+  const outputCost = nonNegativeUsageNumber(source.outputCost ?? source.outputCostCny ?? source.outputCostUsd);
+  const inputCacheHitTokens = nonNegativeUsageNumber(source.inputCacheHitTokens);
+  const inputCacheMissTokens = nonNegativeUsageNumber(source.inputCacheMissTokens);
+  const outputTokens = nonNegativeUsageNumber(source.outputTokens);
+  const inputCacheHitPerMillion = nonNegativeUsageNumber(source.inputCacheHitPerMillion);
+  const inputCacheMissPerMillion = nonNegativeUsageNumber(source.inputCacheMissPerMillion);
+  const outputPerMillion = nonNegativeUsageNumber(source.outputPerMillion);
+  const inferredCurrency = source.amountUsd !== undefined || source.costUsd !== undefined ? "USD" : "CNY";
   const currency = safeText(source.currency || inferredCurrency).toUpperCase();
   return {
     amount,
     currency,
+    type: source.type === "actual" ? "actual" : "estimated",
+    source: safeText(source.source) || "legacy",
+    sourceUrl: safeText(source.sourceUrl),
+    updatedAt: safeText(source.updatedAt),
+    note: safeText(source.note) || (!source.type ? "舊紀錄未保存計價來源，保留原金額，不能視為實際扣款。" : ""),
+    provider: safeText(source.provider),
+    endpoint: safeText(source.endpoint),
     pricingModel: safeText(source.pricingModel),
-    pricingUnit: safeText(source.pricingUnit) || "per_million_tokens",
+    pricingUnit: safeText(source.pricingUnit) || (source.type === "actual" ? "per_request" : "per_million_tokens"),
     inputCacheHitCost: Number.isFinite(inputCacheHitCost) ? inputCacheHitCost : null,
     inputCacheMissCost: Number.isFinite(inputCacheMissCost) ? inputCacheMissCost : null,
     outputCost: Number.isFinite(outputCost) ? outputCost : null,
@@ -1595,26 +1619,40 @@ function normalizeAiUsageCost(input) {
   };
 }
 
-function normalizeAiUsage(input, apiProvider = "") {
+function normalizeAiUsage(input, apiProvider = "", apiEndpoint = "") {
   const source = input && typeof input === "object" ? input : {};
   const accountingProvider = apiProvider || source.accountingProvider || "";
-  const promptTokens = Number(source.promptTokens ?? source.prompt_tokens ?? source.input_tokens);
-  const completionTokens = Number(source.completionTokens ?? source.completion_tokens ?? source.output_tokens);
+  const promptTokens = nonNegativeUsageNumber(source.promptTokens ?? source.prompt_tokens ?? source.input_tokens);
+  const completionTokens = nonNegativeUsageNumber(source.completionTokens ?? source.completion_tokens ?? source.output_tokens);
   const inferredTotalTokens = Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
     ? promptTokens + completionTokens
     : null;
-  const totalTokens = Number(source.totalTokens ?? source.total_tokens ?? inferredTotalTokens);
-  const promptCacheHitTokens = Number(
+  const totalTokens = nonNegativeUsageNumber(source.totalTokens ?? source.total_tokens ?? inferredTotalTokens);
+  const promptCacheHitTokens = nonNegativeUsageNumber(
     source.promptCacheHitTokens ??
     source.prompt_cache_hit_tokens ??
     source.prompt_tokens_details?.cached_tokens ??
     source.cache_read_input_tokens ??
     source.cache_read_tokens
   );
-  const promptCacheMissTokens = Number(source.promptCacheMissTokens ?? source.prompt_cache_miss_tokens);
-  const cost = accountingProvider === "openrouter" && typeof source.cost === "number" && source.cost >= 0
-    ? normalizeAiUsageCost({ amount: source.cost, currency: "USD" })
-    : normalizeAiUsageCost(source.cost || source);
+  const promptCacheMissTokens = nonNegativeUsageNumber(source.promptCacheMissTokens ?? source.prompt_cache_miss_tokens);
+  const accountingEndpoint = apiEndpoint || source.accountingEndpoint || "";
+  let cost = normalizeAiUsageCost(source.cost || source);
+  const reportedCost = accountingProvider === "openrouter" && typeof source.cost === "number"
+    ? { amount: source.cost, currency: "USD" }
+    : apiProvider && source.cost && !source.cost.type && typeof source.cost === "object" && /^[A-Za-z]{3}$/u.test(safeText(source.cost.currency))
+      ? source.cost : null;
+  if (reportedCost) {
+    cost = normalizeAiUsageCost({
+      ...reportedCost, type: "actual", source: "api_response", note: "",
+      provider: accountingProvider, endpoint: accountingEndpoint,
+      updatedAt: new Date().toISOString()
+    });
+  } else if (apiProvider && !source.cost?.type) {
+    cost = null;
+  } else if (accountingProvider === "openrouter" && cost?.source === "legacy" && !cost.pricingModel) {
+    cost = { ...cost, type: "actual", source: "api_response", pricingUnit: "per_request", provider: "openrouter", note: "" };
+  }
 
   return {
     promptTokens: Number.isFinite(promptTokens) ? promptTokens : null,
@@ -1623,13 +1661,42 @@ function normalizeAiUsage(input, apiProvider = "") {
     promptCacheHitTokens: Number.isFinite(promptCacheHitTokens) ? promptCacheHitTokens : null,
     promptCacheMissTokens: Number.isFinite(promptCacheMissTokens) ? promptCacheMissTokens : null,
     cost,
-    ...(accountingProvider === "openrouter" ? { accountingProvider } : {})
+    ...(accountingProvider ? { accountingProvider, accountingEndpoint } : {})
   };
 }
 
-function getAiUsagePricingForModel(model = "", promptTokens = null) {
+function cacheOpenRouterEndpointPricing(config, catalog) {
+  if (config.provider !== "openrouter") return;
+  const model = safeText(config.model);
+  openRouterEndpointPricing.delete(model);
+  openRouterEndpointPricing.set(model, { updatedAt: new Date().toISOString(), endpoints: catalog.endpoints });
+  while (openRouterEndpointPricing.size > 50) openRouterEndpointPricing.delete(openRouterEndpointPricing.keys().next().value);
+}
+
+function getAiUsagePricingForModel(model = "", promptTokens = null, provider = "", endpoint = "") {
+  if (provider === "openrouter") {
+    const catalog = openRouterEndpointPricing.get(model);
+    if (!endpoint || !catalog || Date.now() - Date.parse(catalog.updatedAt) > 3600000) return null;
+    const match = catalog.endpoints.find((item) => item.tag === endpoint);
+    if (!match) return null;
+    const rates = match.pricing;
+    if (["image", "request", "web_search", "internal_reasoning", "input_cache_write"].some((key) => Number(rates[key]) > 0)) return null;
+    const input = nonNegativeUsageNumber(rates.prompt);
+    const output = nonNegativeUsageNumber(rates.completion);
+    const cached = nonNegativeUsageNumber(rates.input_cache_read);
+    if (input === null || output === null) return null;
+    return {
+      label: model, provider, endpoint, currency: "USD", source: "openrouter_endpoint",
+      sourceUrl: `https://openrouter.ai/api/v1/models/${model.split("/").map(encodeURIComponent).join("/")}/endpoints`,
+      updatedAt: catalog.updatedAt, note: "按已選端點公開 token 費率估算，以平台帳單為準。",
+      inputCacheHitPerMillion: cached === null ? null : cached * 1000000,
+      inputCacheMissPerMillion: input * 1000000, outputPerMillion: output * 1000000
+    };
+  }
   const normalizedModel = safeText(model).toLowerCase().replace(/[_\s]+/gu, "-");
   return CHAT_API_COST_PRICING.find((pricing) => {
+    if (!provider || pricing.provider !== provider) return false;
+    if ((pricing.minPromptTokens || pricing.maxPromptTokens) && !Number.isFinite(promptTokens)) return false;
     if (Number.isFinite(pricing.minPromptTokens) && (!Number.isFinite(promptTokens) || promptTokens < pricing.minPromptTokens)) {
       return false;
     }
@@ -1639,29 +1706,31 @@ function getAiUsagePricingForModel(model = "", promptTokens = null) {
     const aliases = Array.isArray(pricing.aliases) ? pricing.aliases : [pricing.label];
     return aliases.some((alias) => {
       const normalizedAlias = safeText(alias).toLowerCase().replace(/[_\s]+/gu, "-");
-      return normalizedAlias && normalizedModel.includes(normalizedAlias);
+      return normalizedAlias && normalizedModel === normalizedAlias;
     });
   }) || null;
 }
 
 function calculateAiUsageCost(usage = {}, model = "") {
-  if (usage?.accountingProvider === "openrouter") return usage.cost || null;
   if (!usage || typeof usage !== "object") {
     return null;
   }
+  if (usage.cost) return usage.cost;
   const promptTokens = Number.isFinite(usage.promptTokens) ? usage.promptTokens : null;
-  const pricing = getAiUsagePricingForModel(model, promptTokens);
+  const pricing = getAiUsagePricingForModel(model, promptTokens, usage.accountingProvider, usage.accountingEndpoint);
   if (!pricing) {
     return null;
   }
-  const completionTokens = Number.isFinite(usage.completionTokens) ? usage.completionTokens : 0;
+  const completionTokens = Number.isFinite(usage.completionTokens) ? usage.completionTokens : null;
   const hasCacheHit = Number.isFinite(usage.promptCacheHitTokens);
   const hasCacheMiss = Number.isFinite(usage.promptCacheMissTokens);
-  if (promptTokens === null && completionTokens <= 0 && !hasCacheHit && !hasCacheMiss) {
+  if (completionTokens === null || (promptTokens === null && (!hasCacheHit || !hasCacheMiss))) {
     return null;
   }
 
   const inputCacheHitTokens = hasCacheHit ? Math.max(0, usage.promptCacheHitTokens) : 0;
+  if (inputCacheHitTokens > 0 && !Number.isFinite(pricing.inputCacheHitPerMillion)) return null;
+  if (promptTokens !== null && inputCacheHitTokens > promptTokens) return null;
   let inputCacheMissTokens = hasCacheMiss ? Math.max(0, usage.promptCacheMissTokens) : 0;
   let promptCacheMissFallback = false;
   if (!hasCacheMiss && promptTokens !== null) {
@@ -1669,12 +1738,16 @@ function calculateAiUsageCost(usage = {}, model = "") {
     promptCacheMissFallback = true;
   }
 
-  const inputCacheHitCost = (inputCacheHitTokens / 1_000_000) * pricing.inputCacheHitPerMillion;
+  if (promptTokens !== null && inputCacheHitTokens + inputCacheMissTokens !== promptTokens) return null;
+  const inputCacheHitCost = (inputCacheHitTokens / 1_000_000) * (pricing.inputCacheHitPerMillion || 0);
   const inputCacheMissCost = (inputCacheMissTokens / 1_000_000) * pricing.inputCacheMissPerMillion;
   const outputCost = (Math.max(0, completionTokens) / 1_000_000) * pricing.outputPerMillion;
   return normalizeAiUsageCost({
     amount: inputCacheHitCost + inputCacheMissCost + outputCost,
     currency: pricing.currency,
+    type: "estimated", source: pricing.source, sourceUrl: pricing.sourceUrl,
+    updatedAt: pricing.updatedAt, note: pricing.note,
+    provider: pricing.provider, endpoint: pricing.endpoint,
     pricingModel: pricing.label,
     pricingUnit: "per_million_tokens",
     inputCacheHitCost,
@@ -9335,7 +9408,7 @@ function resolveChatImageApiConfig(envSource = process.env) {
     baseUrl,
     completionsUrl,
     configuredModel,
-    model: resolveChatApiModelForEndpoint(configuredModel, "", completionsUrl),
+    model: resolveChatApiModelForEndpoint(configuredModel, "", completionsUrl, provider),
     reasoningEffort,
     temperature,
     requestTimeoutMs
@@ -9360,14 +9433,15 @@ function getPrimaryChatApiKey(envSource = process.env) {
 function getChatApiModel(purpose = "chat") {
   const settings = normalizeConversationSettings(state?.conversationSettings);
   const provider = getChatApiProvider();
-  const configuredModel = envFirstText(
-    ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)],
-    ""
-  );
+  const modelKeys = ["CHAT_API_MODEL", "CONVERSATION_API_MODEL", ...getChatApiProviderModelAliases(provider)];
+  const configuredModel = provider === "deepseek"
+    ? envFirstText(modelKeys, "")
+    : envObjectFirstText(process.env, modelKeys, "");
   return resolveChatApiModelForEndpoint(
     configuredModel,
-    settings.chatOutputModel || DEFAULT_CHAT_API_MODEL,
-    getChatApiCompletionsUrl()
+    provider === "deepseek" ? settings.chatOutputModel || DEFAULT_CHAT_API_MODEL : "",
+    getChatApiCompletionsUrl(),
+    provider
   );
 }
 
@@ -10012,7 +10086,7 @@ function resolveChatApiTestConfig(envSource = {}) {
     ""
   );
   const completionsUrl = getChatApiCompletionsUrlFromBaseUrl(baseUrl);
-  const model = resolveChatApiModelForEndpoint(configuredModel, DEFAULT_CHAT_API_MODEL, completionsUrl);
+  const model = resolveChatApiModelForEndpoint(configuredModel, provider === "deepseek" ? DEFAULT_CHAT_API_MODEL : "", completionsUrl, provider);
   const requestTimeoutMs = Math.min(
     envObjectFirstNumber(
       envSource,
@@ -10061,6 +10135,14 @@ async function testChatApiConnection(envSource = {}) {
     return {
       ok: false,
       message: "連接失敗：Base URL 未設定。custom 供應商必須填 CHAT_API_BASE_URL。",
+      ...publicConfig
+    };
+  }
+
+  if (!config.model && !isDeploymentChatCompletionsUrl(config.completionsUrl)) {
+    return {
+      ok: false,
+      message: "連接失敗：尚未設定目前供應商的 API輸出模型，請取得模型清單後選擇或手動填寫。",
       ...publicConfig
     };
   }
@@ -10154,7 +10236,7 @@ async function testChatApiConnection(envSource = {}) {
     durationMs: Date.now() - startedAt,
     responsePreview: content.slice(0, 80),
     finishReason,
-    usage: normalizeAiUsage(payload?.usage, config.provider),
+    usage: normalizeAiUsage(payload?.usage, config.provider, config.openrouterProvider),
     ...publicConfig
   };
 }
@@ -10206,7 +10288,7 @@ async function requestChatImageUnderstanding({
   validateChatImageApiConfig(config);
   const messages = buildChatImageUnderstandingMessages(images, userContent);
   const requestMessages = sanitizeChatApiMessagesForLog(messages);
-  const logModel = config.configuredModel || "deployment";
+  const logModel = config.model || config.configuredModel || "deployment";
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: config.provider,
     openrouterProvider: config.openrouterProvider,
@@ -10295,14 +10377,14 @@ async function requestChatImageUnderstanding({
 
   appendImageLog({
     responseText: content,
-    usage: normalizeAiUsage(payload?.usage, config.provider),
+    usage: normalizeAiUsage(payload?.usage, config.provider, config.openrouterProvider),
     status: "success"
   });
   return {
     content,
     provider: config.provider,
     model: logModel,
-    usage: normalizeAiUsage(payload?.usage, config.provider)
+    usage: normalizeAiUsage(payload?.usage, config.provider, config.openrouterProvider)
   };
 }
 
@@ -10445,6 +10527,9 @@ async function callChatApiCompletionRaw({
     throw new Error(errorMessage);
   }
 
+  if (!model && !isDeploymentChatCompletionsUrl(completionsUrl)) {
+    throw new Error("尚未設定目前供應商的 API輸出模型，請取得模型清單後選擇或手動填寫。");
+  }
   const apiProvider = getChatApiProvider();
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: apiProvider,
@@ -10558,7 +10643,7 @@ async function callChatApiCompletionRaw({
   const reasoningContent = extractChatApiMessageText(message.reasoning_content);
   const trimmed = safeText(content).trim();
   const trimmedReasoning = safeText(reasoningContent).trim();
-  const usage = normalizeAiUsage(payload?.usage, apiProvider);
+  const usage = normalizeAiUsage(payload?.usage, apiProvider, requestBody.provider?.only?.[0]);
 
   if (shouldRetryChatApiEmptyResponse(trimmed, emptyRetryCount)) {
     return callChatApiCompletionRaw({
@@ -10681,7 +10766,8 @@ async function readChatApiStreamBody(response, handlers = {}) {
   let finishReason = "";
   let content = "";
   let reasoningContent = "";
-  let usage = normalizeAiUsage(null, handlers.apiProvider);
+  let rawUsage = {};
+  let usage = normalizeAiUsage(null, handlers.apiProvider, handlers.apiEndpoint);
 
   const processEventBlock = (block) => {
     const dataLines = block
@@ -10711,8 +10797,9 @@ async function readChatApiStreamBody(response, handlers = {}) {
     const reasoningDelta = extractChatApiMessageText(delta.reasoning_content);
     const contentDelta = extractChatApiMessageText(delta.content);
     const nextFinishReason = safeText(choice?.finish_reason);
-    if (payload?.usage && hasUsageTokens(payload.usage)) {
-      usage = normalizeAiUsage(payload.usage, handlers.apiProvider);
+    if (payload?.usage && (hasUsageTokens(payload.usage) || Object.hasOwn(payload.usage, "cost"))) {
+      rawUsage = { ...rawUsage, ...payload.usage };
+      usage = normalizeAiUsage(rawUsage, handlers.apiProvider, handlers.apiEndpoint);
     }
 
     if (reasoningDelta) {
@@ -10818,6 +10905,9 @@ async function callChatApiCompletionStreamRaw({
     throw new Error(errorMessage);
   }
 
+  if (!model && !isDeploymentChatCompletionsUrl(completionsUrl)) {
+    throw new Error("尚未設定目前供應商的 API輸出模型，請取得模型清單後選擇或手動填寫。");
+  }
   const apiProvider = getChatApiProvider();
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: apiProvider,
@@ -10913,6 +11003,7 @@ async function callChatApiCompletionStreamRaw({
   try {
     streamed = await readChatApiStreamBody(response, {
       apiProvider,
+      apiEndpoint: requestBody.provider?.only?.[0],
       onReasoningDelta,
       onContentDelta
     });
@@ -12012,7 +12103,6 @@ function normalizeAiLog(entry) {
   const source = entry && typeof entry === "object" ? entry : {};
   const model = safeText(source.model) || "";
   const usage = normalizeAiUsage(source.usage);
-  usage.cost = calculateAiUsageCost(usage, model) || usage.cost;
   return {
     id: safeText(source.id) || newId("ailog"),
     purpose: safeText(source.purpose) || "chat",
@@ -12045,6 +12135,7 @@ function appendAiLogToState(entry, targetState = state) {
     return;
   }
   const normalizedEntry = normalizeAiLog(entry);
+  normalizedEntry.usage.cost = calculateAiUsageCost(normalizedEntry.usage, normalizedEntry.model);
   targetState.aiLogs.push(normalizedEntry);
   if (targetState.aiLogs.length > 200) {
     targetState.aiLogs = targetState.aiLogs.slice(-200);
@@ -12504,7 +12595,9 @@ const server = http.createServer(async (req, res) => {
         if (pathname.endsWith("/providers")) {
           sendJson(res, 200, { ok: true, providers: await listOpenRouterProviders(config, fetchApi) });
         } else if (pathname.endsWith("/model-endpoints")) {
-          sendJson(res, 200, { ok: true, ...await listOpenRouterModelEndpoints(config, fetchApi) });
+          const catalog = await listOpenRouterModelEndpoints(config, fetchApi);
+          cacheOpenRouterEndpointPricing(config, catalog);
+          sendJson(res, 200, { ok: true, ...catalog });
         } else {
           sendJson(res, 200, { ok: true, models: await listChatApiModels(config, fetchApi) });
         }
