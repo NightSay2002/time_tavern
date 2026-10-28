@@ -98,6 +98,10 @@ Provider 固定 Base URL（對話與圖片處理共用此對照）：
 
 只有 DeepSeek 保留舊版未填模型時的預設；其他供應商模型留空時，連接測試與生成會先提示設定模型，不會退回 DeepSeek 模型。模型清單仍可在模型尚未填寫時取得；完整 deployment URL 內含模型的例外維持原狀。Gemini 若在不支援的地區直連，模型清單也可能回傳 HTTP 400；需要 Proxy 時應先填好 Proxy，再取得清單。
 
+Gemini 模型清單仍使用上表的相容介面；網頁對話使用 Google 原生 `streamGenerateContent` 串流輸出，非串流呼叫、圖片理解與連接測試使用 `generateContent`。四類可調整安全過濾設定為 `BLOCK_NONE`。Google 不可調整的保護仍會生效，這項設定不保證所有內容都能生成。詳見 [Google 安全設定](https://ai.google.dev/gemini-api/docs/safety-settings?authuser=7&hl=en)。
+
+Gemini 不會自動加入額外的酒館預設提示詞；正文、助手、壓縮及圖片辨識使用各自現有的提示設定。
+
 [DeepSeek](https://api-docs.deepseek.com/api/list-models)、[OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list)、[Gemini](https://ai.google.dev/gemini-api/docs/openai#list_models) 與 [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/get-models) 提供模型列表介面。智譜目前未在官方文件公開通用 `/models`，因此停用清單按鈕，改連結[官方模型總覽](https://docs.bigmodel.cn/cn/guide/start/model-overview)，由使用者填入模型。自訂服務嘗試標準 `/models`；完整 deployment 網址不猜測清單路線。清單不保證聊天或圖片能力，圖片請另用「測試圖片讀取」驗證。DeepSeek、OpenAI、Gemini 的清單不含價格，介面提供官方計費連結，不估造價目。若顯示本機沒有清單介面，請重啟服務並重新整理頁面。
 
 OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[供應商 API](https://openrouter.ai/docs/api/api-reference/providers/list-all-providers)取得清單，再用 `/models?providers=<slug>` 篩選模型；圖片清單另加 `input_modalities=image`。選模型後只查該模型的[端點 API](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model)，不逐一查詢全部模型，避免延遲。選單保留原模型／端點，清單缺項時警告，不自動替換。
@@ -108,12 +112,13 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 
 對話、壓縮、助手與圖片理解共用以下計價規則；AI 紀錄的「實際費用」及「估算費用」按幣種分開加總，未知顯示筆數並排除於總金額，明確回傳的 0 仍保留。
 
-- 實際費用優先：OpenRouter 回傳的 `usage.cost` 數值按 USD 記錄；其他平台可使用 `usage.cost: { "amount": 0.01, "currency": "USD" }` 明確回報金額與幣種。未知格式或沒有幣種的非 OpenRouter 數值不猜測。串流最後只回傳 cost 的事件也會保留，不覆蓋先前 Token 數。
+- 實際費用優先：OpenRouter 回傳的 `usage.cost` 按 USD 記錄；所有平台亦可使用 `usage.cost: { "amount": 0.01, "currency": "USD" }`、`usage.cost_usd`／`costUsd`、`cost_cny`／`costCny` 或帶 `currency` 的數值 `cost` 明確回報金額與幣種。未知格式或沒有幣種的非 OpenRouter 數值不猜測。串流最後只回傳 cost 的事件也會保留，不覆蓋先前 Token 數。
+- 自訂單價：環境設定「API 計價」可新增供應商、精確模型 ID、端點、幣種與每百萬 tokens 的輸入／快取讀取／輸出價格；保存到 `.env` 的 `API_PRICING_OVERRIDES` JSON 陣列並同步備份。自訂 API 端點填完整 `/chat/completions` 網址（保存時不保留 query 或認證資訊），OpenRouter 填完整端點 tag；官方直連留空。只對精確匹配的後續請求生效，不會因切換模型而套錯；實際費用優先，其次自訂單價、指定端點費率、官方牌價。快取單價留空代表未知，明確填 0 才是免費。
 - 官方牌價估算：只限供應商與模型 ID 同時精確匹配的已核對項目，沒有匹配就顯示「價格未知」。不以名稱子字串配對，也不讓自訂服務或 OpenRouter 借用直連平台價格。估算記錄來源網址、核對日期、費率及限制；圖片處理使用自己的供應商，而不是主對話設定。
 - OpenRouter 端點估算：讀取指定模型的端點價格時，在記憶體快取最多 50 個模型、一小時。沒有實際費用時，只有目前明確指定的完整端點 tag 與快取精確匹配、Token 及費率足夠、且沒有另外的非零圖片／請求／搜尋／思考／快取寫入費率，才估算。自動路由、端點根名稱、過期價格或缺少必要資料均顯示未知；不為每次生成額外查價。
-- 牌價快照於 2026-10-27 核對：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[Gemini](https://ai.google.dev/gemini-api/docs/pricing)、[GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4)、[GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini)、[GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5)。DeepSeek 使用高峰牌價作保守估算，空閒及中國法定假日實扣可能減半；Gemini 與 OpenAI 使用標準付費方案，包含已列出的長上下文階梯，不推測免費額度、折扣或特殊服務層級。
-- DeepSeek、Gemini、OpenAI 的牌價快照不是即時帳單，也不會因取得 `/models` 自動更新；沒有可靠價格 API 時，不抓取網頁或混用 OpenRouter 價格。新模型或未核對版本維持未知，快照隨程式版本更新。
-- 歷史紀錄保留當次已記錄的金額及價格來源，不因切換供應商、查詢新價格或重新啟動而重算。舊紀錄沒有可確認來源的金額標示為估算，核對日期留空；舊紀錄也不根據目前環境設定推測來源。沒有足夠價格的紀錄不會被填入 0。
+- 牌價快照於 2026-10-28 更新：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[Gemini](https://ai.google.dev/gemini-api/docs/pricing)、[智譜](https://open.bigmodel.cn/pricing)、[OpenAI](https://developers.openai.com/api/docs/pricing)。新增 Argon、Gemini 3.8／3.6／3.5／3.1、GLM 5.3／Flash／FlashX、已核對的免費 Flash、GPT-4.1／4o 與部分 GPT-6 模型，保留既有項目。Argon 優惠價按請求日期計算，2026-12-01 UTC 起切換已公布的標準價；Gemini 3.8／3.6 於 2027-01-01 UTC 起切換。DeepSeek 使用高峰牌價作保守估算；GLM 使用標準牌價，不猜測限時折扣。其他免費額度、特殊服務層級和額外收費以平台帳單為準。
+- 官方牌價快照不是即時帳單，也不會因取得 `/models` 自動更新；沒有可靠價格 API 時，不抓取網頁或混用 OpenRouter 價格。新模型或未核對版本可設定自訂單價；沒有價格或足夠用量時仍顯示具體原因，不捏造金額。沒有發出請求的本地佔位回覆不列入未知費用統計。
+- 歷史紀錄已有金額和價格來源一律保留，不因切換供應商或修改單價而重算。只有未有金額、已保存供應商與完整用量，且日期落在已核實價格有效期間內的紀錄才補估（例如 Argon）；不套用目前手動單價或過期 OpenRouter 快取來倒推舊費用。舊紀錄沒有可確認來源的金額標示為估算，核對日期留空。沒有足夠資料的紀錄不會被填入 0。
 
 指定供應商時，連接測試、正文串流、助手、壓縮、補寫與圖片理解均送出 `provider.only`、`provider.order` 及 `allow_fallbacks:false`；根 slug 包含其區域／量化端點，選表格端點則固定完整 tag。空白使用 OpenRouter 自動路由。詳見[官方路由規則](https://openrouter.ai/docs/guides/routing/provider-selection)。對話與圖片路由設定互相獨立；Key 仍不進入全局匯出或作者預設。清單請求只用目前欄位的 Key，不呼叫付費生成。
 
@@ -143,7 +148,7 @@ API 成功但 `content` 空白時，仍維持原有一次空白回應重試；�
 
 - DeepSeek 支援關閉及 `low`、`high`、`max`；未指定時維持高強度。
 - GLM 4.5 以上可關閉思考；`reasoning_effort` 強度只在 GLM 5.2 以上送出。
-- Google 對話及圖片 API 使用獨立的 `CHAT_API_REASONING_EFFORT` 與 `CHAT_IMAGE_API_REASONING_EFFORT`，透過 OpenAI-compatible `reasoning_effort` 傳送；不會同時加入 `thinking_level` 或 `thinking_budget`。前後端共用模型能力判斷，未知模型使用 API 預設，不猜測能力；未選或不支援的值不送出。完整設定可參考 [Google 相容介面](https://ai.google.dev/gemini-api/docs/openai#thinking)及[思考模型列表](https://ai.google.dev/gemini-api/docs/thinking#controlling-thinking)。
+- Google 對話及圖片 API 使用獨立的 `CHAT_API_REASONING_EFFORT` 與 `CHAT_IMAGE_API_REASONING_EFFORT`：Gemini 2.5 轉成原生 `thinkingBudget`，Gemini 3 及以後的支援模型轉成 `thinkingLevel`。前後端共用模型能力判斷，未知模型使用 API 預設，不猜測能力；未選或不支援的值不送出。詳見 [Google 思考設定](https://ai.google.dev/api/generate-content#ThinkingConfig)。
 - `gemini-4-argon`、Gemini 3.8 Flash、3.1 Pro 支援低／中／高；Argon 官方預設為中。Gemini 3 Pro 提供低／高。Gemini 3 Flash、3.1 Flash-Lite、3.5 Flash-Lite、3.6 Flash 及 Robotics ER 2 另提供 `minimal`（極低）；3.1 Flash-Lite Image 只提供極低／高。
 - Gemini 2.5 Pro／Flash／Flash-Lite 可選低／中／高，其中 Flash／Flash-Lite 可選 `none`；2.5 Pro、Gemini 3 及 Argon 不提供關閉。Google 不提供 `max`；切換供應商留下的 `max` 不會送到 Google。
 - OpenAI 只在支援 `reasoning_effort: none` 的 GPT-5.1 以上非 Pro 模型顯示關閉；其他模型與自訂 provider 保留 API 預設。

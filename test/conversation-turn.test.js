@@ -319,6 +319,19 @@ test("a thrown streaming failure uses the same invalid-turn rollback", async () 
   assert.equal(events.filter((event) => event.type === "rollback-stream-failure").length, 1);
 });
 
+test("failed expansion keeps the generated answer and stores a separate warning", async () => {
+  const events = [];
+  const state = createPendingState();
+  const deps = createWorkflowDeps(events);
+  deps.generateAssistant = () => ({ content: "已生成的正文", modelProcessingResult: { skipReasoner: false } });
+  deps.shouldEnsureMinimumAssistantLength = () => true;
+  deps.ensureMinimumAssistantLength = () => ({ content: "已生成的正文", warning: "補寫失敗：供應商停止輸出" });
+  const result = await runConversationTurnWorkflow(deps, { state, content: "使用者內容", source: "web" });
+  assert.equal(result.assistantMessage.content, "已生成的正文");
+  assert.equal(result.assistantMessage.generationWarning, "補寫失敗：供應商停止輸出");
+  assert.equal(result.failed, false);
+});
+
 test("prepares specialist image context before calling the main model", async () => {
   const events = [];
   const state = createPendingState();

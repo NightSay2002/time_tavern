@@ -38,7 +38,8 @@ function normalizeExpansionResult(result, fallbackContent = "") {
   if (result && typeof result === "object") {
     return {
       content: safeText(result.content) || safeText(fallbackContent),
-      reasoningContent: safeText(result.reasoningContent)
+      reasoningContent: safeText(result.reasoningContent),
+      warning: safeText(result.warning)
     };
   }
   return { content: safeText(fallbackContent), reasoningContent: "" };
@@ -50,6 +51,7 @@ function buildAssistantExtra({
   reasoningContent,
   compressionNotice,
   autoTimeWarning,
+  generationWarning,
   stateAfterTurnSnapshot
 }) {
   return {
@@ -58,6 +60,7 @@ function buildAssistantExtra({
     ...(reasoningContent ? { reasoningContent } : {}),
     compressionNotice: Boolean(compressionNotice),
     autoTimeWarning: safeText(autoTimeWarning),
+    ...(generationWarning ? { generationWarning: safeText(generationWarning) } : {}),
     stateAfterTurnSnapshot
   };
 }
@@ -168,6 +171,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
   let modelProcessingResult = generation?.modelProcessingResult || deps.getLastModelProcessingResult?.(currentState) || {};
   let assistantText = safeText(generation?.content);
   let fullReasoning = safeText(generation?.reasoningContent);
+  let generationWarning = "";
   const excludeAssistantFromModel = Boolean(generation?.excludeFromModel);
 
   if (excludeAssistantFromModel) {
@@ -210,6 +214,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
       assistantText
     );
     assistantText = expanded.content;
+    generationWarning = safeText(expanded.warning);
     fullReasoning = [fullReasoning, expanded.reasoningContent].filter(Boolean).join("\n\n").trim();
   }
 
@@ -242,6 +247,7 @@ export async function runConversationTurnWorkflow(deps = {}, input = {}) {
       reasoningContent: fullReasoning,
       compressionNotice: generation?.compressionNotice,
       autoTimeWarning: timeTrackingUpdate.autoTimeWarning,
+      generationWarning,
       stateAfterTurnSnapshot
     })
   });

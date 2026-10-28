@@ -100,6 +100,8 @@ import {
 } from "./chat-api-endpoint.js";
 import { resolveChatApiKey } from "./chat-api-key-config.js";
 import { fetchModelApi } from "./api-proxy.js";
+import { fetchGeminiNative } from "./gemini-native.js";
+import { formatApiPriceOverridesEnv, getManualApiPricing, normalizePricingEndpoint, parseApiPriceOverrides } from "./public/api-price-overrides.js";
 import {
   appendChatImageAnalysisToModelContent,
   buildMultimodalMessageContent,
@@ -270,6 +272,28 @@ const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
   [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
 };
 const CHAT_API_COST_PRICING = [
+  { provider: "gemini", label: "Gemini 4 Argon (introductory)", aliases: ["gemini-4-argon"], currency: "USD", effectiveFrom: "2026-10-27T00:00:00Z", effectiveBefore: "2026-12-01T00:00:00Z", inputCacheHitPerMillion: 0.10, inputCacheMissPerMillion: 2, outputPerMillion: 10 },
+  { provider: "gemini", label: "Gemini 4 Argon", aliases: ["gemini-4-argon"], currency: "USD", effectiveFrom: "2026-12-01T00:00:00Z", inputCacheHitPerMillion: 0.20, inputCacheMissPerMillion: 4, outputPerMillion: 20 },
+  ...["gemini-3.8-flash", "gemini-3.6-flash"].flatMap(model => [
+    { provider: "gemini", label: `${model} (introductory)`, aliases: [model], currency: "USD", effectiveBefore: "2027-01-01T00:00:00Z", inputCacheHitPerMillion: 0.075, inputCacheMissPerMillion: 0.75, outputPerMillion: 3.75 },
+    { provider: "gemini", label: model, aliases: [model], currency: "USD", effectiveFrom: "2027-01-01T00:00:00Z", inputCacheHitPerMillion: 0.15, inputCacheMissPerMillion: 1.5, outputPerMillion: 7.5 }
+  ]),
+  { provider: "gemini", label: "Gemini 3.5 Flash-Lite", aliases: ["gemini-3.5-flash-lite"], currency: "USD", inputCacheHitPerMillion: 0.03, inputCacheMissPerMillion: 0.30, outputPerMillion: 2.50 },
+  { provider: "gemini", label: "Gemini 3.1 Flash-Lite", aliases: ["gemini-3.1-flash-lite"], currency: "USD", inputCacheHitPerMillion: 0.025, inputCacheMissPerMillion: 0.25, outputPerMillion: 1.50 },
+  { provider: "gemini", label: "Gemini 3.1 Pro <=200k", aliases: ["gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"], currency: "USD", maxPromptTokens: 200000, inputCacheHitPerMillion: 0.20, inputCacheMissPerMillion: 2, outputPerMillion: 12 },
+  { provider: "gemini", label: "Gemini 3.1 Pro >200k", aliases: ["gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"], currency: "USD", minPromptTokens: 200001, inputCacheHitPerMillion: 0.40, inputCacheMissPerMillion: 4, outputPerMillion: 18 },
+  { provider: "zhipu", label: "GLM-5.3 / GLM-5.2", aliases: ["glm-5.3", "glm-5.2"], currency: "CNY", inputCacheHitPerMillion: 2, inputCacheMissPerMillion: 8, outputPerMillion: 28 },
+  { provider: "zhipu", label: "GLM-5.3-Flash", aliases: ["glm-5.3-flash"], currency: "CNY", inputCacheHitPerMillion: 0.23, inputCacheMissPerMillion: 0.8, outputPerMillion: 2.8 },
+  { provider: "zhipu", label: "GLM-5.3-FlashX", aliases: ["glm-5.3-flashx"], currency: "CNY", inputCacheHitPerMillion: 0.57, inputCacheMissPerMillion: 2, outputPerMillion: 7 },
+  { provider: "zhipu", label: "GLM free Flash", aliases: ["glm-4.7-flash", "glm-4.6v-flash"], currency: "CNY", inputCacheHitPerMillion: 0, inputCacheMissPerMillion: 0, outputPerMillion: 0 },
+  { provider: "openai", label: "GPT-4.1", aliases: ["gpt-4.1", "gpt-4.1-2025-04-14"], currency: "USD", inputCacheHitPerMillion: 0.5, inputCacheMissPerMillion: 2, outputPerMillion: 8 },
+  { provider: "openai", label: "GPT-4.1 mini", aliases: ["gpt-4.1-mini", "gpt-4.1-mini-2025-04-14"], currency: "USD", inputCacheHitPerMillion: 0.1, inputCacheMissPerMillion: 0.4, outputPerMillion: 1.6 },
+  { provider: "openai", label: "GPT-4o", aliases: ["gpt-4o", "gpt-4o-2024-08-06", "gpt-4o-2024-11-20"], currency: "USD", inputCacheHitPerMillion: 1.25, inputCacheMissPerMillion: 2.5, outputPerMillion: 10 },
+  { provider: "openai", label: "GPT-4o mini", aliases: ["gpt-4o-mini", "gpt-4o-mini-2024-07-18"], currency: "USD", inputCacheHitPerMillion: 0.075, inputCacheMissPerMillion: 0.15, outputPerMillion: 0.6 },
+  ...[{ model: "gpt-6-astra", input: 10, cached: 1, output: 50 }, { model: "gpt-6.1-sol", input: 2, cached: 0.1, output: 10 }, { model: "gpt-6-luna", input: 0.1, cached: 0.01, output: 0.5 }].flatMap(rate => [
+    { provider: "openai", label: `${rate.model} <=272k`, aliases: [rate.model], currency: "USD", maxPromptTokens: 272000, inputCacheHitPerMillion: rate.cached, inputCacheMissPerMillion: rate.input, outputPerMillion: rate.output },
+    { provider: "openai", label: `${rate.model} >272k`, aliases: [rate.model], currency: "USD", minPromptTokens: 272001, inputCacheHitPerMillion: rate.cached * 2, inputCacheMissPerMillion: rate.input * 2, outputPerMillion: rate.output * 1.5 }
+  ]),
   { provider: "deepseek", label: "DeepSeek-V4-Pro", aliases: ["deepseek-v4-pro"], currency: "CNY", inputCacheHitPerMillion: 0.30, inputCacheMissPerMillion: 9, outputPerMillion: 27 },
   { provider: "deepseek", label: "DeepSeek Flash", aliases: ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"], currency: "CNY", inputCacheHitPerMillion: 0.04, inputCacheMissPerMillion: 2, outputPerMillion: 8 },
   { label: "Gemini 2.5 Flash-Lite", aliases: ["gemini-2.5-flash-lite", "gemini 2.5 flash-lite"], currency: "USD", inputCacheHitPerMillion: 0.01, inputCacheMissPerMillion: 0.10, outputPerMillion: 0.40 },
@@ -285,9 +309,10 @@ const CHAT_API_COST_PRICING = [
 ].map((pricing) => {
   const provider = pricing.provider || (pricing.aliases[0].startsWith("gemini") ? "gemini" : "openai");
   return {
-    ...pricing, provider, source: "official_pricing", updatedAt: "2026-10-27",
+    ...pricing, provider, source: "official_pricing", updatedAt: "2026-10-28",
     sourceUrl: provider === "deepseek" ? "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
       : provider === "gemini" ? "https://ai.google.dev/gemini-api/docs/pricing"
+        : provider === "zhipu" ? "https://open.bigmodel.cn/pricing"
         : `https://developers.openai.com/api/docs/models/${pricing.aliases[0]}`,
     note: provider === "deepseek"
       ? "按高峰時段牌價作保守估算；空閒時段及中國法定假日實扣可能減半。"
@@ -567,7 +592,7 @@ function buildEnvContentFromDefaultEnvironment(values = {}) {
   return [
     "# 由本機預設載入的環境設定。",
     "# Discord、QQ Bot 憑證與對話 API Key 不會寫入預設。",
-    ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
+    ...entries.map(([key, value]) => `${key}=${key === "API_PRICING_OVERRIDES" ? formatApiPriceOverridesEnv(value) : formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
 }
 
@@ -588,7 +613,7 @@ function buildImportedEnvironmentContent(values = {}, currentContent = "") {
   return [
     "# 由匯入的全局設定產生。",
     "# 這台裝置原有的 Discord、QQ Bot 憑證與 API Key 已保留。",
-    ...entries.map(([key, value]) => `${key}=${formatDefaultEnvValue(value)}`)
+    ...entries.map(([key, value]) => `${key}=${key === "API_PRICING_OVERRIDES" ? formatApiPriceOverridesEnv(value) : formatDefaultEnvValue(value)}`)
   ].join("\n") + "\n";
 }
 
@@ -604,6 +629,7 @@ function saveEnvFileContent(content = "") {
   const previousEnv = parseEnvContent(readEnvFileContent());
   const nextContent = safeText(content);
   const nextEnv = parseEnvContent(nextContent);
+  parseApiPriceOverrides(nextEnv.API_PRICING_OVERRIDES || "");
   fs.writeFileSync(ENV_FILE, nextContent.endsWith("\n") ? nextContent : `${nextContent}\n`, "utf8");
   syncEnvironmentBackup({ envFile: ENV_FILE, dataDir: DATA_DIR });
 
@@ -1624,6 +1650,7 @@ function normalizeAiUsage(input, apiProvider = "", apiEndpoint = "") {
   const accountingProvider = apiProvider || source.accountingProvider || "";
   const promptTokens = nonNegativeUsageNumber(source.promptTokens ?? source.prompt_tokens ?? source.input_tokens);
   const completionTokens = nonNegativeUsageNumber(source.completionTokens ?? source.completion_tokens ?? source.output_tokens);
+  const reasoningTokens = nonNegativeUsageNumber(source.reasoningTokens ?? source.completion_tokens_details?.reasoning_tokens ?? source.output_tokens_details?.reasoning_tokens);
   const inferredTotalTokens = Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
     ? promptTokens + completionTokens
     : null;
@@ -1638,10 +1665,16 @@ function normalizeAiUsage(input, apiProvider = "", apiEndpoint = "") {
   const promptCacheMissTokens = nonNegativeUsageNumber(source.promptCacheMissTokens ?? source.prompt_cache_miss_tokens);
   const accountingEndpoint = apiEndpoint || source.accountingEndpoint || "";
   let cost = normalizeAiUsageCost(source.cost || source);
-  const reportedCost = accountingProvider === "openrouter" && typeof source.cost === "number"
-    ? { amount: source.cost, currency: "USD" }
+  const explicitUsd = nonNegativeUsageNumber(source.cost_usd ?? source.costUsd);
+  const explicitCny = nonNegativeUsageNumber(source.cost_cny ?? source.costCny);
+  const reportedCost = apiProvider && explicitUsd !== null ? { amount: explicitUsd, currency: "USD" }
+    : apiProvider && explicitCny !== null ? { amount: explicitCny, currency: "CNY" }
+    : accountingProvider === "openrouter" && nonNegativeUsageNumber(source.cost) !== null
+    ? { amount: Number(source.cost), currency: "USD" }
     : apiProvider && source.cost && !source.cost.type && typeof source.cost === "object" && /^[A-Za-z]{3}$/u.test(safeText(source.cost.currency))
-      ? source.cost : null;
+      ? source.cost
+      : apiProvider && /^[A-Za-z]{3}$/u.test(safeText(source.currency)) && nonNegativeUsageNumber(source.cost) !== null
+        ? { amount: Number(source.cost), currency: source.currency } : null;
   if (reportedCost) {
     cost = normalizeAiUsageCost({
       ...reportedCost, type: "actual", source: "api_response", note: "",
@@ -1657,10 +1690,13 @@ function normalizeAiUsage(input, apiProvider = "", apiEndpoint = "") {
   return {
     promptTokens: Number.isFinite(promptTokens) ? promptTokens : null,
     completionTokens: Number.isFinite(completionTokens) ? completionTokens : null,
+    reasoningTokens: Number.isFinite(reasoningTokens) ? reasoningTokens : null,
     totalTokens: Number.isFinite(totalTokens) ? totalTokens : null,
     promptCacheHitTokens: Number.isFinite(promptCacheHitTokens) ? promptCacheHitTokens : null,
     promptCacheMissTokens: Number.isFinite(promptCacheMissTokens) ? promptCacheMissTokens : null,
     cost,
+    costUnavailableReason: safeText(source.costUnavailableReason),
+    billingStatus: safeText(source.billingStatus),
     ...(accountingProvider ? { accountingProvider, accountingEndpoint } : {})
   };
 }
@@ -1673,8 +1709,12 @@ function cacheOpenRouterEndpointPricing(config, catalog) {
   while (openRouterEndpointPricing.size > 50) openRouterEndpointPricing.delete(openRouterEndpointPricing.keys().next().value);
 }
 
-function getAiUsagePricingForModel(model = "", promptTokens = null, provider = "", endpoint = "") {
+function getAiUsagePricingForModel(model = "", promptTokens = null, provider = "", endpoint = "", pricedAt = new Date().toISOString(), historical = false) {
+  const manual = historical ? null : getManualApiPricing(process.env.API_PRICING_OVERRIDES || "", provider, model, endpoint);
+  if (manual) return { ...manual, label: model || endpoint, source: "user_configured", updatedAt: pricedAt,
+    sourceUrl: "", note: "按本機設定單價估算；不代表上游實際扣款。" };
   if (provider === "openrouter") {
+    if (historical) return null;
     const catalog = openRouterEndpointPricing.get(model);
     if (!endpoint || !catalog || Date.now() - Date.parse(catalog.updatedAt) > 3600000) return null;
     const match = catalog.endpoints.find((item) => item.tag === endpoint);
@@ -1696,6 +1736,10 @@ function getAiUsagePricingForModel(model = "", promptTokens = null, provider = "
   const normalizedModel = safeText(model).toLowerCase().replace(/[_\s]+/gu, "-");
   return CHAT_API_COST_PRICING.find((pricing) => {
     if (!provider || pricing.provider !== provider) return false;
+    if (historical && !pricing.effectiveFrom) return false;
+    const at = Date.parse(pricedAt);
+    if (pricing.effectiveFrom && (!Number.isFinite(at) || at < Date.parse(pricing.effectiveFrom))) return false;
+    if (pricing.effectiveBefore && (!Number.isFinite(at) || at >= Date.parse(pricing.effectiveBefore))) return false;
     if ((pricing.minPromptTokens || pricing.maxPromptTokens) && !Number.isFinite(promptTokens)) return false;
     if (Number.isFinite(pricing.minPromptTokens) && (!Number.isFinite(promptTokens) || promptTokens < pricing.minPromptTokens)) {
       return false;
@@ -1711,13 +1755,13 @@ function getAiUsagePricingForModel(model = "", promptTokens = null, provider = "
   }) || null;
 }
 
-function calculateAiUsageCost(usage = {}, model = "") {
+function calculateAiUsageCost(usage = {}, model = "", pricedAt = new Date().toISOString(), historical = false) {
   if (!usage || typeof usage !== "object") {
     return null;
   }
   if (usage.cost) return usage.cost;
   const promptTokens = Number.isFinite(usage.promptTokens) ? usage.promptTokens : null;
-  const pricing = getAiUsagePricingForModel(model, promptTokens, usage.accountingProvider, usage.accountingEndpoint);
+  const pricing = getAiUsagePricingForModel(model, promptTokens, usage.accountingProvider, usage.accountingEndpoint, pricedAt, historical);
   if (!pricing) {
     return null;
   }
@@ -9980,6 +10024,7 @@ function buildContinuationMessagesForMinimumLength(state, assistantText, runtime
 
 async function ensureMinimumAssistantLength(state, assistantText, runtimeUserName = "") {
   let output = safeText(assistantText);
+  let warning = "";
   const minimum = getMinimumReplyChars();
   const maxExpandAttempts = 2;
 
@@ -10004,6 +10049,7 @@ async function ensureMinimumAssistantLength(state, assistantText, runtimeUserNam
       output = `${output}\n${extra}`.trim();
     } catch (error) {
       console.warn(`補寫失敗，保留原回覆：${error.message}`);
+      warning = `補寫失敗，已保留原回覆：${safeText(error?.message) || "未知錯誤"}`;
       break;
     }
   }
@@ -10011,7 +10057,7 @@ async function ensureMinimumAssistantLength(state, assistantText, runtimeUserNam
   if (output && countVisibleCharacters(output) < minimum) {
     console.warn(`回覆字數仍不足 ${minimum} 字，已達補寫上限。`);
   }
-  return output;
+  return { content: output, warning };
 }
 
 function getMissingChatApiKeyPlaceholder(purpose = "chat") {
@@ -10173,7 +10219,9 @@ async function testChatApiConnection(envSource = {}) {
       body: JSON.stringify(requestBody)
     }, {
       retries: config.failureRetryCount,
-      fetchImpl: (url, options) => fetchModelApi(url, options, envSource)
+      fetchImpl: (url, options) => config.provider === "gemini"
+        ? fetchGeminiNative(url, options, (target, init) => fetchModelApi(target, init, envSource))
+        : fetchModelApi(url, options, envSource)
     });
   } catch (error) {
     clearTimeout(timeout);
@@ -10292,6 +10340,7 @@ async function requestChatImageUnderstanding({
   const messages = buildChatImageUnderstandingMessages(images, userContent);
   const requestMessages = sanitizeChatApiMessagesForLog(messages);
   const logModel = config.model || config.configuredModel || "deployment";
+  const accountingEndpoint = config.provider === "custom" ? normalizePricingEndpoint(config.provider, config.completionsUrl) : config.openrouterProvider;
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: config.provider,
     openrouterProvider: config.openrouterProvider,
@@ -10309,6 +10358,9 @@ async function requestChatImageUnderstanding({
         temperature: config.temperature,
         maxTokens,
         requestMessages,
+        networkRetryCount: 0,
+        lengthRetryCount: 0,
+        emptyRetryCount: 0,
         createdAt: nowIso(),
         ...entry
       }, targetState);
@@ -10324,12 +10376,15 @@ async function requestChatImageUnderstanding({
 
   let response;
   try {
-    response = await fetchModelApi(config.completionsUrl, {
+    const fetchImageApi = config.provider === "gemini"
+      ? (url, options) => fetchGeminiNative(url, options, (target, init) => fetchModelApi(target, init, envSource))
+      : (url, options) => fetchModelApi(url, options, envSource);
+    response = await fetchImageApi(config.completionsUrl, {
       method: "POST",
       headers: buildChatApiRequestHeaders(config.apiKey, config.completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    }, envSource);
+    });
   } catch (error) {
     cleanup();
     if (generationEntry?.stoppedByUser || isGenerationStoppedError(error)) {
@@ -10373,21 +10428,23 @@ async function requestChatImageUnderstanding({
   }
 
   const content = extractChatApiMessageText(payload?.choices?.[0]?.message?.content).trim();
+  const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
   if (!content) {
-    appendImageLog({ responseText, error: "回傳空白內容", status: "error" });
+    appendImageLog({ responseText, finishReason, usage: normalizeAiUsage(payload?.usage, config.provider, accountingEndpoint), error: "回傳空白內容", status: "error" });
     throw new Error("圖片處理 API 回傳空白內容。");
   }
 
   appendImageLog({
     responseText: content,
-    usage: normalizeAiUsage(payload?.usage, config.provider, config.openrouterProvider),
+    finishReason,
+    usage: normalizeAiUsage(payload?.usage, config.provider, accountingEndpoint),
     status: "success"
   });
   return {
     content,
     provider: config.provider,
     model: logModel,
-    usage: normalizeAiUsage(payload?.usage, config.provider, config.openrouterProvider)
+    usage: normalizeAiUsage(payload?.usage, config.provider, accountingEndpoint)
   };
 }
 
@@ -10484,7 +10541,8 @@ async function callChatApiCompletionRaw({
   conversationContextId = ""
 }) {
   const targetState = aiLogTargetState || state;
-  const appendAiLog = (entry) => appendAiLogToState(entry, targetState);
+  let networkRetryCount = 0;
+  const appendAiLog = (entry) => appendAiLogToState({ ...entry, networkRetryCount, lengthRetryCount: retryCount, emptyRetryCount }, targetState);
   const apiKey = getChatApiKey(purpose, targetState, conversationContextId);
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
@@ -10555,7 +10613,7 @@ async function callChatApiCompletionRaw({
       headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT), fetchImpl: fetchModelApi });
+    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT), fetchImpl: apiProvider === "gemini" ? (url, options) => fetchGeminiNative(url, options, fetchModelApi) : fetchModelApi, onRetry: () => { networkRetryCount += 1; } });
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);
@@ -10646,9 +10704,19 @@ async function callChatApiCompletionRaw({
   const reasoningContent = extractChatApiMessageText(message.reasoning_content);
   const trimmed = safeText(content).trim();
   const trimmedReasoning = safeText(reasoningContent).trim();
-  const usage = normalizeAiUsage(payload?.usage, apiProvider, requestBody.provider?.only?.[0]);
+  const usage = normalizeAiUsage(payload?.usage, apiProvider, apiProvider === "custom" ? normalizePricingEndpoint(apiProvider, completionsUrl) : requestBody.provider?.only?.[0]);
+
+  if (trimmed && /^(?:SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII|RECITATION|IMAGE_SAFETY|content_filter)$/iu.test(finishReason)) {
+    const errorMessage = `模型回覆未完成（finish_reason: ${finishReason}），供應商已停止輸出。`;
+    appendAiLog({ purpose, model, temperature: resolvedTemperature, maxTokens: resolvedMaxTokens,
+      requestMessages, responseText: trimmed, debugReasoningContent: trimmedReasoning, usage, finishReason,
+      error: errorMessage, status: "error", createdAt: nowIso() });
+    throw new Error(errorMessage);
+  }
 
   if (shouldRetryChatApiEmptyResponse(trimmed, emptyRetryCount)) {
+    appendAiLog({ purpose, model, temperature: resolvedTemperature, maxTokens: resolvedMaxTokens,
+      requestMessages, responseText: trimmed, usage, finishReason, retryReason: "empty_response", status: "error", createdAt: nowIso() });
     return callChatApiCompletionRaw({
       messages,
       temperature: resolvedTemperature,
@@ -10676,6 +10744,8 @@ async function callChatApiCompletionRaw({
       responseText: `${trimmed}\n\n[finish_reason:length - retrying_from_scratch]`,
       debugReasoningContent: trimmedReasoning,
       usage,
+      finishReason,
+      retryReason: "length",
       status: "success",
       createdAt: nowIso()
     });
@@ -10710,6 +10780,7 @@ async function callChatApiCompletionRaw({
       responseText: `${trimmed}\n\n[finish_reason:length - stopped_after_retry]`,
       debugReasoningContent: trimmedReasoning,
       usage,
+      finishReason,
       error: errorMessage,
       status: "error",
       createdAt: nowIso()
@@ -10727,6 +10798,7 @@ async function callChatApiCompletionRaw({
       requestMessages,
       responseText: JSON.stringify(payload),
       usage,
+      finishReason,
       error: errorMessage,
       status: "error",
       createdAt: nowIso()
@@ -10743,6 +10815,7 @@ async function callChatApiCompletionRaw({
     responseText: trimmed,
     debugReasoningContent: trimmedReasoning,
     usage,
+    finishReason,
     status: "success",
     createdAt: nowIso()
   });
@@ -10857,6 +10930,8 @@ async function callChatApiCompletionStreamRaw({
   onReasoningDelta,
   onContentDelta
 }) {
+  let networkRetryCount = 0;
+  const recordAttemptLog = (entry) => appendAiLog({ ...entry, networkRetryCount, lengthRetryCount: retryCount, emptyRetryCount });
   const apiKey = getChatApiKey(purpose);
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
@@ -10868,7 +10943,7 @@ async function callChatApiCompletionStreamRaw({
     const placeholder = getMissingChatApiKeyPlaceholder(purpose);
     onContentDelta?.(placeholder);
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -10893,7 +10968,7 @@ async function callChatApiCompletionStreamRaw({
   if (!completionsUrl) {
     const errorMessage = "對話 API Base URL 未設定。使用 custom 供應商時請設定 CHAT_API_BASE_URL。";
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -10934,7 +11009,7 @@ async function callChatApiCompletionStreamRaw({
       headers: buildChatApiRequestHeaders(apiKey, completionsUrl),
       signal: controller.signal,
       body: JSON.stringify(requestBody)
-    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT), fetchImpl: fetchModelApi });
+    }, { retries: normalizeChatApiRetryCount(process.env.CHAT_API_RETRY_COUNT), fetchImpl: apiProvider === "gemini" ? (url, options) => fetchGeminiNative(url, options, fetchModelApi) : fetchModelApi, onRetry: () => { networkRetryCount += 1; } });
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);
@@ -10942,7 +11017,7 @@ async function callChatApiCompletionStreamRaw({
       throw createGenerationStoppedError();
     }
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -10969,7 +11044,7 @@ async function callChatApiCompletionStreamRaw({
         throw createGenerationStoppedError();
       }
       if (!suppressLog) {
-        appendAiLog({
+        recordAttemptLog({
           purpose,
           model,
           temperature: resolvedTemperature,
@@ -10986,7 +11061,7 @@ async function callChatApiCompletionStreamRaw({
     }
     cleanup();
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -11006,7 +11081,7 @@ async function callChatApiCompletionStreamRaw({
   try {
     streamed = await readChatApiStreamBody(response, {
       apiProvider,
-      apiEndpoint: requestBody.provider?.only?.[0],
+      apiEndpoint: apiProvider === "custom" ? normalizePricingEndpoint(apiProvider, completionsUrl) : requestBody.provider?.only?.[0],
       onReasoningDelta,
       onContentDelta
     });
@@ -11017,7 +11092,7 @@ async function callChatApiCompletionStreamRaw({
       throw createGenerationStoppedError();
     }
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -11035,7 +11110,22 @@ async function callChatApiCompletionStreamRaw({
   cleanup();
   throwIfGenerationStopped(generationEntry);
 
+  if (streamed.content && /^(?:SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII|RECITATION|IMAGE_SAFETY|content_filter)$/iu.test(streamed.finishReason)) {
+    const errorMessage = `模型回覆未完成（finish_reason: ${streamed.finishReason}），供應商已停止輸出。`;
+    if (!suppressLog) {
+      recordAttemptLog({ purpose, model, temperature: resolvedTemperature, maxTokens: resolvedMaxTokens,
+        requestMessages, responseText: streamed.content, debugReasoningContent: streamed.reasoningContent,
+        usage: streamed.usage, finishReason: streamed.finishReason, error: errorMessage, status: "error", createdAt: nowIso() });
+    }
+    throw new Error(errorMessage);
+  }
+
   if (shouldRetryChatApiEmptyResponse(streamed.content, emptyRetryCount)) {
+    if (!suppressLog) {
+      recordAttemptLog({ purpose, model, temperature: resolvedTemperature, maxTokens: resolvedMaxTokens,
+        requestMessages, responseText: streamed.content, usage: streamed.usage, finishReason: streamed.finishReason,
+        retryReason: "empty_response", status: "error", createdAt: nowIso() });
+    }
     return callChatApiCompletionStreamRaw({
       messages,
       temperature: resolvedTemperature,
@@ -11054,54 +11144,24 @@ async function callChatApiCompletionStreamRaw({
     shouldRetryChatApiLength(purpose) &&
     retryCount < CHAT_API_LENGTH_RETRY_LIMIT
   ) {
-    let next;
-    try {
-      next = await callChatApiCompletionStreamRaw({
-        messages: buildChatApiLengthRetryMessages(messages, streamed.content, purpose),
-        temperature: resolvedTemperature,
-        maxTokens: resolvedMaxTokens,
-        purpose,
-        retryCount: retryCount + 1,
-        suppressLog: true,
-        onReasoningDelta,
-        onContentDelta
-      });
-    } catch (error) {
-      if (!suppressLog) {
-        appendAiLog({
-          purpose,
-          model,
-          temperature: resolvedTemperature,
-          maxTokens: resolvedMaxTokens,
-          requestMessages,
-          responseText: `${streamed.content}\n\n[finish_reason:length - retry_failed]`,
-          debugReasoningContent: streamed.reasoningContent,
-          usage: streamed.usage || null,
-          error: safeText(error?.message) || "重跑後仍未完成",
-          status: "error",
-          createdAt: nowIso()
-        });
-      }
-      throw error;
+    if (!suppressLog) {
+      recordAttemptLog({ purpose, model, temperature: resolvedTemperature, maxTokens: resolvedMaxTokens,
+        requestMessages, responseText: streamed.content, debugReasoningContent: streamed.reasoningContent,
+        usage: streamed.usage, finishReason: streamed.finishReason, retryReason: "length", status: "success", createdAt: nowIso() });
     }
+    const next = await callChatApiCompletionStreamRaw({
+      messages: buildChatApiLengthRetryMessages(messages, streamed.content, purpose),
+      temperature: resolvedTemperature,
+      maxTokens: resolvedMaxTokens,
+      purpose,
+      retryCount: retryCount + 1,
+      suppressLog,
+      onReasoningDelta,
+      onContentDelta
+    });
 
     const mergedContent = safeText(next.content).trim();
     const mergedReasoning = [streamed.reasoningContent, next.reasoningContent].filter(Boolean).join("\n\n").trim();
-
-    if (!suppressLog) {
-      appendAiLog({
-        purpose,
-        model,
-        temperature: resolvedTemperature,
-        maxTokens: resolvedMaxTokens,
-        requestMessages,
-        responseText: mergedContent,
-        debugReasoningContent: mergedReasoning,
-        usage: next.usage || streamed.usage || null,
-        status: "success",
-        createdAt: nowIso()
-      });
-    }
 
     return {
       content: mergedContent,
@@ -11115,7 +11175,7 @@ async function callChatApiCompletionStreamRaw({
   if (streamed.finishReason === "length" && shouldRetryChatApiLength(purpose)) {
     const errorMessage = "對話 API 回覆因 finish_reason:length 截斷；重跑一次後仍未完成，已停止。";
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -11124,6 +11184,7 @@ async function callChatApiCompletionStreamRaw({
         responseText: `${streamed.content}\n\n[finish_reason:length - stopped_after_retry]`,
         debugReasoningContent: streamed.reasoningContent,
         usage: streamed.usage || null,
+        finishReason: streamed.finishReason,
         error: errorMessage,
         status: "error",
         createdAt: nowIso()
@@ -11135,7 +11196,7 @@ async function callChatApiCompletionStreamRaw({
   if (!streamed.content) {
     const errorMessage = getChatApiEmptyResponseError(streamed.finishReason);
     if (!suppressLog) {
-      appendAiLog({
+      recordAttemptLog({
         purpose,
         model,
         temperature: resolvedTemperature,
@@ -11143,6 +11204,7 @@ async function callChatApiCompletionStreamRaw({
         requestMessages,
         responseText: "",
         usage: streamed.usage || null,
+        finishReason: streamed.finishReason,
         error: errorMessage,
         status: "error",
         createdAt: nowIso()
@@ -11152,7 +11214,7 @@ async function callChatApiCompletionStreamRaw({
   }
 
   if (!suppressLog) {
-    appendAiLog({
+    recordAttemptLog({
       purpose,
       model,
       temperature: resolvedTemperature,
@@ -11161,6 +11223,7 @@ async function callChatApiCompletionStreamRaw({
       responseText: streamed.content,
       debugReasoningContent: streamed.reasoningContent,
       usage: streamed.usage || null,
+      finishReason: streamed.finishReason,
       status: "success",
       createdAt: nowIso()
     });
@@ -11235,6 +11298,7 @@ async function ensureMinimumAssistantLengthStreaming(
 ) {
   let output = safeText(assistantText);
   let reasoningOutput = "";
+  let warning = "";
   const minimum = getMinimumReplyChars();
   const maxExpandAttempts = 2;
   const onReasoningDelta = typeof handlers.onReasoningDelta === "function" ? handlers.onReasoningDelta : null;
@@ -11261,13 +11325,15 @@ async function ensureMinimumAssistantLengthStreaming(
         throw error;
       }
       console.warn(`串流補寫失敗，保留原回覆：${error.message}`);
+      warning = `補寫失敗，已保留原回覆：${safeText(error?.message) || "未知錯誤"}`;
       break;
     }
   }
 
   return {
     content: output,
-    reasoningContent: reasoningOutput
+    reasoningContent: reasoningOutput,
+    warning
   };
 }
 
@@ -12102,16 +12168,26 @@ function findAssistantMessageByDiscordReplyId(currentState, discordReplyMessageI
     .find((item) => item?.role === "assistant" && !isModelInvisibleMessage(item) && getDiscordReplyMessageIds(item).includes(normalizedId)) || null;
 }
 
-function normalizeAiLog(entry) {
+function normalizeAiLog(entry, { estimateHistorical = true } = {}) {
   const source = entry && typeof entry === "object" ? entry : {};
   const model = safeText(source.model) || "";
   const usage = normalizeAiUsage(source.usage);
+  if (estimateHistorical && !usage.cost && safeText(source.createdAt)) {
+    usage.cost = calculateAiUsageCost(usage, model, source.createdAt, true);
+    if (usage.cost) usage.cost.note = `依紀錄日期及已核實的價格有效期間補估；${usage.cost.note}`;
+  }
+  if (source.status === "skipped") usage.billingStatus = "not_requested";
   return {
     id: safeText(source.id) || newId("ailog"),
     purpose: safeText(source.purpose) || "chat",
     model,
     temperature: typeof source.temperature === "number" ? source.temperature : null,
     maxTokens: typeof source.maxTokens === "number" ? source.maxTokens : null,
+    finishReason: safeText(source.finishReason) || null,
+    retryReason: safeText(source.retryReason) || null,
+    networkRetryCount: nonNegativeUsageNumber(source.networkRetryCount),
+    lengthRetryCount: nonNegativeUsageNumber(source.lengthRetryCount),
+    emptyRetryCount: nonNegativeUsageNumber(source.emptyRetryCount),
     requestMessages: Array.isArray(source.requestMessages)
       ? source.requestMessages
           .map((item) =>
@@ -12137,8 +12213,21 @@ function appendAiLogToState(entry, targetState = state) {
   if (!targetState || !Array.isArray(targetState.aiLogs)) {
     return;
   }
-  const normalizedEntry = normalizeAiLog(entry);
-  normalizedEntry.usage.cost = calculateAiUsageCost(normalizedEntry.usage, normalizedEntry.model);
+  const normalizedEntry = normalizeAiLog(entry, { estimateHistorical: false });
+  normalizedEntry.usage.cost = calculateAiUsageCost(normalizedEntry.usage, normalizedEntry.model, normalizedEntry.createdAt);
+  if (!normalizedEntry.usage.cost) {
+    const usage = normalizedEntry.usage;
+    const pricing = getAiUsagePricingForModel(normalizedEntry.model, usage.promptTokens, usage.accountingProvider, usage.accountingEndpoint, normalizedEntry.createdAt);
+    usage.costUnavailableReason = normalizedEntry.status === "skipped" ? "未發送 API 請求，沒有可計算的費用。"
+      : usage.promptTokens === null || usage.completionTokens === null ? "上游未回傳完整 token 用量，無法可靠計價；不代表免費。"
+        : !usage.accountingProvider ? "舊紀錄未保存供應商，不能依模型名稱套用別家價格。"
+          : pricing && usage.promptCacheHitTokens > 0 && !Number.isFinite(pricing.inputCacheHitPerMillion)
+            ? "有快取命中用量，但缺少快取讀取單價，請補充環境設定。"
+            : pricing ? "上游輸入與快取 token 用量不一致，無法可靠計價。"
+              : "沒有適用的供應商／模型／端點單價，請在環境設定新增自訂單價。";
+  } else {
+    normalizedEntry.usage.costUnavailableReason = "";
+  }
   targetState.aiLogs.push(normalizedEntry);
   if (targetState.aiLogs.length > 200) {
     targetState.aiLogs = targetState.aiLogs.slice(-200);
@@ -14062,41 +14151,24 @@ async function sendInteractionLongReply(interaction, text) {
   }
 }
 
-async function sendInteractionPublicLongReply(interaction, text, options = {}) {
+async function sendInteractionPublicLongReply(interaction, text) {
   const chunks = splitForDiscord(text, 1800);
   const sentMessages = [];
-  const discardPrivateReply = options.discardPrivateReply !== false;
   try {
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
     }
-    const channel = await getInteractionFallbackChannel(interaction);
-    for (const chunk of chunks) {
-      let sent = null;
-      if (channel) {
-        try {
-          sent = await channel.send({
-            content: chunk || " ",
-            allowedMentions: { parse: [] }
-          });
-        } catch (error) {
-          if (!isUnknownInteractionError(error)) {
-            console.warn(`Discord 頻道正文發送失敗，改用 Interaction 回覆：${error.message || error}`);
-          }
-        }
-      }
-      if (!sent) {
-        sent = await interaction.followUp({
-          content: chunk || " ",
-          allowedMentions: { parse: [] }
-        });
-      }
+    if (interaction.deferred && !interaction.replied && interaction.ephemeral === true) {
+      await interaction.editReply({ content: discordSystemText("已完成。"), allowedMentions: { parse: [] } });
+    }
+    for (const [index, chunk] of chunks.entries()) {
+      const payload = { content: chunk || " ", allowedMentions: { parse: [] } };
+      const sent = index === 0 && interaction.deferred && !interaction.replied
+        ? await interaction.editReply(payload)
+        : await interaction.followUp(payload);
       if (sent) {
         sentMessages.push(sent);
       }
-    }
-    if (discardPrivateReply) {
-      await discardDeferredInteractionReply(interaction);
     }
     return sentMessages;
   } catch (error) {
@@ -14136,6 +14208,11 @@ async function safeSendInteractionText(interaction, content, options = {}) {
   }
   try {
     if (interaction.deferred && !interaction.replied) {
+      if (ephemeral && interaction.ephemeral === false) {
+        await interaction.editReply({ content: discordSystemText("處理未完成，詳細資訊僅對你可見。"), allowedMentions: payload.allowedMentions });
+        await interaction.followUp(payload);
+        return;
+      }
       await interaction.editReply({ content, allowedMentions: payload.allowedMentions });
       return;
     }
@@ -14155,20 +14232,6 @@ async function safeSendInteractionText(interaction, content, options = {}) {
       return;
     }
     throw error;
-  }
-}
-
-async function discardDeferredInteractionReply(interaction) {
-  if ((!interaction?.deferred && !interaction?.replied) || typeof interaction.deleteReply !== "function") {
-    return;
-  }
-  try {
-    await interaction.deleteReply();
-  } catch (error) {
-    const code = String(error?.code || error?.rawError?.code || "");
-    if (!isUnknownInteractionError(error) && code !== "10008" && code !== "10062") {
-      throw error;
-    }
   }
 }
 
@@ -14520,7 +14583,6 @@ async function sendDiscordArchivePublicChunks(interaction, text, components = []
     for (let index = 0; index < chunks.length; index += 1) {
       await interaction.followUp(payloadFor(chunks[index], index));
     }
-    await discardDeferredInteractionReply(interaction);
     return;
   }
 
@@ -15456,7 +15518,7 @@ async function handleSlashCommand(interaction) {
     }
 
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply();
     const result = await withStateLock(
       () => loadDiscordArchiveIntoCurrentChannel(
         resolved.session.id,
@@ -15466,7 +15528,7 @@ async function handleSlashCommand(interaction) {
       getDiscordConversationContextOptions(interaction)
     );
     if (!result) {
-      await interaction.editReply(discordSystemText("這個對話存檔已不存在。"));
+      await safeSendInteractionError(interaction, discordSystemText("這個對話存檔已不存在。"));
       return;
     }
     const header = buildDiscordArchiveLoadedHeader(result, mode);
@@ -15563,7 +15625,7 @@ async function handleSlashCommand(interaction) {
     const num = interaction.options.getInteger("num");
     const comment = safeText(interaction.options.getString("comment") || "");
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
     }
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
     const result = await rewriteRecentUserInput({
@@ -15594,7 +15656,7 @@ async function handleSlashCommand(interaction) {
         getDiscordConversationContextOptions(interaction)
       );
     } else {
-      await discardDeferredInteractionReply(interaction);
+      await safeSendInteractionText(interaction, discordSystemText("已完成，沒有文字回覆。"));
     }
     return;
   }
@@ -15609,7 +15671,7 @@ async function handleSlashCommand(interaction) {
       return;
     }
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
     }
     const turn = await processDiscordChatTurn({
       channel: interaction.channel,
@@ -15625,9 +15687,7 @@ async function handleSlashCommand(interaction) {
     if (failureText) {
       await safeSendInteractionError(interaction, discordSystemText(failureText));
       if (turn.pendingOpening) {
-        await sendInteractionPublicLongReply(interaction, turn.pendingOpening, {
-          discardPrivateReply: false
-        });
+        await sendInteractionPublicLongReply(interaction, turn.pendingOpening);
       }
       return;
     }
@@ -15639,14 +15699,14 @@ async function handleSlashCommand(interaction) {
         getDiscordConversationContextOptions(interaction)
       );
     } else {
-      await discardDeferredInteractionReply(interaction);
+      await safeSendInteractionText(interaction, discordSystemText("已完成，沒有文字回覆。"));
     }
     return;
   }
 
   if (name === "ai_start") {
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
     }
     cancelDiscordArchiveReplays(interaction.user?.id, interaction.channelId);
     const roleCardNumber = interaction.options.getInteger("num") ?? 0;
@@ -15656,10 +15716,10 @@ async function handleSlashCommand(interaction) {
       userName: interaction.user.username
     }, roleCardNumber, openingNumber, getDiscordConversationContextOptions(interaction));
     if (!result.ok) {
-      await interaction.editReply(discordSystemText(result.error));
+      await safeSendInteractionError(interaction, discordSystemText(result.error));
       return;
     }
-    await sendInteractionPublicLongReply(interaction, discordSystemText(result.openingDialogue));
+    await sendInteractionPublicLongReply(interaction, discordSystemText(result.openingDialogue || "已開始對話。"));
     return;
   }
 
@@ -16018,7 +16078,7 @@ function setupDiscordBot() {
         return;
       }
       if (shouldDeferSlashCommandEarly(interaction.commandName) && !interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply();
       }
       await handleSlashCommand(interaction);
     } catch (error) {

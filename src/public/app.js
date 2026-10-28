@@ -14,6 +14,7 @@ import {
   UI_LANGUAGE_SIMPLIFIED,
   UI_LANGUAGE_TRADITIONAL
 } from "./ui-language.js";
+import { formatApiPriceOverridesEnv, parseApiPriceOverrides } from "./api-price-overrides.js";
 
 const el = {
   mobileInfoToggleBtn: document.getElementById("mobileInfoToggleBtn"),
@@ -678,6 +679,11 @@ const ENV_FIELD_GROUPS = [
         help: "專用圖片模型的 Key，只保存在本機 .env 與 data/environment.env。"
       }
     ]
+  },
+  {
+    title: "API 計價",
+    description: "上游實際費用優先；自訂單價及官方牌價均為估算，不代表平台帳單。",
+    fields: [{ key: "API_PRICING_OVERRIDES", label: "自訂單價（每百萬 tokens）", type: "pricing" }]
   },
   {
     title: "API Proxy",
@@ -1661,6 +1667,7 @@ async function requestChatStream(content, images = [], handlers = {}) {
 
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  let receivedDone = false;
 
   const processLine = (line) => {
     const trimmed = String(line || "").trim();
@@ -1671,6 +1678,7 @@ async function requestChatStream(content, images = [], handlers = {}) {
     if (!event || typeof event !== "object") {
       return;
     }
+    if (event.type === "done" && event.state) receivedDone = true;
     handlers.onEvent?.(event);
     if (event.type === "error") {
       throw new Error(event.error || "生成失敗。");
@@ -1695,6 +1703,9 @@ async function requestChatStream(content, images = [], handlers = {}) {
   buffer += decoder.decode();
   if (buffer.trim()) {
     processLine(buffer);
+  }
+  if (!receivedDone) {
+    throw new Error("連線已中斷，未收到最終結果；請重新整理確認對話狀態。");
   }
 }
 
@@ -2239,7 +2250,93 @@ function createEnvImageField(field, parsedEnv) {
   return wrapper;
 }
 
+function createEnvPricingField(field, parsedEnv) {
+  const raw = getEnvFieldValue(parsedEnv, field.key) || "[]";
+  let entries;
+  try {
+    entries = JSON.parse(raw);
+    if (!Array.isArray(entries) || entries.length > 100) throw new Error("invalid prices");
+  } catch {
+    return createEnvField({ ...field, type: "textarea", help: "單價 JSON 無效，請修正為有效陣列；留空可清除自訂單價。" }, parsedEnv);
+  }
+  const wrapper = document.createElement("div");
+  wrapper.className = "env-field env-field-wide";
+  const title = document.createElement("span");
+  title.className = "env-field-title";
+  title.textContent = field.label;
+  const storage = document.createElement("input");
+  storage.type = "hidden";
+  storage.dataset.envKey = field.key;
+  storage.value = raw;
+  const viewport = document.createElement("div");
+  viewport.className = "api-price-editor";
+  const table = document.createElement("table");
+  table.className = "api-price-table";
+  const head = table.createTHead().insertRow();
+  for (const label of ["供應商", "精確模型 ID", "OpenRouter 端點／自訂 API 網址", "幣種", "輸入", "快取讀取", "輸出", ""]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    head.appendChild(cell);
+  }
+  const tbody = table.createTBody();
+  const serialize = () => {
+    storage.value = JSON.stringify([...tbody.rows].map(row => Object.fromEntries(
+      [...row.querySelectorAll("[data-price-field]")].map(input => [input.dataset.priceField, input.value])
+    )));
+  };
+  const addRow = (entry = {}) => {
+    const row = tbody.insertRow();
+    for (const [key, label, choices] of [
+      ["provider", "供應商", [["deepseek", "DeepSeek"], ["openai", "OpenAI"], ["gemini", "Gemini"], ["zhipu", "GLM"], ["openrouter", "OpenRouter"], ["custom", "自訂"]]],
+      ["model", "精確模型 ID"], ["endpoint", "OpenRouter 端點／自訂 API 網址"],
+      ["currency", "幣種", ["USD", "CNY", "HKD", "EUR", "JPY", "TWD"].map(value => [value, value])],
+      ["inputCacheMissPerMillion", "輸入單價"], ["inputCacheHitPerMillion", "快取讀取單價"], ["outputPerMillion", "輸出單價"]
+    ]) {
+      const input = document.createElement(choices ? "select" : "input");
+      if (choices) {
+        for (const [value, text] of choices) input.add(new Option(text, value));
+        if (key === "currency" && entry?.currency && !choices.some(([value]) => value === entry.currency)) input.add(new Option(entry.currency, entry.currency));
+      } else {
+        input.type = key.endsWith("PerMillion") ? "number" : "text";
+      }
+      input.dataset.priceField = key;
+      input.setAttribute("aria-label", label);
+      if (input.type === "number") {
+        input.min = "0";
+        input.max = "1000000000";
+        input.step = "any";
+        input.required = key !== "inputCacheHitPerMillion";
+      }
+      input.value = entry?.[key] ?? (key === "provider" ? "custom" : key === "currency" ? "USD" : "");
+      row.insertCell().appendChild(input);
+      input.addEventListener("input", serialize);
+      input.addEventListener("change", serialize);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary";
+    remove.textContent = "×";
+    remove.title = "刪除單價";
+    remove.setAttribute("aria-label", "刪除單價");
+    remove.addEventListener("click", () => { row.remove(); serialize(); });
+    row.insertCell().appendChild(remove);
+  };
+  entries.forEach(addRow);
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "secondary";
+  add.textContent = "新增單價";
+  add.addEventListener("click", () => { addRow(); serialize(); });
+  const hint = document.createElement("span");
+  hint.className = "env-field-help";
+  hint.textContent = "單價按供應商、模型與端點分開；自訂 API 請填完整 /chat/completions 網址。快取單價留空表示未知，明確填 0 才是免費。";
+  viewport.appendChild(table);
+  wrapper.append(title, storage, viewport, add, hint);
+  return wrapper;
+}
+
 function createEnvField(field, parsedEnv) {
+  if (field.type === "pricing") return createEnvPricingField(field, parsedEnv);
   if (field.type === "image") {
     return createEnvImageField(field, parsedEnv);
   }
@@ -2539,6 +2636,7 @@ function collectEnvExtraEntries() {
 function buildEnvContentFromForm() {
   saveCurrentChatApiProviderDraft();
   const values = collectEnvFieldValues();
+  if (values.API_PRICING_OVERRIDES) values.API_PRICING_OVERRIDES = JSON.stringify(parseApiPriceOverrides(values.API_PRICING_OVERRIDES));
   const lines = [
     "# 由網頁環境設定表單自動生成。",
     "# 保存後會寫入專案根目錄 .env。"
@@ -2553,7 +2651,7 @@ function buildEnvContentFromForm() {
       if (field.help) {
         lines.push(`# ${field.help}`);
       }
-      lines.push(`${field.key}=${formatEnvValue(values[field.key] || "")}`);
+      lines.push(`${field.key}=${field.key === "API_PRICING_OVERRIDES" ? formatApiPriceOverridesEnv(values[field.key]) : formatEnvValue(values[field.key] || "")}`);
     });
     if (group.title === "對話API") {
       lines.push("# 各供應商先前使用的 Key、模型與 Base URL；切換供應商時會自動帶回。");
@@ -2978,6 +3076,7 @@ function getUsageCost(usage) {
 }
 
 function getUsageCostLabel(usage) {
+  if (usage?.billingStatus === "not_requested") return "未發送 API";
   if (getUsageCost(usage) === null) return "價格未知";
   return usage?.cost?.type === "actual" ? "實際費用" : "估算費用";
 }
@@ -3008,7 +3107,9 @@ function formatCurrencyAmount(value, currency = "CNY") {
 function formatUsageCostBreakdown(usage) {
   const cost = usage?.cost;
   if (!cost || typeof cost !== "object" || getUsageCost(usage) === null) {
-    return "價格未知：上游未提供可確認幣種的費用，且沒有適用的供應商／模型／端點價格；不計為免費。";
+    if (usage?.billingStatus === "not_requested") return "未發送 API 請求，不計入費用統計。";
+    if (!usage?.costUnavailableReason && (!Number.isFinite(usage?.promptTokens) || !Number.isFinite(usage?.completionTokens))) return "價格未知：上游未回傳完整 token 用量，無法可靠計價；不計為免費。";
+    return `價格未知：${usage?.costUnavailableReason || "上游未提供可確認幣種的費用，且沒有適用的供應商／模型／端點價格；請在環境設定的 API 計價新增自訂單價，不計為免費。"}`;
   }
   const currency = getUsageCostCurrency(usage);
   const unitLabel = getPricingUnitLabel(cost.pricingUnit);
@@ -3016,7 +3117,7 @@ function formatUsageCostBreakdown(usage) {
     `${getUsageCostLabel(usage)}：${formatCurrencyAmount(getUsageCost(usage), currency)}${cost.pricingModel ? `（${cost.pricingModel}）` : ""}`,
     `計費單位：${currency} / ${unitLabel}`
   ];
-  const sources = { api_response: "上游 API 回傳", official_pricing: "官方牌價快照", openrouter_endpoint: "OpenRouter 指定端點 API", legacy: "舊紀錄，來源未確認" };
+  const sources = { api_response: "上游 API 回傳", official_pricing: "官方牌價快照", user_configured: "本機自訂單價", openrouter_endpoint: "OpenRouter 指定端點 API", legacy: "舊紀錄，來源未確認" };
   lines.push(`來源：${sources[cost.source] || sources.legacy}`);
   if (cost.provider) lines.push(`供應商：${cost.provider}${cost.endpoint ? ` / ${cost.endpoint}` : ""}`);
   if (cost.sourceUrl) lines.push(`價格來源：${cost.sourceUrl}`);
@@ -3058,7 +3159,7 @@ function formatUsage(usage) {
     cacheHit !== null ? `Cache Hit ${cacheHit}` : "",
     cacheMiss !== null ? `Cache Miss ${cacheMiss}` : "",
     cacheRate ? `命中率 ${cacheRate}` : "",
-    cost !== null ? `${getUsageCostLabel(usage)} ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : "價格未知"
+    cost !== null ? `${getUsageCostLabel(usage)} ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : getUsageCostLabel(usage)
   ].filter(Boolean).join(" / ");
 }
 
@@ -3066,6 +3167,7 @@ function formatAiLogCostTotals(logs) {
   const totals = { actual: {}, estimated: {} };
   let unknown = 0;
   for (const log of logs) {
+    if (log.status === "skipped" || log.usage?.billingStatus === "not_requested") continue;
     const amount = getUsageCost(log.usage);
     if (amount === null) {
       unknown += 1;
@@ -5703,6 +5805,13 @@ function renderMessages(state, options = {}) {
       content.appendChild(compressionNotice);
     }
     content.appendChild(fullContentBody);
+    const generationWarning = String(message.generationWarning || message.extra?.generationWarning || "").trim();
+    if (message.role === "assistant" && generationWarning) {
+      const warningNotice = document.createElement("div");
+      warningNotice.className = "auto-time-warning-notice";
+      warningNotice.textContent = getUiLanguageText(generationWarning);
+      content.appendChild(warningNotice);
+    }
     const autoTimeWarning = typeof message.autoTimeWarning === "string"
       ? message.autoTimeWarning.trim()
       : typeof message.extra?.autoTimeWarning === "string"
@@ -5924,6 +6033,25 @@ function formatAiLogMessages(messages, contentStore = {}) {
 }
 
 function populateAiLogBody(body, log, contentStore, usageText) {
+  const diagnostics = document.createElement("label");
+  diagnostics.textContent = "回應診斷";
+  const diagnosticsArea = document.createElement("pre");
+  diagnosticsArea.className = "ai-log-block";
+  const count = (value) => Number.isFinite(value) ? String(value) : "未記錄";
+  const retryReason = { length: "輸出長度截斷，重新生成", empty_response: "回應空白，重新生成" }[log.retryReason] || "無";
+  diagnosticsArea.textContent = [
+    `結束原因：${log.finishReason || "未提供或未記錄"}`,
+    `輸出上限：${count(log.maxTokens)} tokens`,
+    `實際輸出：${count(log.usage?.completionTokens)} tokens`,
+    `思考 tokens：${count(log.usage?.reasoningTokens)}`,
+    `網路重試：${count(log.networkRetryCount)} 次`,
+    `長度重試：${count(log.lengthRetryCount)} 次`,
+    `空白回應重試：${count(log.emptyRetryCount)} 次`,
+    `本次後續動作：${retryReason}`
+  ].join("\n");
+  diagnostics.appendChild(diagnosticsArea);
+  body.append(diagnostics);
+
   if (usageText) {
     const usageLabel = document.createElement("label");
     usageLabel.textContent = "本次 Token 消耗";
@@ -9712,11 +9840,12 @@ function bindEvents() {
       return;
     }
 
+    let streamingAssistantMessage = null;
     try {
       isChatStreaming = true;
       renderStatus(appState);
       const displayContent = content || "請查看附加圖片。";
-      const streamingAssistantMessage = appendOptimisticChatTurn(displayContent, images);
+      streamingAssistantMessage = appendOptimisticChatTurn(displayContent, images);
       el.chatInput.value = "";
       pendingChatImages = [];
       renderPendingChatImages();
@@ -9743,6 +9872,7 @@ function bindEvents() {
       await refresh();
       showToast("已送出");
     } catch (error) {
+      applyChatStreamEventToMessage({ type: "error", error: error.message }, streamingAssistantMessage);
       if (images.length > 0 && pendingChatImages.length === 0) {
         pendingChatImages = images;
         renderPendingChatImages();

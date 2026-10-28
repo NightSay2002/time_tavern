@@ -117,7 +117,8 @@ function waitForChatApiRetry(ms, signal) {
 export async function fetchChatApiWithRetry(url, options, {
   retries = 0,
   fetchImpl = fetch,
-  wait = waitForChatApiRetry
+  wait = waitForChatApiRetry,
+  onRetry = null
 } = {}) {
   const limit = normalizeChatApiRetryCount(retries);
   for (let attempt = 0; ; attempt += 1) {
@@ -145,6 +146,8 @@ export async function fetchChatApiWithRetry(url, options, {
     }
     const delay = Math.max(Math.min(1000 * 2 ** attempt, 10000), Number.isFinite(retryAfterMs) ? retryAfterMs : 0);
     await wait(Math.min(delay, 2147483647), options.signal);
+    options.signal?.throwIfAborted();
+    onRetry?.({ attempt: attempt + 1, status: response?.status ?? null });
   }
 }
 

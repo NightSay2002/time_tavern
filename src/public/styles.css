@@ -3632,6 +3632,36 @@ body.novelai-studio-body .novelai-small-preview {
   white-space: nowrap;
 }
 
+.api-price-editor {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.api-price-table {
+  width: 100%;
+  min-width: 960px;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.api-price-table th,
+.api-price-table td {
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.api-price-table input,
+.api-price-table select {
+  min-width: 90px;
+  width: 100%;
+}
+
+.api-price-table input[data-price-field="model"],
+.api-price-table input[data-price-field="endpoint"] {
+  min-width: 180px;
+}
+
 .env-field .api-catalog-actions {
   display: flex;
   flex-wrap: wrap;

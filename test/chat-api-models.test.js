@@ -4,6 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { listChatApiModels, listOpenRouterProviders, listOpenRouterModelEndpoints, normalizeOpenRouterPricing, buildChatApiCompletionsUrl, isDeploymentChatCompletionsUrl, resolveChatApiModelForEndpoint, adaptChatApiRequestBody, buildChatApiRequestHeaders } from "../src/chat-api-endpoint.js";
 import { buildChatApiRequestBody, fetchChatApiWithRetry, normalizeChatApiRetryCount } from "../src/chat-api-request.js";
+import { getManualApiPricing } from "../src/public/api-price-overrides.js";
 import { createChatApiProviderDrafts, getChatApiProviderEnvEntries, getOfficialChatApiBaseUrl } from "../src/public/chat-api-provider-settings.js";
 import { resolveChatApiKey } from "../src/chat-api-key-config.js";
 
@@ -217,7 +218,7 @@ test("OpenRouter routing is strict only when selected and never leaks to direct 
 
 test("OpenRouter usage keeps actual USD charges including free usage without direct-provider estimation", async () => {
   const source = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
-  const scope = vm.createContext({ safeText: (value) => String(value ?? "").trim(), TextDecoder, openRouterEndpointPricing: new Map(), CHAT_API_COST_PRICING: [] });
+  const scope = vm.createContext({ safeText: (value) => String(value ?? "").trim(), TextDecoder, openRouterEndpointPricing: new Map(), CHAT_API_COST_PRICING: [], getManualApiPricing, process: { env: {} } });
   for (const name of ["nonNegativeUsageNumber", "normalizeAiUsageCost", "normalizeAiUsage", "getAiUsagePricingForModel", "calculateAiUsageCost", "extractChatApiMessageText", "hasUsageTokens", "readChatApiStreamBody"]) {
     const start = source.indexOf(`${name === "readChatApiStreamBody" ? "async " : ""}function ${name}(`);
     vm.runInContext(source.slice(start, source.indexOf("\n}", start) + 2), scope);
@@ -243,6 +244,7 @@ test("all four real request paths send independently selected inference routes",
     process: { env: {} }, state: {}, DEFAULT_CHAT_IMAGE_API_MAX_TOKENS: 1024,
     buildChatApiRequestBody, adaptChatApiRequestBody, buildChatApiRequestHeaders, isDeploymentChatCompletionsUrl, clearTimeout,
     normalizeChatApiRetryCount,
+    fetchGeminiNative: (url, options, fetchImpl) => fetchImpl(url, options),
     fetchChatApiWithRetry: (url, options, config) => fetchChatApiWithRetry(url, options, { ...config, fetchImpl: scope.fetch }),
     resolveChatApiTestConfig: () => mainConfig,
     resolveChatImageApiConfig: () => ({ ...mainConfig, openrouterProvider: "azure/us" }),
@@ -255,7 +257,7 @@ test("all four real request paths send independently selected inference routes",
     getChatApiTemperature: () => 0.5, resolveChatApiMaxTokens: () => 1024,
     getChatApiReasoningEffort: () => "", getUiLanguage: () => "zh-TW",
     localizeChatApiMessages: (messages) => messages,
-    sanitizeChatApiMessagesForLog: (messages) => messages,
+    sanitizeChatApiMessagesForLog: (messages) => [...messages],
     appendAiLogToState() {}, appendAiLog() {}, nowIso: () => "2026-09-08T00:00:00Z",
     createTimeoutController: () => ({ controller: new AbortController(), cleanup() {} }),
     isGenerationStoppedError: () => false, formatFetchErrorMessage: () => "mock transport stopped",

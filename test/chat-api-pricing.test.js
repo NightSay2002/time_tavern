@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { getManualApiPricing } from "../src/public/api-price-overrides.js";
 
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const web = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
@@ -15,7 +16,7 @@ function loadFunctions(scope, source, names) {
 }
 
 function pricingScope() {
-  const scope = vm.createContext({ safeText: value => String(value ?? "").trim(), TextDecoder });
+  const scope = vm.createContext({ safeText: value => String(value ?? "").trim(), TextDecoder, getManualApiPricing, process: { env: {} } });
   const start = server.indexOf("const CHAT_API_COST_PRICING =");
   const end = server.indexOf("const openRouterEndpointPricing = new Map();", start);
   vm.runInContext(server.slice(start, end + "const openRouterEndpointPricing = new Map();".length), scope);
@@ -36,6 +37,86 @@ function uiScope() {
 }
 
 const tokens = { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 200 } };
+
+test("new official models price Gemini, GLM and OpenAI without crossing providers", () => {
+  const p = pricingScope();
+  for (const [provider, model] of [["gemini", "gemini-4-argon"], ["gemini", "gemini-3.8-flash"], ["zhipu", "glm-5.3"], ["zhipu", "glm-5.3-flash"], ["openai", "gpt-4.1-mini"], ["openai", "gpt-6.1-sol"]]) {
+    const cost = p.calculateAiUsageCost(p.normalizeAiUsage(tokens, provider), model, "2026-10-28T12:00:00Z");
+    assert.equal(cost.type, "estimated");
+    assert.equal(cost.provider, provider);
+    assert.equal(cost.source, "official_pricing");
+    assert.ok(cost.amount > 0);
+  }
+  const free = p.calculateAiUsageCost(p.normalizeAiUsage(tokens, "zhipu"), "glm-4.7-flash");
+  assert.equal(free.amount, 0);
+});
+
+test("Gemini introductory prices use the request date and only backfill verified historical periods", () => {
+  const p = pricingScope();
+  const usage = p.normalizeAiUsage(tokens, "gemini");
+  assert.equal(p.calculateAiUsageCost(usage, "gemini-4-argon", "2026-11-30T23:59:59Z").outputPerMillion, 10);
+  assert.equal(p.calculateAiUsageCost(usage, "gemini-4-argon", "2026-12-01T00:00:00Z").outputPerMillion, 20);
+  const restored = p.normalizeAiLog({ createdAt: "2026-10-28T00:00:00Z", model: "gemini-4-argon", usage });
+  assert.equal(restored.usage.cost.type, "estimated");
+  assert.equal(p.normalizeAiLog({ createdAt: "2026-01-01", model: "gemini-4-argon", usage }).usage.cost, null);
+});
+
+test("all providers honor exact manual unit prices but actual charges and stored snapshots win", () => {
+  const p = pricingScope();
+  for (const provider of ["deepseek", "gemini", "openai", "zhipu", "openrouter", "custom"]) {
+    const endpoint = provider === "custom" ? "https://example.test/v1/chat/completions" : provider === "openrouter" ? "vendor/fp8" : "";
+    p.process.env.API_PRICING_OVERRIDES = JSON.stringify([{ provider, model: "model", endpoint, currency: "HKD", inputCacheMissPerMillion: 2, inputCacheHitPerMillion: 0.5, outputPerMillion: 5 }]);
+    const usage = p.normalizeAiUsage(tokens, provider, endpoint);
+    const cost = p.calculateAiUsageCost(usage, "model");
+    assert.equal(cost.source, "user_configured");
+    assert.equal(cost.currency, "HKD");
+    assert.equal(cost.amount, 0.0022);
+    assert.equal(p.calculateAiUsageCost(usage, "other"), null);
+    const actual = p.normalizeAiUsage({ ...tokens, cost: { amount: 0.123, currency: "USD" } }, provider, endpoint);
+    assert.equal(p.calculateAiUsageCost(actual, "model").amount, 0.123);
+  }
+});
+
+test("explicit currency cost fields are actual charges for any API and missing usage stays unknown", () => {
+  const p = pricingScope();
+  for (const provider of ["deepseek", "gemini", "openai", "zhipu", "openrouter", "custom"]) {
+    assert.equal(p.normalizeAiUsage({ cost_usd: 0.25 }, provider).cost.amount, 0.25);
+    assert.equal(p.normalizeAiUsage({ cost: 0, currency: "HKD" }, provider).cost.amount, 0);
+    assert.equal(p.calculateAiUsageCost(p.normalizeAiUsage({}, provider), "glm-5.3"), null);
+  }
+});
+
+test("new logs preserve manual pricing snapshots and distinguish missing usage from missing rates", () => {
+  const p = pricingScope();
+  p.process.env.API_PRICING_OVERRIDES = JSON.stringify([{ provider: "gemini", model: "gemini-4-argon", currency: "HKD", inputCacheMissPerMillion: 1, inputCacheHitPerMillion: 0.1, outputPerMillion: 2 }]);
+  p.appendAiLogToState({ model: "gemini-4-argon", usage: p.normalizeAiUsage(tokens, "gemini"), createdAt: "2026-10-28T00:00:00Z" });
+  assert.equal(p.state.aiLogs[0].usage.cost.source, "user_configured");
+  assert.equal(p.state.aiLogs[0].usage.cost.currency, "HKD");
+  p.process.env.API_PRICING_OVERRIDES = "[]";
+  assert.equal(p.normalizeAiLog(p.state.aiLogs[0]).usage.cost.currency, "HKD");
+  p.appendAiLogToState({ model: "unknown", usage: p.normalizeAiUsage(tokens, "custom") });
+  assert.match(p.state.aiLogs.at(-1).usage.costUnavailableReason, /沒有適用/u);
+  p.appendAiLogToState({ model: "unknown", usage: {} });
+  assert.match(p.state.aiLogs.at(-1).usage.costUnavailableReason, /token 用量/u);
+});
+
+test("response diagnostics survive log normalization without inventing values for old logs", () => {
+  const p = pricingScope();
+  const log = p.normalizeAiLog({ finishReason: "content_filter", retryReason: "length", networkRetryCount: 2,
+    lengthRetryCount: 1, emptyRetryCount: 0, usage: { completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 7 } } });
+  const saved = p.normalizeAiLog(JSON.parse(JSON.stringify(log)));
+  assert.equal(saved.finishReason, "content_filter");
+  assert.equal(saved.retryReason, "length");
+  assert.equal(saved.networkRetryCount, 2);
+  assert.equal(saved.lengthRetryCount, 1);
+  assert.equal(saved.emptyRetryCount, 0);
+  assert.equal(saved.usage.completionTokens, 20);
+  assert.equal(saved.usage.reasoningTokens, 7);
+  const old = p.normalizeAiLog({});
+  assert.equal(old.finishReason, null);
+  assert.equal(old.networkRetryCount, null);
+  assert.equal(old.usage.reasoningTokens, null);
+});
 
 test("usage preserves unknown numeric values and explicit zero without inventing free charges", () => {
   const p = pricingScope();
@@ -78,7 +159,7 @@ test("official estimates match both provider and exact model rather than substri
     assert.equal(cost.type, "estimated");
     assert.equal(cost.provider, provider);
     assert.equal(cost.source, "official_pricing");
-    assert.equal(cost.updatedAt, "2026-10-27");
+    assert.equal(cost.updatedAt, "2026-10-28");
     assert.match(cost.sourceUrl, /^https:\/\//u);
     assert.equal(p.calculateAiUsageCost(p.normalizeAiUsage(tokens, "custom"), model), null);
     assert.equal(p.calculateAiUsageCost(usage, `${model}-unknown-variant`), null);

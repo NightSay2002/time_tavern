@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { buildChatApiRequestBody, fetchChatApiWithRetry, normalizeChatApiRetryCount, normalizeChatApiMaxTokensParamName } from "../src/chat-api-request.js";
 import { buildChatApiCompletionsUrl, resolveChatApiModelForEndpoint, isDeploymentChatCompletionsUrl, adaptChatApiRequestBody, buildChatApiRequestHeaders } from "../src/chat-api-endpoint.js";
+import { fetchGeminiNative } from "../src/gemini-native.js";
 
 const source = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
@@ -23,6 +24,7 @@ function scopeForTest() {
     buildChatApiCompletionsUrl, resolveChatApiModelForEndpoint, isDeploymentChatCompletionsUrl,
     adaptChatApiRequestBody, buildChatApiRequestHeaders, buildChatApiRequestBody,
     fetchChatApiWithRetry, normalizeChatApiRetryCount, normalizeChatApiMaxTokensParamName,
+    fetchGeminiNative: (url, options, fetchImpl) => fetchImpl(url, options),
     normalizeAiUsage: value => value,
     setTimeout(callback, milliseconds) { const id = ++timerId; timers.set(id, { callback, milliseconds }); return id; },
     clearTimeout: id => timers.delete(id)
@@ -101,6 +103,22 @@ test("Gemini connection test reserves thinking output tokens and retains the sel
   assert.equal(timers.size, 0);
 });
 
+test("Gemini connection test uses native BLOCK_NONE without the preset", async () => {
+  const { scope } = scopeForTest();
+  scope.fetchGeminiNative = fetchGeminiNative;
+  scope.fetchModelApi = async (url, options) => {
+    assert.equal(url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-argon:generateContent");
+    const body = JSON.parse(options.body);
+    assert.equal(body.generationConfig.maxOutputTokens, 4096);
+    assert.equal(body.systemInstruction, undefined);
+    assert.ok(body.safetySettings.length === 4 && body.safetySettings.every(item => item.threshold === "BLOCK_NONE"));
+    return json({ candidates: [{ content: { parts: [{ text: "OK" }] }, finishReason: "STOP" }] });
+  };
+  const result = await scope.testChatApiConnection(env);
+  assert.equal(result.ok, true);
+  assert.equal(result.finishReason, "stop");
+});
+
 test("connection and response-body deadlines report the test limit without retries or leaked timers", async () => {
   for (const phase of ["connect", "body"]) {
     const { scope, timers } = scopeForTest();
@@ -150,4 +168,33 @@ test("image connection tests retain their configured timeout instead of imposing
     return { content: "test image" };
   };
   assert.equal((await scope.testChatImageApiConnection({})).ok, true);
+});
+
+test("Gemini image connection and real image analysis do not inject a preset", async () => {
+  const { scope } = scopeForTest();
+  const logged = [];
+  const sent = [];
+  scope.fetchGeminiNative = fetchGeminiNative;
+  scope.CHAT_IMAGE_API_TEST_IMAGE = "data:image/png;base64,dGVzdA==";
+  scope.DEFAULT_CHAT_IMAGE_API_MAX_TOKENS = 1024;
+  scope.resolveChatImageApiConfig = () => ({ provider: "gemini", configuredModel: "gemini-4-argon", model: "gemini-4-argon",
+    apiKey: "test-key", completionsUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", requestTimeoutMs: 120000 });
+  scope.validateChatImageApiConfig = () => {};
+  scope.buildChatImageUnderstandingMessages = () => [{ role: "user", content: [{ type: "text", text: "describe" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,dGVzdA==" } }] }];
+  scope.sanitizeChatApiMessagesForLog = messages => [...messages];
+  scope.throwIfGenerationStopped = () => {};
+  scope.appendAiLogToState = entry => logged.push(entry);
+  scope.fetchModelApi = async (_url, options) => {
+    sent.push(JSON.parse(options.body));
+    return json({ candidates: [{ content: { parts: [{ text: "image description" }] }, finishReason: "STOP" }] });
+  };
+  const start = source.indexOf("async function requestChatImageUnderstanding(");
+  vm.runInContext(source.slice(start, source.indexOf("\n}\n", start) + 2), scope);
+  assert.equal((await scope.testChatImageApiConnection({})).ok, true);
+  assert.equal(sent[0].systemInstruction, undefined);
+  await scope.requestChatImageUnderstanding({ envSource: {}, writeLog: true, targetState: {}, images: [] });
+  assert.equal(sent[1].systemInstruction, undefined);
+  assert.equal(logged[0].requestMessages.length, 1);
+  assert.equal(logged[0].requestMessages[0].role, "user");
 });
