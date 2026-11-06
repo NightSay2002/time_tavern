@@ -21,6 +21,7 @@ test("native Gemini requests retain conversation, images, reasoning and four BLO
   assert.deepEqual(request.body.contents[0].parts[1], { inlineData: { mimeType: "image/png", data: "dGVzdA==" } });
   assert.equal(request.body.generationConfig.maxOutputTokens, 64000);
   assert.equal(request.body.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
+  assert.equal(request.body.generationConfig.thinkingConfig.includeThoughts, true);
   assert.equal(request.body.safetySettings.length, 4);
   assert.ok(request.body.safetySettings.every(item => item.threshold === "BLOCK_NONE"));
   assert.equal(new Set(request.body.safetySettings.map(item => item.category)).size, 4);
@@ -48,8 +49,36 @@ test("native requests preserve Gemini 2.5 thinking budgets and response format",
   const request = buildGeminiNativeRequest(url, { ...base, model: "gemini-2.5-flash", reasoning_effort: "none", response_format: { type: "json_object" } });
   assert.equal(request.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
   assert.equal(request.body.generationConfig.thinkingConfig.thinkingBudget, 0);
+  assert.equal(request.body.generationConfig.thinkingConfig.includeThoughts, undefined);
   assert.equal(request.body.generationConfig.responseMimeType, "application/json");
   assert.deepEqual(request.body.systemInstruction.parts, [{ text: "system rules" }]);
+});
+
+test("thought summaries are requested for supported thinking models without overriding defaults", () => {
+  for (const model of ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-4-argon"]) {
+    const request = buildGeminiNativeRequest(url, { ...base, model, reasoning_effort: "" });
+    assert.deepEqual(request.body.generationConfig.thinkingConfig, { includeThoughts: true });
+  }
+  for (const model of ["gemini-2.0-flash", "gemini-3.8-flash-image-preview"]) {
+    const request = buildGeminiNativeRequest(url, { ...base, model, reasoning_effort: "" });
+    assert.equal(request.body.generationConfig.thinkingConfig, undefined);
+  }
+});
+
+test("native Gemini preserves thought summary separately from final text", async () => {
+  for (const stream of [false, true]) {
+    const options = { headers: { Authorization: "Bearer secret" }, body: JSON.stringify({ ...base, stream }) };
+    const payload = { candidates: [{ content: { parts: [{ text: "summary", thought: true }, { text: "answer" }] }, finishReason: "STOP" }],
+      usageMetadata: { promptTokenCount: 7642, cachedContentTokenCount: 5705, candidatesTokenCount: 65, thoughtsTokenCount: 436, totalTokenCount: 8143 } };
+    const result = await fetchGeminiNative(url, options, async () => stream
+      ? new Response(`data: ${JSON.stringify(payload)}\n\n`)
+      : Response.json(payload));
+    const converted = stream ? JSON.parse((await result.text()).trim().slice(6)) : await result.json();
+    const message = stream ? converted.choices[0].delta : converted.choices[0].message;
+    assert.equal(message.content, "answer");
+    assert.equal(message.reasoning_content, "summary");
+    assert.equal(converted.usage.prompt_tokens_details.cached_tokens, 5705);
+  }
 });
 
 test("native adapter rejects unsupported image or endpoint instead of leaking credentials", async () => {
@@ -92,6 +121,20 @@ test("native Gemini streaming preserves split UTF-8 chunks, safety and usage", a
   assert.equal(result[1].choices[0].finish_reason, "stop");
   assert.equal(result[2].usage.completion_tokens, 10);
   assert.equal(result[2].usage.completion_tokens_details.reasoning_tokens, 3);
+});
+
+test("later Gemini usage events omit absent cache and thought details", async () => {
+  const events = [
+    { usageMetadata: { promptTokenCount: 7642, cachedContentTokenCount: 5705, thoughtsTokenCount: 20 } },
+    { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 7642, candidatesTokenCount: 100, totalTokenCount: 7762 } }
+  ];
+  const options = { headers: { Authorization: "Bearer secret" }, body: JSON.stringify({ ...base, stream: true }) };
+  const response = await fetchGeminiNative(url, options, async () => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("")));
+  const [first, last] = (await response.text()).trim().split("\n\n").map(block => JSON.parse(block.slice(6)));
+  assert.equal(first.usage.prompt_tokens_details.cached_tokens, 5705);
+  assert.equal(first.usage.completion_tokens_details.reasoning_tokens, 20);
+  assert.equal(last.usage.prompt_tokens_details, undefined);
+  assert.equal(last.usage.completion_tokens_details, undefined);
 });
 
 test("native Gemini reports premature termination, error events and propagates cancellation", async () => {

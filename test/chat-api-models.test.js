@@ -237,10 +237,12 @@ test("OpenRouter usage keeps actual USD charges including free usage without dir
 });
 
 test("all four real request paths send independently selected inference routes", async () => {
+  const { normalizeWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer } = await import("../src/word-replacements.js");
   const source = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
   const sent = [];
   const mainConfig = { ...config, model: "author/model", completionsUrl: `${config.baseUrl}/chat/completions`, openrouterProvider: "deepinfra/fp8" };
   const scope = vm.createContext({
+    normalizeWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer,
     process: { env: {} }, state: {}, DEFAULT_CHAT_IMAGE_API_MAX_TOKENS: 1024,
     buildChatApiRequestBody, adaptChatApiRequestBody, buildChatApiRequestHeaders, isDeploymentChatCompletionsUrl, clearTimeout,
     normalizeChatApiRetryCount,

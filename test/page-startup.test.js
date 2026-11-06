@@ -111,6 +111,23 @@ test("log details load on demand once, retain full content and permit retry afte
   assert.equal(result.store, existingStore);
 });
 
+test("expanded AI logs show only request, thinking and output in order", () => {
+  const createElement = () => ({ textContent: "", dataset: {}, children: [], appendChild(child) { this.children.push(child); }, append(child) { this.children.push(child); } });
+  const context = vm.createContext({
+    document: { createElement },
+    getUiLanguageText: value => value,
+    formatAiLogMessages: () => "request",
+    resolveAiLogStoredText: (source, field) => source[field] || ""
+  });
+  vm.runInContext(section(webSource, "function populateAiLogBody(", "async function loadAiLogBody("), context);
+  for (const reasoning of ["summary", ""]) {
+    const body = createElement();
+    context.populateAiLogBody(body, { debugReasoningContent: reasoning, responseText: "answer" }, {});
+    assert.deepEqual(body.children.map(child => child.textContent), ["送給 AI 的內容", "思考過程", "AI 輸出"]);
+    assert.equal(body.children[1].children[0].textContent, reasoning || "此回覆沒有可顯示的思考內容。");
+  }
+});
+
 test("static text uses streaming gzip and conditional caching without compressing images", async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-static-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

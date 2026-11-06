@@ -4,12 +4,14 @@ import test from "node:test";
 import vm from "node:vm";
 import { fetchChatApiWithRetry } from "../src/chat-api-request.js";
 import { fetchGeminiNative } from "../src/gemini-native.js";
+import { normalizeWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer } from "../src/word-replacements.js";
 
 const source = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
 function createScope(responses) {
   const logs = [];
   const scope = vm.createContext({
+    normalizeWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer,
     process: { env: {} }, state: {}, AbortController, CHAT_API_LENGTH_RETRY_LIMIT: 1,
     getChatApiKey: () => "test", getChatApiModel: () => "test-model", getChatApiTemperature: () => 1,
     resolveChatApiMaxTokens: () => 64000, localizeChatApiMessages: x => x, getUiLanguage: () => "zh-TW",
@@ -35,6 +37,32 @@ function createScope(responses) {
 }
 
 for (const stream of [false, true]) {
+  test(`${stream ? "streaming" : "non-streaming"} applies global word rules to the real request and restores the reply`, async () => {
+    const response = {
+      ok: true,
+      streamed: { content: "錒郗", reasoningContent: "", finishReason: "stop", usage: null },
+      json: async () => ({ choices: [{ message: { content: "錒郗" }, finish_reason: "stop" }] })
+    };
+    const { scope } = createScope([response]);
+    scope.state.wordReplacements = { enabled: true, entries: [{ from: "操", to: "錒" }, { from: "射", to: "郗" }] };
+    let sent;
+    scope.fetchChatApiWithRetry = async (_url, options) => { sent = JSON.parse(options.body); return response; };
+    scope.readChatApiStreamBody = async (res, options) => {
+      options.onContentDelta("錒");
+      options.onContentDelta("郗");
+      return res.streamed;
+    };
+    let deltas = "";
+    const method = stream ? scope.callChatApiCompletionStreamRaw : scope.callChatApiCompletionRaw;
+    const original = [{ role: "user", content: "操射" }];
+    const result = await method({ messages: original, onContentDelta: (part) => { deltas += part; } });
+    assert.match(sent.messages[0].content, /^錒郗/u);
+    assert.match(sent.messages[0].content, /操改為錒/u);
+    assert.equal(result.content, "操射");
+    assert.equal(original[0].content, "操射");
+    if (stream) assert.equal(deltas, "操射");
+  });
+
   test(`${stream ? "streaming" : "non-streaming"} logs every length retry and its usage`, async () => {
     const makeResponse = (content, finishReason, tokens) => ({
       ok: true,
@@ -77,6 +105,29 @@ for (const stream of [false, true]) {
     assert.equal(logs[0].finishReason, "PROHIBITED_CONTENT");
   });
 }
+
+test("compression and image-prompt models apply global replacement rules and restore their output", async () => {
+  const purposes = ["context_compression", "context_compression:custom-model", "context_compression:custom-model:image_prompt"];
+  const rules = { enabled: true, entries: [{ from: "操", to: "錒" }] };
+  const response = { ok: true, json: async () => ({ choices: [{ message: { content: "錒作結果" }, finish_reason: "stop" }] }) };
+  const { scope } = createScope([]);
+  scope.state.wordReplacements = rules;
+  const requests = [];
+  scope.fetchChatApiWithRetry = async (_url, options) => { requests.push(JSON.parse(options.body)); return response; };
+  for (const purpose of purposes) {
+    const result = await scope.callChatApiCompletionRaw({
+      purpose,
+      messages: [{ role: "system", content: "操作規則" }, { role: "user", content: "操作內容" }],
+      ...(purpose.endsWith(":image_prompt") ? { aiLogTargetState: { wordReplacements: rules } } : {})
+    });
+    assert.equal(result.content, "操作結果");
+  }
+  for (const request of requests) {
+    assert.equal(request.messages[0].content, "錒作規則");
+    assert.match(request.messages[1].content, /^錒作內容/u);
+    assert.match(request.messages[1].content, /操改為錒/u);
+  }
+});
 
 test("network retry callback only reports retries that will be attempted", async () => {
   const retries = [];

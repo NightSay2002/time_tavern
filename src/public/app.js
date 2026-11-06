@@ -36,6 +36,13 @@ const el = {
   roleCardImportFile: document.getElementById("roleCardImportFile"),
   roleCardList: document.getElementById("roleCardList"),
   globalLorebookBtn: document.getElementById("globalLorebookBtn"),
+  wordReplacementsBtn: document.getElementById("wordReplacementsBtn"),
+  wordReplacementsDialog: document.getElementById("wordReplacementsDialog"),
+  wordReplacementsForm: document.getElementById("wordReplacementsForm"),
+  wordReplacementsEnabled: document.getElementById("wordReplacementsEnabled"),
+  wordReplacementsList: document.getElementById("wordReplacementsList"),
+  addWordReplacementBtn: document.getElementById("addWordReplacementBtn"),
+  closeWordReplacementsBtn: document.getElementById("closeWordReplacementsBtn"),
   globalLorebookDialog: document.getElementById("globalLorebookDialog"),
   globalLorebookForm: document.getElementById("globalLorebookForm"),
   globalLorebookEnabled: document.getElementById("globalLorebookEnabled"),
@@ -3090,10 +3097,6 @@ function getCurrencySymbol(currency = "CNY") {
   return code === "USD" ? "$" : code === "CNY" ? "¥" : `${code} `;
 }
 
-function getPricingUnitLabel(unit = "") {
-  return unit === "per_request" ? "本次請求" : unit === "per_million_tokens" || !unit ? "每百萬 tokens" : unit;
-}
-
 function formatCurrencyAmount(value, currency = "CNY") {
   const amount = Number(value);
   if (!Number.isFinite(amount)) {
@@ -3104,40 +3107,6 @@ function formatCurrencyAmount(value, currency = "CNY") {
   return `${getCurrencySymbol(currency)}${amount.toFixed(digits).replace(/0+$/u, "").replace(/[.]$/u, "")}`;
 }
 
-function formatUsageCostBreakdown(usage) {
-  const cost = usage?.cost;
-  if (!cost || typeof cost !== "object" || getUsageCost(usage) === null) {
-    if (usage?.billingStatus === "not_requested") return "未發送 API 請求，不計入費用統計。";
-    if (!usage?.costUnavailableReason && (!Number.isFinite(usage?.promptTokens) || !Number.isFinite(usage?.completionTokens))) return "價格未知：上游未回傳完整 token 用量，無法可靠計價；不計為免費。";
-    return `價格未知：${usage?.costUnavailableReason || "上游未提供可確認幣種的費用，且沒有適用的供應商／模型／端點價格；請在環境設定的 API 計價新增自訂單價，不計為免費。"}`;
-  }
-  const currency = getUsageCostCurrency(usage);
-  const unitLabel = getPricingUnitLabel(cost.pricingUnit);
-  const lines = [
-    `${getUsageCostLabel(usage)}：${formatCurrencyAmount(getUsageCost(usage), currency)}${cost.pricingModel ? `（${cost.pricingModel}）` : ""}`,
-    `計費單位：${currency} / ${unitLabel}`
-  ];
-  const sources = { api_response: "上游 API 回傳", official_pricing: "官方牌價快照", user_configured: "本機自訂單價", openrouter_endpoint: "OpenRouter 指定端點 API", legacy: "舊紀錄，來源未確認" };
-  lines.push(`來源：${sources[cost.source] || sources.legacy}`);
-  if (cost.provider) lines.push(`供應商：${cost.provider}${cost.endpoint ? ` / ${cost.endpoint}` : ""}`);
-  if (cost.sourceUrl) lines.push(`價格來源：${cost.sourceUrl}`);
-  if (cost.updatedAt) lines.push(`${cost.type === "actual" ? "記錄時間" : "價格更新時間"}：${cost.updatedAt}`);
-  if (cost.note) lines.push(cost.note);
-  if (Number.isFinite(cost.inputCacheHitTokens) && Number.isFinite(cost.inputCacheHitPerMillion)) {
-    lines.push(`輸入（快取命中）：${cost.inputCacheHitTokens} tokens × ${formatCurrencyAmount(cost.inputCacheHitPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.inputCacheHitCost, currency)}`);
-  }
-  if (Number.isFinite(cost.inputCacheMissTokens) && Number.isFinite(cost.inputCacheMissPerMillion)) {
-    lines.push(`輸入（快取未命中）：${cost.inputCacheMissTokens} tokens × ${formatCurrencyAmount(cost.inputCacheMissPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.inputCacheMissCost, currency)}`);
-  }
-  if (Number.isFinite(cost.outputTokens) && Number.isFinite(cost.outputPerMillion)) {
-    lines.push(`輸出：${cost.outputTokens} tokens × ${formatCurrencyAmount(cost.outputPerMillion, currency)} / 百萬 = ${formatCurrencyAmount(cost.outputCost, currency)}`);
-  }
-  if (cost.promptCacheMissFallback) {
-    lines.push("未收到快取未命中 token 欄位時，剩餘輸入 token 會按未命中價格計算。");
-  }
-  return lines.join("\n");
-}
-
 function formatUsage(usage) {
   if (!usage || typeof usage !== "object") {
     return "";
@@ -3146,9 +3115,10 @@ function formatUsage(usage) {
   const completion = Number.isFinite(usage.completionTokens) ? usage.completionTokens : null;
   const total = Number.isFinite(usage.totalTokens) ? usage.totalTokens : null;
   const cacheHit = Number.isFinite(usage.promptCacheHitTokens) ? usage.promptCacheHitTokens : null;
-  const cacheMiss = Number.isFinite(usage.promptCacheMissTokens) ? usage.promptCacheMissTokens : null;
-  const cacheTotal = (cacheHit || 0) + (cacheMiss || 0);
-  const cacheRate = cacheTotal > 0 && cacheHit !== null
+  const reportedCacheMiss = Number.isFinite(usage.promptCacheMissTokens) ? usage.promptCacheMissTokens : null;
+  const cacheMiss = reportedCacheMiss ?? (cacheHit !== null && prompt !== null && cacheHit <= prompt ? prompt - cacheHit : null);
+  const cacheTotal = cacheHit !== null && cacheMiss !== null ? cacheHit + cacheMiss : null;
+  const cacheRate = cacheTotal > 0
     ? `${Math.round((cacheHit / cacheTotal) * 100)}%`
     : "";
   const cost = getUsageCost(usage);
@@ -3158,7 +3128,7 @@ function formatUsage(usage) {
     total !== null ? `總計 ${total}` : "",
     cacheHit !== null ? `Cache Hit ${cacheHit}` : "",
     cacheMiss !== null ? `Cache Miss ${cacheMiss}` : "",
-    cacheRate ? `命中率 ${cacheRate}` : "",
+    cacheRate ? `命中率 ${cacheRate}` : prompt !== null ? "命中率 未提供" : "",
     cost !== null ? `${getUsageCostLabel(usage)} ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : getUsageCostLabel(usage)
   ].filter(Boolean).join(" / ");
 }
@@ -6032,47 +6002,7 @@ function formatAiLogMessages(messages, contentStore = {}) {
     .join("\n\n----------------\n\n");
 }
 
-function populateAiLogBody(body, log, contentStore, usageText) {
-  const diagnostics = document.createElement("label");
-  diagnostics.textContent = "回應診斷";
-  const diagnosticsArea = document.createElement("pre");
-  diagnosticsArea.className = "ai-log-block";
-  const count = (value) => Number.isFinite(value) ? String(value) : "未記錄";
-  const retryReason = { length: "輸出長度截斷，重新生成", empty_response: "回應空白，重新生成" }[log.retryReason] || "無";
-  diagnosticsArea.textContent = [
-    `結束原因：${log.finishReason || "未提供或未記錄"}`,
-    `輸出上限：${count(log.maxTokens)} tokens`,
-    `實際輸出：${count(log.usage?.completionTokens)} tokens`,
-    `思考 tokens：${count(log.usage?.reasoningTokens)}`,
-    `網路重試：${count(log.networkRetryCount)} 次`,
-    `長度重試：${count(log.lengthRetryCount)} 次`,
-    `空白回應重試：${count(log.emptyRetryCount)} 次`,
-    `本次後續動作：${retryReason}`
-  ].join("\n");
-  diagnostics.appendChild(diagnosticsArea);
-  body.append(diagnostics);
-
-  if (usageText) {
-    const usageLabel = document.createElement("label");
-    usageLabel.textContent = "本次 Token 消耗";
-    const usageArea = document.createElement("pre");
-    usageArea.className = "ai-log-block";
-    usageArea.textContent = usageText;
-    usageLabel.appendChild(usageArea);
-    body.append(usageLabel);
-  }
-
-  const costText = formatUsageCostBreakdown(log.usage);
-  if (costText) {
-    const costLabel = document.createElement("label");
-    costLabel.textContent = getUsageCostLabel(log.usage);
-    const costArea = document.createElement("pre");
-    costArea.className = "ai-log-block cost";
-    costArea.textContent = costText;
-    costLabel.appendChild(costArea);
-    body.append(costLabel);
-  }
-
+function populateAiLogBody(body, log, contentStore) {
   const requestLabel = document.createElement("label");
   requestLabel.textContent = "送給 AI 的內容";
   const requestArea = document.createElement("pre");
@@ -6085,16 +6015,14 @@ function populateAiLogBody(body, log, contentStore, usageText) {
   body.append(requestLabel);
 
   const reasoningContent = resolveAiLogStoredText(log, "debugReasoningContent", contentStore);
-  if (reasoningContent) {
-    const reasoningLabel = document.createElement("label");
-    reasoningLabel.textContent = "模型思考過程";
-    const reasoningArea = document.createElement("pre");
-    reasoningArea.className = "ai-log-block reasoning";
-    reasoningArea.dataset.uiLanguageForce = "true";
-    reasoningArea.textContent = getUiLanguageText(reasoningContent);
-    reasoningLabel.appendChild(reasoningArea);
-    body.append(reasoningLabel);
-  }
+  const reasoningLabel = document.createElement("label");
+  reasoningLabel.textContent = "思考過程";
+  const reasoningArea = document.createElement("pre");
+  reasoningArea.className = "ai-log-block reasoning";
+  reasoningArea.dataset.uiLanguageForce = "true";
+  reasoningArea.textContent = getUiLanguageText(reasoningContent || "此回覆沒有可顯示的思考內容。");
+  reasoningLabel.appendChild(reasoningArea);
+  body.append(reasoningLabel);
 
   const responseText = resolveAiLogStoredText(log, "responseText", contentStore);
   const responseLabel = document.createElement("label");
@@ -6109,7 +6037,7 @@ function populateAiLogBody(body, log, contentStore, usageText) {
   body.append(responseLabel);
 }
 
-async function loadAiLogBody(body, log, contentStore, usageText) {
+async function loadAiLogBody(body, log, contentStore) {
   if (body.dataset.rendered === "true" || body.dataset.loading === "true") return;
   body.dataset.loading = "true";
   try {
@@ -6121,7 +6049,7 @@ async function loadAiLogBody(body, log, contentStore, usageText) {
       contentStore = {};
     }
     body.replaceChildren();
-    populateAiLogBody(body, log, contentStore, usageText);
+    populateAiLogBody(body, log, contentStore);
     body.dataset.rendered = "true";
   } catch (error) {
     body.textContent = getUiLanguageText(`讀取失敗：${error.message} 關閉後重新展開可重試。`);
@@ -6185,7 +6113,7 @@ function renderAiLogs(state) {
     const body = document.createElement("div");
     body.className = "ai-log-body";
     wrapper.addEventListener("toggle", () => {
-      if (wrapper.open) void loadAiLogBody(body, log, contentStore, usageText);
+      if (wrapper.open) void loadAiLogBody(body, log, contentStore);
     });
     wrapper.append(summary, body);
     el.aiLogs.appendChild(wrapper);
@@ -8905,6 +8833,67 @@ async function openTimeTrackingDialog() {
   }
 }
 
+function addWordReplacementRow(entry = {}) {
+  const row = document.createElement("div");
+  row.className = "word-replacement-row";
+  const enabled = document.createElement("input");
+  enabled.type = "checkbox";
+  enabled.checked = entry.enabled !== false;
+  enabled.setAttribute("aria-label", "啟用此規則");
+  const from = document.createElement("input");
+  from.type = "text";
+  from.placeholder = "原詞";
+  from.setAttribute("aria-label", "原詞");
+  from.maxLength = 100;
+  from.value = entry.from || "";
+  const to = document.createElement("input");
+  to.type = "text";
+  to.placeholder = "替換詞";
+  to.setAttribute("aria-label", "替換詞");
+  to.maxLength = 100;
+  to.value = entry.to || "";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "secondary word-replacement-remove";
+  remove.textContent = "×";
+  remove.title = "刪除規則";
+  remove.setAttribute("aria-label", "刪除規則");
+  remove.addEventListener("click", () => row.remove());
+  row.append(enabled, from, to, remove);
+  el.wordReplacementsList.append(row);
+}
+
+async function openWordReplacementsDialog() {
+  try {
+    const { wordReplacements } = await request("/api/word-replacements");
+    el.wordReplacementsEnabled.checked = Boolean(wordReplacements?.enabled);
+    el.wordReplacementsList.replaceChildren();
+    (wordReplacements?.entries || []).forEach(addWordReplacementRow);
+    el.wordReplacementsDialog.showModal();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function saveWordReplacements(event) {
+  event.preventDefault();
+  const entries = [...el.wordReplacementsList.children].map((row) => ({
+    enabled: row.children[0].checked,
+    from: row.children[1].value,
+    to: row.children[2].value
+  }));
+  try {
+    await request("/api/word-replacements", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: el.wordReplacementsEnabled.checked, entries })
+    });
+    el.wordReplacementsDialog.close();
+    showToast("改詞規則已保存");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 async function openGlobalLorebookDialog() {
   try {
     const payload = await request("/api/global-lorebook", { method: "GET" });
@@ -9498,6 +9487,11 @@ function bindEvents() {
   if (el.globalLorebookBtn) {
     el.globalLorebookBtn.addEventListener("click", openGlobalLorebookDialog);
   }
+
+  el.wordReplacementsBtn?.addEventListener("click", openWordReplacementsDialog);
+  el.wordReplacementsForm?.addEventListener("submit", saveWordReplacements);
+  el.addWordReplacementBtn?.addEventListener("click", () => addWordReplacementRow());
+  el.closeWordReplacementsBtn?.addEventListener("click", () => el.wordReplacementsDialog?.close());
 
   if (el.globalLorebookForm) {
     el.globalLorebookForm.addEventListener("submit", async (event) => {
@@ -10389,6 +10383,7 @@ function bindEvents() {
     el.timeTrackingDialog,
     el.envSettingsDialog,
     el.globalLorebookDialog,
+    el.wordReplacementsDialog,
     el.assistantPromptDialog,
     el.modularPromptDialog
   ].forEach((dialog) => bindDialogBackdropClose(dialog, { confirmOnClose: true }));

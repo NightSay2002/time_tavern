@@ -73,6 +73,7 @@
 
         <div class="actions-block">
           <h2>功能按鈕</h2>
+          <button id="wordReplacementsBtn" type="button" class="secondary">改詞</button>
           <button id="editAiOutputBtn" type="button">編輯AI的輸出對話</button>
           <button id="contextCompressionInspectBtn" type="button">查看/編輯模型內容</button>
           <button id="timeTrackingSettingsBtn" type="button" class="secondary">統計判斷編輯</button>
@@ -185,6 +186,19 @@
           <button id="createRoleCardBtn" type="button">建立角色卡</button>
           <button id="createAssistantCardBtn" type="button" class="secondary">建立新助手</button>
           <button id="importRoleCardBtn" type="button" class="secondary">匯入角色卡</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="wordReplacementsDialog" class="dialog prompt-viewer-dialog">
+      <form id="wordReplacementsForm" method="dialog" class="stack">
+        <h3>改詞</h3>
+        <label class="checkbox-label"><input id="wordReplacementsEnabled" type="checkbox" /> 啟用改詞</label>
+        <div id="wordReplacementsList" class="word-replacements-list"></div>
+        <button id="addWordReplacementBtn" type="button" class="secondary">新增規則</button>
+        <div class="dialog-actions">
+          <button type="submit">保存</button>
+          <button id="closeWordReplacementsBtn" type="button">關閉</button>
         </div>
       </form>
     </dialog>

@@ -172,6 +172,7 @@ test("image connection tests retain their configured timeout instead of imposing
 
 test("Gemini image connection and real image analysis do not inject a preset", async () => {
   const { scope } = scopeForTest();
+  Object.assign(scope, await import("../src/word-replacements.js"));
   const logged = [];
   const sent = [];
   scope.fetchGeminiNative = fetchGeminiNative;

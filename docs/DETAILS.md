@@ -112,6 +112,8 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 
 對話、壓縮、助手與圖片理解共用以下計價規則；AI 紀錄的「實際費用」及「估算費用」按幣種分開加總，未知顯示筆數並排除於總金額，明確回傳的 0 仍保留。
 
+展開的 AI 紀錄只顯示送出內容、思考過程與輸出，費用和快取數據仍在摘要列。Gemini 支援的思考模型會請求思考摘要；供應商未回傳摘要或快取命中數時不推測，舊紀錄也無法補回未保存的內容。
+
 - 實際費用優先：OpenRouter 回傳的 `usage.cost` 按 USD 記錄；所有平台亦可使用 `usage.cost: { "amount": 0.01, "currency": "USD" }`、`usage.cost_usd`／`costUsd`、`cost_cny`／`costCny` 或帶 `currency` 的數值 `cost` 明確回報金額與幣種。未知格式或沒有幣種的非 OpenRouter 數值不猜測。串流最後只回傳 cost 的事件也會保留，不覆蓋先前 Token 數。
 - 自訂單價：環境設定「API 計價」可新增供應商、精確模型 ID、端點、幣種與每百萬 tokens 的輸入／快取讀取／輸出價格；保存到 `.env` 的 `API_PRICING_OVERRIDES` JSON 陣列並同步備份。自訂 API 端點填完整 `/chat/completions` 網址（保存時不保留 query 或認證資訊），OpenRouter 填完整端點 tag；官方直連留空。只對精確匹配的後續請求生效，不會因切換模型而套錯；實際費用優先，其次自訂單價、指定端點費率、官方牌價。快取單價留空代表未知，明確填 0 才是免費。
 - 官方牌價估算：只限供應商與模型 ID 同時精確匹配的已核對項目，沒有匹配就顯示「價格未知」。不以名稱子字串配對，也不讓自訂服務或 OpenRouter 借用直連平台價格。估算記錄來源網址、核對日期、費率及限制；圖片處理使用自己的供應商，而不是主對話設定。
@@ -393,6 +395,8 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 匯入或使用作者預設會清空目前對話及 AI 呼叫紀錄，但保留所有對話存檔，以及這台裝置原有的 Discord Token、NovelAI Token、Client ID 與對話 API Key。
 
 Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`；按下「使用作者預設」後會立即套用作者版本。
+
+改詞規則包含在全局設定匯入、匯出及作者預設中；舊版設定檔沒有改詞欄位時保留現有規則。首次啟動使用隨附作者預設。
 
 可提交的發布內容：
 

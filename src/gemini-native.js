@@ -57,6 +57,10 @@ export function buildGeminiNativeRequest(url, request) {
       generationConfig.thinkingConfig = { thinkingLevel: request.reasoning_effort.toUpperCase() };
     }
   }
+  if (/^gemini-(?:2[.]5|[3-9](?:[.]\d+)?)-/iu.test(model) &&
+      !/-image(?:-|$)/iu.test(model) && request.reasoning_effort !== "none") {
+    generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, includeThoughts: true };
+  }
   endpoint.pathname = `/v1beta/models/${encodeURIComponent(model)}:${request.stream ? "streamGenerateContent" : "generateContent"}`;
   endpoint.search = request.stream ? "?alt=sse" : "";
   return {
@@ -90,8 +94,8 @@ function convertGeminiResponse(payload, stream = false) {
       completion_tokens: Number.isFinite(visible) ? visible + (Number.isFinite(thoughts) ? thoughts : 0)
         : Number.isFinite(inferredOutput) && inferredOutput >= 0 ? inferredOutput : undefined,
       total_tokens: rawUsage.totalTokenCount,
-      prompt_tokens_details: { cached_tokens: rawUsage.cachedContentTokenCount },
-      completion_tokens_details: { reasoning_tokens: thoughts }
+      ...(Number.isFinite(rawUsage.cachedContentTokenCount) ? { prompt_tokens_details: { cached_tokens: rawUsage.cachedContentTokenCount } } : {}),
+      ...(Number.isFinite(thoughts) ? { completion_tokens_details: { reasoning_tokens: thoughts } } : {})
     };
   }
   const message = { content, ...(reasoning ? { reasoning_content: reasoning } : {}) };

@@ -33,6 +33,7 @@ import {
   normalizeRecentUserInputNumber
 } from "./conversation-history.js";
 import { stripLeadingContextRoundLabels } from "./context-rounds.js";
+import { normalizeWordReplacements, validateWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer } from "./word-replacements.js";
 import {
   composeReasonerRequestMessages,
   hasReachedContextRoundLimit,
@@ -1199,6 +1200,7 @@ function loadAppDefaults() {
   }
   return {
     userProfile: normalizeUserProfile(parsed.userProfile),
+    wordReplacements: normalizeWordReplacements(parsed.wordReplacements),
     roleCards: Array.isArray(parsed.roleCards) ? parsed.roleCards.map((card) => normalizeRoleCard(card)) : [],
     assistantCards: normalizeAssistantCards(parsed.assistantCards),
     globalLorebook: normalizeGlobalLorebook(parsed.globalLorebook),
@@ -1228,6 +1230,7 @@ function createDefaultState() {
   );
   return {
     uiLanguage: normalizeUiLanguage(appDefaults?.uiLanguage),
+    wordReplacements: normalizeWordReplacements(appDefaults?.wordReplacements),
     userProfile: appDefaults?.userProfile || {
       identityText: "",
       displayName: ""
@@ -1901,6 +1904,7 @@ function createGlobalSettingsExport(currentState) {
   const payload = {
     version: 3,
     uiLanguage: normalizeUiLanguage(currentState?.uiLanguage),
+    wordReplacements: normalizeWordReplacements(currentState?.wordReplacements),
     userProfile: normalizeUserProfile(currentState?.userProfile),
     roleCards: normalizedRoleCards,
     assistantCards: normalizeAssistantCards(currentState?.assistantCards),
@@ -1991,10 +1995,14 @@ function normalizeGlobalSettingsImport(input = {}) {
 function applyGlobalSettingsImport(currentState, input = {}) {
   appDefaultEnvironmentValuesCache = null;
   const imported = normalizeGlobalSettingsImport(input);
+  const importedWordReplacements = Object.hasOwn(imported, "wordReplacements")
+    ? validateWordReplacements(imported.wordReplacements)
+    : null;
   const savedSessions = Array.isArray(currentState?.savedSessions)
     ? currentState.savedSessions.map((session, index) => normalizeSavedSession(session, index))
     : [];
   currentState.uiLanguage = normalizeUiLanguage(imported.uiLanguage || currentState.uiLanguage);
+  if (importedWordReplacements) currentState.wordReplacements = importedWordReplacements;
   currentState.userProfile = normalizeUserProfile(imported.userProfile);
   currentState.roleCards = Array.isArray(imported.roleCards)
     ? imported.roleCards.map((card) => normalizeRoleCard(card))
@@ -2130,6 +2138,7 @@ function loadState() {
     const merged = {
       ...defaults,
       uiLanguage: loadedUiLanguage,
+      wordReplacements: normalizeWordReplacements(parsed.wordReplacements),
       userProfile: normalizeUserProfile({
         ...defaults.userProfile,
         ...(parsed.userProfile || {})
@@ -2237,6 +2246,7 @@ function loadState() {
 
 function saveState(state) {
   state.uiLanguage = normalizeUiLanguage(state.uiLanguage);
+  state.wordReplacements = normalizeWordReplacements(state.wordReplacements);
   state.selectedConversationContextId = normalizeConversationContextId(state.selectedConversationContextId) ||
     LOCAL_CONVERSATION_CONTEXT_ID;
   state.conversationContextIndex = normalizeConversationContextIndex(state.conversationContextIndex);
@@ -10337,7 +10347,8 @@ async function requestChatImageUnderstanding({
 } = {}) {
   const config = resolveChatImageApiConfig(envSource);
   validateChatImageApiConfig(config);
-  const messages = buildChatImageUnderstandingMessages(images, userContent);
+  const wordRules = writeLog ? normalizeWordReplacements(targetState?.wordReplacements) : normalizeWordReplacements(null);
+  const messages = prepareWordReplacementMessages(buildChatImageUnderstandingMessages(images, userContent), wordRules);
   const requestMessages = sanitizeChatApiMessagesForLog(messages);
   const logModel = config.model || config.configuredModel || "deployment";
   const accountingEndpoint = config.provider === "custom" ? normalizePricingEndpoint(config.provider, config.completionsUrl) : config.openrouterProvider;
@@ -10427,7 +10438,7 @@ async function requestChatImageUnderstanding({
     throw new Error("圖片處理 API 回應不是有效 JSON。");
   }
 
-  const content = extractChatApiMessageText(payload?.choices?.[0]?.message?.content).trim();
+  const content = restoreReplacedWords(extractChatApiMessageText(payload?.choices?.[0]?.message?.content), wordRules).trim();
   const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
   if (!content) {
     appendImageLog({ responseText, finishReason, usage: normalizeAiUsage(payload?.usage, config.provider, accountingEndpoint), error: "回傳空白內容", status: "error" });
@@ -10547,7 +10558,8 @@ async function callChatApiCompletionRaw({
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
-  const localizedMessages = localizeChatApiMessages(messages, getUiLanguage());
+  const wordRules = normalizeWordReplacements(targetState.wordReplacements);
+  const localizedMessages = prepareWordReplacementMessages(localizeChatApiMessages(messages, getUiLanguage()), wordRules);
   const requestMessages = sanitizeChatApiMessagesForLog(localizedMessages);
   if (!apiKey) {
     const placeholder = getMissingChatApiKeyPlaceholder(purpose);
@@ -10700,8 +10712,8 @@ async function callChatApiCompletionRaw({
   throwIfGenerationStopped(generationEntry);
   const message = payload?.choices?.[0]?.message || {};
   const finishReason = safeText(payload?.choices?.[0]?.finish_reason);
-  const content = extractChatApiMessageText(message.content);
-  const reasoningContent = extractChatApiMessageText(message.reasoning_content);
+  const content = restoreReplacedWords(extractChatApiMessageText(message.content), wordRules);
+  const reasoningContent = restoreReplacedWords(extractChatApiMessageText(message.reasoning_content), wordRules);
   const trimmed = safeText(content).trim();
   const trimmedReasoning = safeText(reasoningContent).trim();
   const usage = normalizeAiUsage(payload?.usage, apiProvider, apiProvider === "custom" ? normalizePricingEndpoint(apiProvider, completionsUrl) : requestBody.provider?.only?.[0]);
@@ -10936,7 +10948,8 @@ async function callChatApiCompletionStreamRaw({
   const model = getChatApiModel(purpose);
   const resolvedTemperature = getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
-  const localizedMessages = localizeChatApiMessages(messages, getUiLanguage());
+  const wordRules = normalizeWordReplacements(state.wordReplacements);
+  const localizedMessages = prepareWordReplacementMessages(localizeChatApiMessages(messages, getUiLanguage()), wordRules);
   const requestMessages = sanitizeChatApiMessagesForLog(localizedMessages);
 
   if (!apiKey) {
@@ -11079,12 +11092,18 @@ async function callChatApiCompletionStreamRaw({
 
   let streamed;
   try {
+    const contentRestorer = createWordRestorer(wordRules, onContentDelta);
+    const reasoningRestorer = createWordRestorer(wordRules, onReasoningDelta);
     streamed = await readChatApiStreamBody(response, {
       apiProvider,
       apiEndpoint: apiProvider === "custom" ? normalizePricingEndpoint(apiProvider, completionsUrl) : requestBody.provider?.only?.[0],
-      onReasoningDelta,
-      onContentDelta
+      onReasoningDelta: (delta) => reasoningRestorer.push(delta),
+      onContentDelta: (delta) => contentRestorer.push(delta)
     });
+    contentRestorer.flush();
+    reasoningRestorer.flush();
+    streamed.content = restoreReplacedWords(streamed.content, wordRules);
+    streamed.reasoningContent = restoreReplacedWords(streamed.reasoningContent, wordRules);
   } catch (error) {
     cleanup();
     const message = formatFetchErrorMessage(error, generationEntry);
@@ -12885,6 +12904,28 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         globalLorebook: normalizeGlobalLorebook(state.globalLorebook)
       });
+      return;
+    }
+
+    if (pathname === "/api/word-replacements" && method === "GET") {
+      sendJson(res, 200, { wordReplacements: normalizeWordReplacements(state.wordReplacements) });
+      return;
+    }
+
+    if (pathname === "/api/word-replacements" && method === "PUT") {
+      const body = await readBody(req);
+      let wordReplacements;
+      try {
+        wordReplacements = validateWordReplacements(body);
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+        return;
+      }
+      await withStateLock(async () => {
+        state.wordReplacements = wordReplacements;
+        saveState(state);
+      });
+      sendJson(res, 200, { wordReplacements });
       return;
     }
 

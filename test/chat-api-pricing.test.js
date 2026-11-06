@@ -32,7 +32,7 @@ function pricingScope() {
 
 function uiScope() {
   const scope = vm.createContext({});
-  loadFunctions(scope, web, ["getUsageCost", "getUsageCostLabel", "getUsageCostCurrency", "getCurrencySymbol", "getPricingUnitLabel", "formatCurrencyAmount", "formatUsageCostBreakdown", "formatUsage", "formatAiLogCostTotals"]);
+  loadFunctions(scope, web, ["getUsageCost", "getUsageCostLabel", "getUsageCostCurrency", "getCurrencySymbol", "formatCurrencyAmount", "formatUsage", "formatAiLogCostTotals"]);
   return scope;
 }
 
@@ -269,19 +269,25 @@ test("streamed cost-only usage events preserve previously reported tokens and en
   assert.equal(result.usage.accountingEndpoint, "vendor/fp8");
 });
 
-test("web distinguishes actual, estimated, zero and unknown charges with source details", () => {
+test("web distinguishes actual, estimated, zero and unknown charges", () => {
   const ui = uiScope();
   const actual = { cost: { amount: 0, currency: "USD", type: "actual", source: "api_response", updatedAt: "2026-10-27" } };
   const estimated = { cost: { amount: 1, currency: "CNY", type: "estimated", source: "official_pricing", sourceUrl: "https://pricing.test", updatedAt: "2026-10-27" } };
   assert.match(ui.formatUsage(actual), /實際費用 \$0/u);
   assert.match(ui.formatUsage(estimated), /估算費用 ¥1/u);
   assert.match(ui.formatUsage({ promptTokens: 10 }), /價格未知/u);
-  assert.match(ui.formatUsageCostBreakdown(estimated), /官方牌價快照[\s\S]*https:\/\/pricing.test[\s\S]*2026-10-27/u);
-  assert.match(ui.formatUsageCostBreakdown({}), /不計為免費/u);
   const totals = ui.formatAiLogCostTotals([{ usage: actual }, { usage: estimated }, { usage: {} }]);
   assert.match(totals, /實際費用：\$0 USD/u);
   assert.match(totals, /估算費用：¥1 CNY/u);
   assert.match(totals, /價格未知：1 筆/u);
   assert.equal(ui.formatCurrencyAmount(2, "HKD"), "HKD 2");
   assert.equal(ui.getUsageCost({ cost: { amount: "" } }), null);
+});
+
+test("cache hit ratio uses total prompt tokens when cache misses are omitted", () => {
+  const ui = uiScope();
+  assert.match(ui.formatUsage({ promptTokens: 7642, promptCacheHitTokens: 5705 }), /Cache Hit 5705 \/ Cache Miss 1937 \/ 命中率 75%/u);
+  assert.match(ui.formatUsage({ promptTokens: 7642 }), /命中率 未提供/u);
+  assert.match(ui.formatUsage({ promptTokens: 100, promptCacheHitTokens: 0 }), /命中率 0%/u);
+  assert.doesNotMatch(ui.formatUsage({ promptCacheHitTokens: 10 }), /命中率 100%/u);
 });
