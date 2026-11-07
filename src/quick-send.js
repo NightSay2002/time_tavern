@@ -12,6 +12,12 @@ export const QUICK_SEND_TEMPLATES = [
     suffix: "}}"
   },
   {
+    id: "after_cleaning",
+    label: "{{進行清潔後}}",
+    prefix: "{{進行清潔後",
+    suffix: "}}"
+  },
+  {
     id: "next_scene",
     label: "｛推進劇情到下一個場景｝",
     prefix: "｛推進劇情到下一個場景",

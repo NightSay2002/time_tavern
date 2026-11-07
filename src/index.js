@@ -995,7 +995,7 @@ const DISCORD_SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.String,
         required: true,
         choices: QUICK_SEND_TEMPLATES.map((template) => ({
-          name: template.label,
+          name: template.label.replaceAll("｛", "{").replaceAll("｝", "}"),
           value: template.id
         }))
       },
@@ -9058,13 +9058,13 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
           LOCAL_CONVERSATION_CONTEXT_ID;
         getChatApiKey();
         const imageContext = {
-          currentState: cloneData(currentState, {}),
+          currentState: cloneData({ ...currentState, aiLogs: [] }, {}),
           contextId: imageContextId,
           contextMetadata: currentState.conversationContextIndex?.[
             normalizeConversationContextId(activeConversationExecutionContextId) ||
               normalizeConversationContextId(currentState.selectedConversationContextId)
           ] || {},
-          initialAiLogCount: Array.isArray(currentState.aiLogs) ? currentState.aiLogs.length : 0,
+          initialAiLogCount: 0,
           runtimeUserName,
           profile,
           triggerAction,

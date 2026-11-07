@@ -8,6 +8,7 @@ import { UI_LANGUAGE_SIMPLIFIED } from "../src/ui-language.js";
 test("every quick send template accepts inside and message details", () => {
   const expected = {
     keep_time: "{{保持時間xxx}}\nzzzz",
+    after_cleaning: "{{進行清潔後xxx}}\nzzzz",
     next_scene: "｛推進劇情到下一個場景xxx｝\nzzzz",
     time_passes: "｛時間流逝——xxx｝\nzzzz",
     continue: "｛繼續xxx｝\nzzzz"
@@ -23,6 +24,7 @@ test("every quick send template accepts inside and message details", () => {
 test("quick send directives follow the selected simplified language", () => {
   const expected = {
     keep_time: "{{保持时间xxx}}\nzzzz",
+    after_cleaning: "{{进行清洁后xxx}}\nzzzz",
     next_scene: "｛推进剧情到下一个场景xxx｝\nzzzz",
     time_passes: "｛时间流逝——xxx｝\nzzzz",
     continue: "｛继续xxx｝\nzzzz"
@@ -38,6 +40,17 @@ test("quick send directives follow the selected simplified language", () => {
     assert.equal(result.ok, true);
     assert.equal(result.content, expected[template.id]);
   }
+});
+
+test("quick send labels correspond to the exact empty template in both languages", () => {
+  const ids = new Set();
+  for (const template of QUICK_SEND_TEMPLATES) {
+    assert.equal(ids.has(template.id), false);
+    ids.add(template.id);
+    assert.equal(buildQuickSendContent(template.id).content, template.label);
+  }
+  assert.equal(buildQuickSendContent("after_cleaning", "", "", UI_LANGUAGE_SIMPLIFIED).content, "{{进行清洁后}}");
+  assert.equal(buildQuickSendContent("keep_time").content, "{{保持時間}}");
 });
 
 test("keep time details remain visible to the model after applying the directive", () => {

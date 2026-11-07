@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
+import { QUICK_SEND_TEMPLATES, buildQuickSendContent } from "../src/quick-send.js";
 
 import {
   isLegacyDiscordTextCommand,
@@ -60,6 +62,20 @@ test("Discord registers one global command set and clears legacy guild duplicate
   assert.doesNotMatch(registerBlock, /guild\.commands\.set\(guildCommands\)/u);
   assert.match(welcomeBlock, /guild\.commands\.set\(\[\]\)/u);
   assert.doesNotMatch(serverSource, /DISCORD_GUILD_ID/u);
+});
+
+test("quick-send choice labels use consistent braces without changing sent content", () => {
+  const block = serverSource.match(/choices: QUICK_SEND_TEMPLATES\.map\(\(template\) => \(\{[\s\S]*?\}\)\)/u)?.[0];
+  assert.ok(block);
+  const scope = vm.createContext({ QUICK_SEND_TEMPLATES });
+  const choices = vm.runInContext(`(${block.replace(/^choices:\s*/u, "")})`, scope);
+  assert.deepEqual(Array.from(choices, choice => choice.name), [
+    "{{保持時間}}", "{{進行清潔後}}", "{推進劇情到下一個場景}", "{時間流逝——}", "{繼續}"
+  ]);
+  for (const choice of choices) {
+    assert.equal(buildQuickSendContent(choice.value).content,
+      QUICK_SEND_TEMPLATES.find(template => template.id === choice.value).label);
+  }
 });
 
 test("web exposes exactly four slash command menu entries", () => {

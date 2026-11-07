@@ -30,6 +30,18 @@ test("published defaults exclude bot credentials and identifiers", () => {
   );
 });
 
+test("published defaults exclude conversation progress and saved histories", () => {
+  for (const key of ["conversation", "savedSessions", "aiLogs"]) {
+    assert.equal(Object.hasOwn(publishedDefaults, key), false);
+  }
+  assert.deepEqual(publishedDefaults.roleCardRuntimeState, {});
+  assert.equal(publishedDefaults.contextCompression.summary, "");
+  assert.equal(publishedDefaults.contextCompression.compressedThroughTurnNumber, 0);
+  assert.deepEqual(publishedDefaults.contextCompression.profiles, {});
+  assert.equal(publishedDefaults.timeTracking.autoPeriod.turnsSinceChange, 0);
+  assert.equal(publishedDefaults.timeTracking.pendingTransition, null);
+});
+
 test("global settings files exclude secrets and preserve local credentials on import", () => {
   const exportBlock = serverSource.match(/function createGlobalSettingsExport[\s\S]*?\n\}\n\nfunction sanitizeNovelAiDefaultSettings/u)?.[0] || "";
   const importEnvironmentBlock = serverSource.match(/function buildImportedEnvironmentContent[\s\S]*?\n\}\n\nfunction readEnvFileContentForEditor/u)?.[0] || "";

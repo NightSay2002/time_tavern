@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const webSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
@@ -59,4 +60,67 @@ test("parallel image completion writes logs and images back to its source contex
     serverSource,
     /const imageContextId = normalizeConversationContextId\(activeConversationExecutionContextId\)/u
   );
+});
+
+test("parallel image tasks retain their own logs when shared history is at capacity", async () => {
+  const contextSource = serverSource.match(/const imageContext = \{[\s\S]*?\n        \};/u)?.[0];
+  assert.ok(contextSource);
+  const functions = ["buildModelImageGenerationResult", "queueParallelModelImageGeneration"].map((name) => {
+    const start = serverSource.indexOf(`${name === "queueParallelModelImageGeneration" ? "function" : "async function"} ${name}(`);
+    assert.ok(start >= 0);
+    return serverSource.slice(start, serverSource.indexOf("\n}\n", start) + 2);
+  }).join("\n");
+  for (const count of [0, 199, 200]) {
+    for (const failure of [false, true]) {
+      const original = Array.from({ length: count }, (_, index) => ({ id: `old-${index}` }));
+      let finish;
+      const completed = new Promise(resolve => { finish = resolve; });
+      const currentState = { aiLogs: original, conversationContextIndex: {}, selectedConversationContextId: "local" };
+      const scope = vm.createContext({
+        currentState, imageContextId: "local", activeConversationExecutionContextId: "",
+        normalizeConversationContextId: value => value || "", LOCAL_CONVERSATION_CONTEXT_ID: "local",
+        cloneData: value => structuredClone(value), runtimeUserName: "", profile: {}, triggerAction: {},
+        latestUser: { id: "message" }, triggeredBy: [], includeLatestAssistant: false,
+        messagesToCompress: [], imageProfileState: {}, options: {},
+        buildModelImagePromptApiMessages: () => [], getModelTriggerApiPurpose: () => "context_compression:image_prompt",
+        callChatApiCompletionRaw: async ({ aiLogTargetState }) => {
+          aiLogTargetState.aiLogs.push({ id: "new-model-log" });
+          if (aiLogTargetState.aiLogs.length > 200) aiLogTargetState.aiLogs = aiLogTargetState.aiLogs.slice(-200);
+          if (failure) throw new Error("model failed");
+          return { content: "prompt" };
+        },
+        safeText: value => typeof value === "string" ? value : "",
+        normalizeModelImageGenerationSettings: () => ({}),
+        generateNovelAiImages: async () => ({ images: [] }),
+        appendModelImageGenerationMessage: result => { finish(result); },
+        withStateLock: async task => task(), console
+      });
+      vm.runInContext(functions, scope);
+      vm.runInContext(`${contextSource}\nqueueParallelModelImageGeneration(imageContext);`, scope);
+      const result = await completed;
+      assert.deepEqual(Array.from(result.aiLogs, entry => entry.id), ["new-model-log"]);
+      assert.equal(result.status === "error", failure);
+      assert.equal(currentState.aiLogs.length, count);
+      assert.equal(currentState.aiLogs, original);
+    }
+  }
+});
+
+test("completed and failed image task logs merge into the shared history", async () => {
+  const start = serverSource.indexOf("async function appendModelImageGenerationMessage(");
+  const source = serverSource.slice(start, serverSource.indexOf("\n}\n", start) + 2);
+  for (const status of ["success", "error"]) {
+    const state = { aiLogs: Array.from({ length: 200 }, (_, index) => ({ id: `old-${index}` })), conversation: [{ id: "source" }] };
+    const scope = vm.createContext({
+      state, safeText: value => typeof value === "string" ? value : "",
+      normalizeAiLog: value => value, saveGeneratedNovelAiImagesForMessage: () => [],
+      createModelImageMessage: () => ({ id: "image-message" }), appendConversationMessage() {},
+      saveState() {}, sendDiscordModelImageMessage: async () => {}, sendQqModelImageMessage: async () => {}
+    });
+    vm.runInContext(source, scope);
+    await scope.appendModelImageGenerationMessage({ status, aiLogs: [{ id: "new-model-log" }] }, { sourceUserMessageId: "source" });
+    assert.equal(state.aiLogs.length, 200);
+    assert.equal(state.aiLogs.at(-1).id, "new-model-log");
+    assert.equal(state.aiLogs[0].id, "old-1");
+  }
 });
