@@ -136,7 +136,7 @@ test("real server config resolvers keep main and specialist reasoning separate",
     getChatApiProvider: () => "gemini", getChatApiRequestTimeoutMs: () => 600000,
     getChatApiCompletionsUrlFromBaseUrl: buildChatApiCompletionsUrl, resolveChatApiModelForEndpoint
   });
-  loadFunctions(scope, server, ["envObjectFirstText", "envObjectFirstNumber", "normalizeChatApiProvider", "getDefaultChatApiBaseUrl", "getChatApiProviderModelAliases", "getChatApiReasoningEffort", "resolveChatImageApiConfig"]);
+  loadFunctions(scope, server, ["envObjectFirstText", "envObjectFirstNumber", "normalizeChatApiProvider", "getDefaultChatApiBaseUrl", "getChatApiProviderModelAliases", "getChatApiReasoningEffort", "resolveChatImageApiConfig", "resolveModelApiConfig", "isContextCompressionPurpose", "useSpecialistModelApi"]);
   const env = { CHAT_API_PROVIDER: "gemini", CHAT_API_MODEL: "gemini-4-argon", CHAT_API_REASONING_EFFORT: "high", CHAT_IMAGE_API_PROVIDER: "gemini", CHAT_IMAGE_API_MODEL: "gemini-4-argon", CHAT_IMAGE_API_REASONING_EFFORT: "medium", CHAT_IMAGE_API_TEMPERATURE: "0.7" };
   assert.equal(scope.getChatApiReasoningEffort(env, "gemini"), "high");
   assert.equal(scope.resolveChatImageApiConfig(env).reasoningEffort, "medium");
@@ -145,4 +145,16 @@ test("real server config resolvers keep main and specialist reasoning separate",
   assert.equal(disabled.reasoningEffort, "none");
   assert.equal(disabled.temperature, 0.7);
   assert.equal(scope.resolveChatImageApiConfig({ ...env, CHAT_IMAGE_API_REASONING_EFFORT: "max" }).reasoningEffort, "");
+  const modelEnv = { ...env, CHAT_MODEL_API_MODE: "specialist", CHAT_MODEL_API_PROVIDER: "openrouter", CHAT_MODEL_API_KEY: "model-key", CHAT_MODEL_API_MODEL: "vendor/model", CHAT_MODEL_API_OPENROUTER_PROVIDER: "vendor/route", CHAT_MODEL_API_TEMPERATURE: "0.4", CHAT_IMAGE_API_REQUEST_TIMEOUT_MS: "1000", CHAT_API_REQUEST_TIMEOUT_MS: "120000" };
+  const model = scope.resolveModelApiConfig(modelEnv);
+  assert.equal(model.provider, "openrouter");
+  assert.equal(model.apiKey, "model-key");
+  assert.equal(model.model, "vendor/model");
+  assert.equal(model.openrouterProvider, "vendor/route");
+  assert.equal(model.temperature, 0.4);
+  assert.equal(model.requestTimeoutMs, 120000);
+  assert.equal(scope.useSpecialistModelApi("context_compression:custom:image_prompt", modelEnv), true);
+  assert.equal(scope.useSpecialistModelApi("reasoner_history_chat", modelEnv), false);
+  assert.equal(scope.useSpecialistModelApi("context_compression", {}), false);
+  assert.equal(scope.resolveModelApiConfig({ ...modelEnv, CHAT_MODEL_API_KEY: "", CHAT_API_KEY: "main-key", CHAT_IMAGE_API_KEY: "image-key" }).apiKey, "");
 });

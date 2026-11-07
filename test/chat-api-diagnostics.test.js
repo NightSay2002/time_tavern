@@ -12,6 +12,7 @@ function createScope(responses) {
   const logs = [];
   const scope = vm.createContext({
     normalizeWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer,
+    useSpecialistModelApi: () => false,
     process: { env: {} }, state: {}, AbortController, CHAT_API_LENGTH_RETRY_LIMIT: 1,
     getChatApiKey: () => "test", getChatApiModel: () => "test-model", getChatApiTemperature: () => 1,
     resolveChatApiMaxTokens: () => 64000, localizeChatApiMessages: x => x, getUiLanguage: () => "zh-TW",
@@ -127,6 +128,34 @@ test("compression and image-prompt models apply global replacement rules and res
     assert.match(request.messages[1].content, /^錒作內容/u);
     assert.match(request.messages[1].content, /操改為錒/u);
   }
+});
+
+test("all model purposes use the independent provider and key without affecting main chat", async () => {
+  const { scope } = createScope([]);
+  const specialist = { provider: "openrouter", apiKey: "special-key", model: "vendor/model", completionsUrl: "https://special.test/chat/completions", openrouterProvider: "selected/route", reasoningEffort: "", temperature: 0.3 };
+  scope.useSpecialistModelApi = purpose => purpose.startsWith("context_compression");
+  scope.resolveModelApiConfig = () => specialist;
+  scope.buildChatApiRequestHeaders = key => ({ key });
+  const requests = [];
+  scope.fetchChatApiWithRetry = async (url, options) => {
+    requests.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return { ok: true, json: async () => ({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }) };
+  };
+  for (const purpose of ["reasoner_history_chat", "context_compression", "context_compression:custom", "context_compression:custom:image_prompt"]) {
+    await scope.callChatApiCompletionRaw({ purpose, messages: [{ role: "user", content: "test" }] });
+  }
+  assert.equal(requests[0].headers.key, "test");
+  assert.equal(requests[0].body.provider, "deepseek");
+  for (const request of requests.slice(1)) {
+    assert.equal(request.url, specialist.completionsUrl);
+    assert.equal(request.headers.key, "special-key");
+    assert.equal(request.body.provider, "openrouter");
+    assert.equal(request.body.model, "vendor/model");
+    assert.equal(request.body.openrouterProvider, "selected/route");
+  }
+  specialist.apiKey = "";
+  await assert.rejects(scope.callChatApiCompletionRaw({ purpose: "context_compression", messages: [] }), /大模型 API 未設定 Key/u);
+  assert.equal(requests.length, 4);
 });
 
 test("network retry callback only reports retries that will be attempted", async () => {

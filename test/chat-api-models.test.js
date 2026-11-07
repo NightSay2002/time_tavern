@@ -243,6 +243,7 @@ test("all four real request paths send independently selected inference routes",
   const mainConfig = { ...config, model: "author/model", completionsUrl: `${config.baseUrl}/chat/completions`, openrouterProvider: "deepinfra/fp8" };
   const scope = vm.createContext({
     normalizeWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer,
+    useSpecialistModelApi: () => false,
     process: { env: {} }, state: {}, DEFAULT_CHAT_IMAGE_API_MAX_TOKENS: 1024,
     buildChatApiRequestBody, adaptChatApiRequestBody, buildChatApiRequestHeaders, isDeploymentChatCompletionsUrl, clearTimeout,
     normalizeChatApiRetryCount,

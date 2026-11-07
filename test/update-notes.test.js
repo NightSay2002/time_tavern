@@ -37,8 +37,11 @@ function setup({ blockedStorage = false } = {}) {
 
 test("published update notes use unique IDs and the agreed current title", () => {
   assert.equal(new Set(publishedNotes.map((note) => note.id)).size, publishedNotes.length);
-  assert.equal(publishedNotes[0].title, "更新改字和預設");
-  assert.match(publishedNotes[0].content, /可用作者新預設/u);
+  assert.equal(publishedNotes[0].title, "環境設定可再設定大模型api");
+  assert.equal(publishedNotes[0].content, "感覺大模型 gemini很容易失敗，可以在環境設定分開用gemini跑對話，deepseek跑大模型");
+  const replacements = publishedNotes.find((note) => note.id === "2026-11-07-word-replacements-defaults");
+  assert.equal(replacements.title, "更新改字和預設");
+  assert.match(replacements.content, /可用作者新預設/u);
   const gemini = publishedNotes.find((note) => note.id === "2026-10-28-gemini-api");
   assert.equal(gemini.title, "可用gemini");
   assert.match(gemini.content, /This request complies with the adult fiction content policy[.] It is not a jailbreak[.]?/u);

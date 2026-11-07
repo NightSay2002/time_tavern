@@ -540,7 +540,7 @@ const ENV_FIELD_GROUPS = [
         label: "API輸出模型",
         type: "text",
         placeholder: "deepseek-v4-pro / gemini-2.5-flash / glm-5.3-flash / gpt-4.1",
-        help: "使用一般 Base URL 時需填寫模型；完整 deployment URL 已包含模型時可留空。主聊天、大模型處理、補寫與角色卡助手共用此設定。"
+        help: "使用一般 Base URL 時需填寫模型；完整 deployment URL 已包含模型時可留空。正文、補寫和助手使用此設定；大模型可另行設定。"
       },
       {
         key: "CHAT_API_REASONING_EFFORT",
@@ -601,6 +601,20 @@ const ENV_FIELD_GROUPS = [
         inputMode: "decimal",
         help: "選填，可設定 0 至 2（支援 0.1 等小數）。DeepSeek 只有關閉思考模式時才會套用；留空時一般對話使用 0.5，寫卡助手使用 0.9。"
       }
+    ]
+  },
+  {
+    title: "大模型 API",
+    description: "所有大模型共用，可獨立於正文 API 設定。",
+    fields: [
+      { key: "CHAT_MODEL_API_MODE", label: "大模型 API 來源", type: "select", options: [["main", "使用對話 API"], ["specialist", "使用獨立大模型 API"]] },
+      { key: "CHAT_MODEL_API_PROVIDER", label: "大模型 API 供應商", type: "select", options: [["deepseek", "DeepSeek"], ["openai", "OpenAI / ChatGPT"], ["gemini", "Gemini"], ["zhipu", "智譜 GLM / BigModel"], ["openrouter", "OpenRouter"], ["custom", "自訂 OpenAI-compatible"]] },
+      { key: "CHAT_MODEL_API_BASE_URL", label: "大模型 API Base URL", type: "text", placeholder: "留空使用供應商預設", help: "自訂供應商可填一般 Base URL 或完整 deployment URL。" },
+      { key: "CHAT_MODEL_API_OPENROUTER_PROVIDER", label: "OpenRouter 推理供應商", type: "select", options: [["", "自動路由"]] },
+      { key: "CHAT_MODEL_API_MODEL", label: "大模型 API 模型", type: "text", help: "完整 deployment URL 已包含模型時可留空。" },
+      { key: "CHAT_MODEL_API_REASONING_EFFORT", label: "大模型思考模式強度", type: "select", options: [["", "使用 API 預設"], ["none", "關閉（使用溫度）"], ["minimal", "極低"], ["low", "低"], ["medium", "中"], ["high", "高"], ["max", "最大"]] },
+      { key: "CHAT_MODEL_API_TEMPERATURE", label: "大模型溫度", type: "number", min: "0", max: "2", step: "0.1", inputMode: "decimal", help: "思考開啟時保留設定，但不送出溫度。" },
+      { key: "CHAT_MODEL_API_KEY", label: "大模型 API Key", type: "password", autocomplete: "off", help: "只保存於本機 .env 與 data/environment.env。" }
     ]
   },
   {
@@ -2348,7 +2362,7 @@ function createEnvField(field, parsedEnv) {
     return createEnvImageField(field, parsedEnv);
   }
 
-  const isApiModel = ["CHAT_API_MODEL", "CHAT_IMAGE_API_MODEL"].includes(field.key);
+  const isApiModel = ["CHAT_API_MODEL", "CHAT_IMAGE_API_MODEL", "CHAT_MODEL_API_MODEL"].includes(field.key);
   const wrapper = document.createElement(isApiModel ? "div" : "label");
   wrapper.className = `env-field env-field-${field.type === "textarea" || isApiModel ? "wide" : "normal"}`;
 
@@ -2611,6 +2625,12 @@ function renderEnvSettingsForm(content = "") {
     if (group.title === "圖片處理 API") {
       section.appendChild(createChatImageApiTestControls());
     }
+    if (group.title === "大模型 API") {
+      const row = createChatApiTestControls();
+      row.querySelector("button").id = "testModelApiConnectionBtn";
+      row.querySelector("span").id = "modelApiTestStatus";
+      section.appendChild(row);
+    }
     el.envSettingsFields.appendChild(section);
   });
 
@@ -2619,6 +2639,7 @@ function renderEnvSettingsForm(content = "") {
   syncApiBaseUrlField("CHAT_API", activeChatApiProviderSetting);
   syncChatApiReasoningField();
   syncChatImageApiFields();
+  syncModelApiFields();
 }
 
 function collectEnvFieldValues() {
@@ -2666,7 +2687,7 @@ function buildEnvContentFromForm() {
         lines.push(`${key}=${formatEnvValue(value)}`);
       });
       const activeDraft = chatApiProviderDrafts[activeChatApiProviderSetting] || {};
-      lines.push("# 正文、壓縮、大模型處理及所有故事共用目前供應商的同一把 Key。");
+      lines.push("# 正文及未啟用獨立 API 的大模型共用目前供應商的 Key。");
       lines.push(`CHAT_API_KEY=${formatEnvValue(activeDraft.key || "")}`);
     }
   });
@@ -2702,7 +2723,7 @@ function isChatImageApiEnvField(key = "") {
 function syncApiBaseUrlField(prefix, provider, enabled = true) {
   const input = document.getElementById(`envField_${prefix}_BASE_URL`);
   if (!input) return;
-  if (prefix === "CHAT_IMAGE_API") {
+  if (prefix === "CHAT_IMAGE_API" || prefix === "CHAT_MODEL_API") {
     if (input.dataset.provider === "custom" || (!input.dataset.provider && provider === "custom")) {
       input.dataset.customBaseUrl = input.value;
     }
@@ -2743,7 +2764,7 @@ function clearApiEndpointPrices(prefix) {
 
 function syncApiCatalogControls(prefix) {
   const provider = document.getElementById(`envField_${prefix}_PROVIDER`)?.value;
-  const enabled = prefix === "CHAT_API" || document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value === "specialist";
+  const enabled = prefix === "CHAT_API" || document.getElementById(prefix === "CHAT_IMAGE_API" ? "envField_CHAT_IMAGE_INPUT_MODE" : "envField_CHAT_MODEL_API_MODE")?.value === "specialist";
   const routing = document.getElementById(`envField_${prefix}_OPENROUTER_PROVIDER`);
   if (routing) {
     routing.closest(".env-field").hidden = provider !== "openrouter";
@@ -2792,13 +2813,14 @@ function getApiModelListDraft(prefix) {
     [`${prefix}_OPENROUTER_PROVIDER`]: document.getElementById(`envField_${prefix}_OPENROUTER_PROVIDER`)?.value || "",
     [`${prefix}_KEY`]: prefix === "CHAT_API"
       ? document.getElementById("chatApiPrimaryKeyInput")?.value || ""
-      : document.getElementById("envField_CHAT_IMAGE_API_KEY")?.value || ""
+      : document.getElementById(`envField_${prefix}_KEY`)?.value || ""
   };
 }
 
 async function requestApiCatalog(prefix, action, env) {
   try {
-    const payload = await request(`/api/${prefix === "CHAT_API" ? "chat-api" : "chat-image-api"}/${action}`, {
+    const route = prefix === "CHAT_API" ? "chat-api" : prefix === "CHAT_MODEL_API" ? "chat-model-api" : "chat-image-api";
+    const payload = await request(`/api/${route}/${action}`, {
       method: "POST", body: JSON.stringify({ env })
     });
     if (!payload.ok) throw new Error(payload.message || "讀取清單失敗。");
@@ -2812,7 +2834,7 @@ async function requestApiCatalog(prefix, action, env) {
 async function loadApiModelList(prefix) {
   const button = document.querySelector(`[data-api-models="${prefix}"]`);
   const status = document.getElementById(`${prefix}_modelsStatus`);
-  if (!button || !status || (prefix === "CHAT_IMAGE_API" && document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value !== "specialist")) return;
+  if (!button || !status || (prefix !== "CHAT_API" && document.getElementById(prefix === "CHAT_IMAGE_API" ? "envField_CHAT_IMAGE_INPUT_MODE" : "envField_CHAT_MODEL_API_MODE")?.value !== "specialist")) return;
   const env = getApiModelListDraft(prefix);
   if (env[`${prefix}_PROVIDER`] === "zhipu") return;
   const snapshot = JSON.stringify(env);
@@ -2863,7 +2885,7 @@ async function loadApiEndpointPrices(prefix) {
   const env = getApiModelListDraft(prefix);
   const button = document.querySelector(`[data-api-endpoints="${prefix}"]`);
   const panel = document.getElementById(`${prefix}_endpointPrices`);
-  if (env[`${prefix}_PROVIDER`] !== "openrouter" || !button || !panel || (prefix === "CHAT_IMAGE_API" && document.getElementById("envField_CHAT_IMAGE_INPUT_MODE")?.value !== "specialist")) return;
+  if (env[`${prefix}_PROVIDER`] !== "openrouter" || !button || !panel || (prefix !== "CHAT_API" && document.getElementById(prefix === "CHAT_IMAGE_API" ? "envField_CHAT_IMAGE_INPUT_MODE" : "envField_CHAT_MODEL_API_MODE")?.value !== "specialist")) return;
   const snapshot = JSON.stringify(env);
   const requestId = String(Number(panel.dataset.requestId || 0) + 1);
   panel.dataset.requestId = requestId;
@@ -2933,6 +2955,61 @@ async function loadApiEndpointPrices(prefix) {
       button.dataset.loading = "false";
       syncApiCatalogControls(prefix);
     }
+  }
+}
+
+function syncModelApiFields() {
+  const enabled = document.getElementById("envField_CHAT_MODEL_API_MODE")?.value === "specialist";
+  const provider = normalizeChatApiProviderSetting(document.getElementById("envField_CHAT_MODEL_API_PROVIDER")?.value || "deepseek");
+  const model = document.getElementById("envField_CHAT_MODEL_API_MODEL")?.value || "";
+  const reasoning = document.getElementById("envField_CHAT_MODEL_API_REASONING_EFFORT");
+  const temperature = document.getElementById("envField_CHAT_MODEL_API_TEMPERATURE");
+  const canDisable = canDisableChatApiReasoning(provider, model);
+  const strengths = provider === "gemini" ? getGeminiReasoningEfforts(model)
+    : provider === "deepseek" || (provider === "zhipu" && /^glm-5[.]([2-9]|\d{2,})(?:-|$)/iu.test(model)) ? ["low", "high", "max"] : [];
+  for (const suffix of ["PROVIDER", "BASE_URL", "MODEL", "KEY"]) {
+    const input = document.getElementById(`envField_CHAT_MODEL_API_${suffix}`);
+    if (!input) continue;
+    input.disabled = !enabled;
+    input.closest(".env-field")?.classList.toggle("is-disabled", !enabled);
+  }
+  syncApiBaseUrlField("CHAT_MODEL_API", provider, enabled);
+  syncApiCatalogControls("CHAT_MODEL_API");
+  if (reasoning) {
+    const defaultOption = Array.from(reasoning.options).find(option => option.value === "");
+    if (defaultOption) defaultOption.textContent = provider === "deepseek" ? "使用預設（DeepSeek：高）" : "使用 API 預設";
+    for (const option of reasoning.options) {
+      const supported = option.value === "" || (option.value === "none" && canDisable) || strengths.includes(option.value);
+      option.disabled = option.hidden = !supported;
+      if (enabled && !supported && reasoning.value === option.value) reasoning.value = "";
+    }
+    reasoning.disabled = !enabled || (!canDisable && !strengths.length);
+    reasoning.closest(".env-field")?.classList.toggle("is-disabled", reasoning.disabled);
+  }
+  if (temperature) {
+    const effort = reasoning?.value || (provider === "deepseek" ? "high" : "");
+    temperature.disabled = !enabled || Boolean(effort && effort !== "none");
+    temperature.closest(".env-field")?.classList.toggle("is-disabled", temperature.disabled);
+  }
+  const test = document.getElementById("testModelApiConnectionBtn");
+  if (test) test.disabled = !enabled;
+}
+
+async function testModelApiConnection() {
+  const button = document.getElementById("testModelApiConnectionBtn");
+  const status = document.getElementById("modelApiTestStatus");
+  if (!button || !status) return;
+  button.disabled = true;
+  status.textContent = "測試中...";
+  try {
+    const result = await request("/api/chat-model-api/test", { method: "POST", body: JSON.stringify({ content: buildEnvContentFromForm() }) });
+    status.textContent = [result.message, result.model ? `模型：${result.model}` : "", result.durationMs ? `${result.durationMs}ms` : ""].filter(Boolean).join("｜");
+    status.className = `env-test-status ${result.ok ? "success" : "error"}`;
+  } catch (error) {
+    status.textContent = `連接失敗：${error.message}`;
+    status.className = "env-test-status error";
+  } finally {
+    syncModelApiFields();
   }
 }
 
@@ -10103,6 +10180,9 @@ function bindEvents() {
       } else if (event.target?.id === "testChatImageApiConnectionBtn") {
         event.preventDefault();
         await testChatImageApiConnection();
+      } else if (event.target?.id === "testModelApiConnectionBtn") {
+        event.preventDefault();
+        await testModelApiConnection();
       }
     });
     el.envSettingsForm.addEventListener("input", (event) => {
@@ -10110,6 +10190,7 @@ function bindEvents() {
       if (key.startsWith("API_PROXY_")) {
         clearApiModelList("CHAT_API");
         clearApiModelList("CHAT_IMAGE_API");
+        clearApiModelList("CHAT_MODEL_API");
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
         setChatImageApiTestStatus("", "設定已變更，尚未重新測試");
       }
@@ -10119,6 +10200,7 @@ function bindEvents() {
       if (["CHAT_IMAGE_API_PROVIDER", "CHAT_IMAGE_API_BASE_URL", "CHAT_IMAGE_API_KEY"].includes(key)) {
         clearApiModelList("CHAT_IMAGE_API");
       }
+      if (["CHAT_MODEL_API_PROVIDER", "CHAT_MODEL_API_BASE_URL", "CHAT_MODEL_API_KEY"].includes(key)) clearApiModelList("CHAT_MODEL_API");
       if (key === "CHAT_API_MODEL") {
         clearApiEndpointPrices("CHAT_API");
         syncChatApiReasoningField();
@@ -10126,6 +10208,14 @@ function bindEvents() {
       if (key === "CHAT_IMAGE_API_MODEL") {
         clearApiEndpointPrices("CHAT_IMAGE_API");
         syncChatImageApiFields();
+      }
+      if (key === "CHAT_MODEL_API_MODEL") {
+        clearApiEndpointPrices("CHAT_MODEL_API");
+        syncModelApiFields();
+      }
+      if (key.startsWith("CHAT_MODEL_API_")) {
+        const status = document.getElementById("modelApiTestStatus");
+        if (status) status.textContent = "設定已變更，尚未重新測試";
       }
       if (isChatApiEnvField(key)) {
         setChatApiTestStatus("", "設定已變更，尚未重新測試");
@@ -10149,7 +10239,8 @@ function bindEvents() {
       if (["CHAT_IMAGE_INPUT_MODE", "CHAT_IMAGE_API_PROVIDER", "CHAT_IMAGE_API_REASONING_EFFORT"].includes(key)) {
         syncChatImageApiFields();
       }
-      for (const prefix of ["CHAT_API", "CHAT_IMAGE_API"]) {
+      if (["CHAT_MODEL_API_MODE", "CHAT_MODEL_API_PROVIDER", "CHAT_MODEL_API_REASONING_EFFORT"].includes(key)) syncModelApiFields();
+      for (const prefix of ["CHAT_API", "CHAT_IMAGE_API", "CHAT_MODEL_API"]) {
         if (key === `${prefix}_OPENROUTER_PROVIDER` || (key === `${prefix}_PROVIDER` && event.target.value === "openrouter")) {
           await loadApiModelList(prefix);
         } else if (key === `${prefix}_MODEL`) {

@@ -9056,7 +9056,7 @@ async function ensureContextCompressionSummary(currentState, runtimeUserName = "
         const imageContextId = normalizeConversationContextId(activeConversationExecutionContextId) ||
           normalizeConversationContextId(currentState.selectedConversationContextId) ||
           LOCAL_CONVERSATION_CONTEXT_ID;
-        getChatApiKey();
+        if (!useSpecialistModelApi(getModelTriggerApiPurpose(profile, "image_prompt"))) getChatApiKey();
         const imageContext = {
           currentState: cloneData({ ...currentState, aiLogs: [] }, {}),
           contextId: imageContextId,
@@ -9467,6 +9467,19 @@ function resolveChatImageApiConfig(envSource = process.env) {
     temperature: reasoningEffort && reasoningEffort !== "none" ? null : temperature,
     requestTimeoutMs
   };
+}
+
+function resolveModelApiConfig(envSource = process.env) {
+  const mapped = { ...envSource };
+  mapped.CHAT_IMAGE_API_REQUEST_TIMEOUT_MS = "";
+  for (const suffix of ["PROVIDER", "BASE_URL", "MODEL", "KEY", "OPENROUTER_PROVIDER", "REASONING_EFFORT", "TEMPERATURE"]) {
+    mapped[`CHAT_IMAGE_API_${suffix}`] = envSource[`CHAT_MODEL_API_${suffix}`] || "";
+  }
+  return resolveChatImageApiConfig(mapped);
+}
+
+function useSpecialistModelApi(purpose = "", envSource = process.env) {
+  return isContextCompressionPurpose(purpose) && envObjectFirstText(envSource, ["CHAT_MODEL_API_MODE"], "main") === "specialist";
 }
 
 function isContextCompressionPurpose(purpose = "") {
@@ -10554,9 +10567,12 @@ async function callChatApiCompletionRaw({
   const targetState = aiLogTargetState || state;
   let networkRetryCount = 0;
   const appendAiLog = (entry) => appendAiLogToState({ ...entry, networkRetryCount, lengthRetryCount: retryCount, emptyRetryCount }, targetState);
-  const apiKey = getChatApiKey(purpose, targetState, conversationContextId);
-  const model = getChatApiModel(purpose);
-  const resolvedTemperature = getChatApiTemperature(purpose, temperature);
+  const modelApi = useSpecialistModelApi(purpose) ? resolveModelApiConfig() : null;
+  const apiLabel = modelApi ? "大模型 API" : "對話 API";
+  const apiKey = modelApi ? modelApi.apiKey : getChatApiKey(purpose, targetState, conversationContextId);
+  if (modelApi && !apiKey) throw new Error("大模型 API 未設定 Key，請先到環境設定填寫。");
+  const model = modelApi ? modelApi.model : getChatApiModel(purpose);
+  const resolvedTemperature = modelApi ? modelApi.temperature : getChatApiTemperature(purpose, temperature);
   const resolvedMaxTokens = resolveChatApiMaxTokens({ purpose, maxTokens, model });
   const wordRules = normalizeWordReplacements(targetState.wordReplacements);
   const localizedMessages = prepareWordReplacementMessages(localizeChatApiMessages(messages, getUiLanguage()), wordRules);
@@ -10583,9 +10599,9 @@ async function callChatApiCompletionRaw({
     };
   }
 
-  const completionsUrl = getChatApiCompletionsUrl();
+  const completionsUrl = modelApi ? modelApi.completionsUrl : getChatApiCompletionsUrl();
   if (!completionsUrl) {
-    const errorMessage = "對話 API Base URL 未設定。使用 custom 供應商時請設定 CHAT_API_BASE_URL。";
+    const errorMessage = modelApi ? "大模型 API Base URL 未設定。" : "對話 API Base URL 未設定。使用 custom 供應商時請設定 CHAT_API_BASE_URL。";
     appendAiLog({
       purpose,
       model,
@@ -10601,13 +10617,13 @@ async function callChatApiCompletionRaw({
   }
 
   if (!model && !isDeploymentChatCompletionsUrl(completionsUrl)) {
-    throw new Error("尚未設定目前供應商的 API輸出模型，請取得模型清單後選擇或手動填寫。");
+    throw new Error(modelApi ? "尚未設定大模型 API 的模型。" : "尚未設定目前供應商的 API輸出模型，請取得模型清單後選擇或手動填寫。");
   }
-  const apiProvider = getChatApiProvider();
+  const apiProvider = modelApi ? modelApi.provider : getChatApiProvider();
   const requestBody = adaptChatApiRequestBody(buildChatApiRequestBody({
     provider: apiProvider,
-    openrouterProvider: envFirstText(["CHAT_API_OPENROUTER_PROVIDER"], ""),
-    reasoningEffort: getChatApiReasoningEffort(),
+    openrouterProvider: modelApi ? modelApi.openrouterProvider : envFirstText(["CHAT_API_OPENROUTER_PROVIDER"], ""),
+    reasoningEffort: modelApi ? modelApi.reasoningEffort : getChatApiReasoningEffort(),
     model,
     temperature: resolvedTemperature,
     maxTokens: resolvedMaxTokens,
@@ -10639,11 +10655,11 @@ async function callChatApiCompletionRaw({
       maxTokens: resolvedMaxTokens,
       requestMessages,
       responseText: "",
-      error: `對話 API 請求失敗: ${message}`,
+      error: `${apiLabel} 請求失敗: ${message}`,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(`對話 API 請求失敗: ${message}`);
+    throw new Error(`${apiLabel} 請求失敗: ${message}`);
   }
 
   if (!response.ok) {
@@ -10663,11 +10679,11 @@ async function callChatApiCompletionRaw({
         maxTokens: resolvedMaxTokens,
         requestMessages,
         responseText: "",
-        error: `對話 API 錯誤回應讀取失敗: ${message}`,
+        error: `${apiLabel} 錯誤回應讀取失敗: ${message}`,
         status: "error",
         createdAt: nowIso()
       });
-      throw new Error(`對話 API 錯誤回應讀取失敗: ${message}`);
+      throw new Error(`${apiLabel} 錯誤回應讀取失敗: ${message}`);
     }
     cleanup();
     appendAiLog({
@@ -10677,11 +10693,11 @@ async function callChatApiCompletionRaw({
       maxTokens: resolvedMaxTokens,
       requestMessages,
       responseText: text,
-      error: `對話 API 失敗: ${response.status} ${text}`,
+      error: `${apiLabel} 失敗: ${response.status} ${text}`,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(`對話 API 失敗: ${response.status} ${text}`);
+    throw new Error(`${apiLabel} 失敗: ${response.status} ${text}`);
   }
 
   let payload;
@@ -10702,11 +10718,11 @@ async function callChatApiCompletionRaw({
       maxTokens: resolvedMaxTokens,
       requestMessages,
       responseText: "",
-      error: `對話 API 回應解析失敗: ${message}`,
+      error: `${apiLabel} 回應解析失敗: ${message}`,
       status: "error",
       createdAt: nowIso()
     });
-    throw new Error(`對話 API 回應解析失敗: ${message}`);
+    throw new Error(`${apiLabel} 回應解析失敗: ${message}`);
   }
   cleanup();
   throwIfGenerationStopped(generationEntry);
@@ -12692,14 +12708,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (/^\/api\/chat(?:-image)?-api\/(models|providers|model-endpoints)$/u.test(pathname) && method === "POST") {
+    if (/^\/api\/chat(?:-image|-model)?-api\/(models|providers|model-endpoints)$/u.test(pathname) && method === "POST") {
       const body = await readBody(req);
       const envSource = body?.env && typeof body.env === "object"
         ? body.env
         : parseEnvContent(body?.content || "");
       const config = pathname.startsWith("/api/chat-image-api/")
         ? resolveChatImageApiConfig(envSource)
-        : resolveChatApiTestConfig(envSource);
+        : pathname.startsWith("/api/chat-model-api/")
+          ? resolveModelApiConfig(envSource)
+          : resolveChatApiTestConfig(envSource);
       config.imageOnly = pathname.startsWith("/api/chat-image-api/");
       const fetchApi = (url, options) => fetchModelApi(url, options, envSource);
       try {
@@ -12715,6 +12733,24 @@ const server = http.createServer(async (req, res) => {
       } catch (error) {
         sendJson(res, 200, { ok: false, message: error.message });
       }
+      return;
+    }
+
+    if (pathname === "/api/chat-model-api/test" && method === "POST") {
+      const body = await readBody(req);
+      const envSource = body?.env && typeof body.env === "object" ? body.env : parseEnvContent(body?.content || "");
+      const config = resolveModelApiConfig(envSource);
+      if (!config.apiKey || !config.completionsUrl || (!config.model && !isDeploymentChatCompletionsUrl(config.completionsUrl))) {
+        sendJson(res, 200, { ok: false, message: "連接失敗：請設定大模型 API 的 Key、Base URL 和模型。" });
+        return;
+      }
+      const testEnv = Object.fromEntries(["PROVIDER", "BASE_URL", "MODEL", "KEY", "OPENROUTER_PROVIDER", "REASONING_EFFORT"].map(
+        (suffix) => [`CHAT_API_${suffix}`, envSource[`CHAT_MODEL_API_${suffix}`] || ""]
+      ));
+      for (const key of ["API_PROXY_URL", "API_PROXY_USERNAME", "API_PROXY_PASSWORD", "CHAT_API_RETRY_COUNT", "CHAT_API_TEST_TIMEOUT_MS", "CHAT_API_REQUEST_TIMEOUT_MS"]) {
+        testEnv[key] = envSource[key] || "";
+      }
+      sendJson(res, 200, await testChatApiConnection(testEnv));
       return;
     }
 

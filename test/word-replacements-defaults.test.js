@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import net from "node:net";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -62,4 +63,32 @@ test("fresh startup and global settings import preserve author word rules and pr
   await send("/api/defaults/author", "POST", {});
   assert.deepEqual((await get("/api/word-replacements")).wordReplacements, defaults.wordReplacements);
   assert.deepEqual((await get("/api/defaults/export")).defaults.modularPromptConfigs, defaults.modularPromptConfigs);
+
+  const calls = [];
+  const upstream = http.createServer((req, res) => {
+    const parts = [];
+    req.on("data", chunk => parts.push(chunk));
+    req.on("end", () => {
+      calls.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: Buffer.concat(parts).toString() });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(req.method === "GET" ? { data: [{ id: "fake-model" }] } : { choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }));
+    });
+  });
+  await new Promise((resolve, reject) => { upstream.once("error", reject); upstream.listen(0, "127.0.0.1", resolve); });
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  const env = { CHAT_MODEL_API_PROVIDER: "custom", CHAT_MODEL_API_BASE_URL: `http://127.0.0.1:${upstream.address().port}/v1`, CHAT_MODEL_API_MODEL: "fake-model", CHAT_MODEL_API_KEY: "isolated-model-key", CHAT_API_KEY: "unrelated-main-key" };
+  const catalog = await send("/api/chat-model-api/models", "POST", { env });
+  assert.equal(catalog.ok, true);
+  assert.equal(catalog.models[0].id, "fake-model");
+  const connection = await send("/api/chat-model-api/test", "POST", { env });
+  assert.equal(connection.ok, true);
+  assert.deepEqual(calls.map(call => [call.method, call.url, call.auth]), [["GET", "/v1/models", "Bearer isolated-model-key"], ["POST", "/v1/chat/completions", "Bearer isolated-model-key"]]);
+  assert.equal(JSON.parse(calls[1].body).model, "fake-model");
+  const missingKey = await send("/api/chat-model-api/test", "POST", { env: { ...env, CHAT_MODEL_API_KEY: "" } });
+  assert.equal(missingKey.ok, false);
+  assert.equal(calls.length, 2);
+  await send("/api/env", "PUT", { content: "CHAT_MODEL_API_MODE=specialist\nCHAT_MODEL_API_PROVIDER=custom\nCHAT_MODEL_API_KEY=isolated-model-key\n" });
+  const exportAfterSettings = (await get("/api/defaults/export")).defaults;
+  assert.equal(JSON.stringify(exportAfterSettings).includes("isolated-model-key"), false);
+  assert.equal(exportAfterSettings.environment.values.CHAT_MODEL_API_KEY, undefined);
 });

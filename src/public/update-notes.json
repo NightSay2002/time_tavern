@@ -1,5 +1,11 @@
 [
   {
+    "id": "2026-11-07-model-api",
+    "date": "2026-11-07",
+    "title": "環境設定可再設定大模型api",
+    "content": "感覺大模型 gemini很容易失敗，可以在環境設定分開用gemini跑對話，deepseek跑大模型"
+  },
+  {
     "id": "2026-11-07-word-replacements-defaults",
     "date": "2026-11-07",
     "title": "更新改字和預設",
