@@ -55,7 +55,7 @@ test("native requests preserve Gemini 2.5 thinking budgets and response format",
 });
 
 test("thought summaries are requested for supported thinking models without overriding defaults", () => {
-  for (const model of ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-4-argon"]) {
+  for (const model of ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"]) {
     const request = buildGeminiNativeRequest(url, { ...base, model, reasoning_effort: "" });
     assert.deepEqual(request.body.generationConfig.thinkingConfig, { includeThoughts: true });
   }
@@ -63,6 +63,12 @@ test("thought summaries are requested for supported thinking models without over
     const request = buildGeminiNativeRequest(url, { ...base, model, reasoning_effort: "" });
     assert.equal(request.body.generationConfig.thinkingConfig, undefined);
   }
+});
+
+test("Hydrogen xhigh uses the documented native thinking level", () => {
+  const request = buildGeminiNativeRequest(url, { ...base, model: "gemini-4-hydrogen", reasoning_effort: "xhigh" });
+  assert.equal(request.body.generationConfig.thinkingConfig.thinkingLevel, "xhigh");
+  assert.equal(request.body.generationConfig.thinkingConfig.includeThoughts, true);
 });
 
 test("native Gemini preserves thought summary separately from final text", async () => {

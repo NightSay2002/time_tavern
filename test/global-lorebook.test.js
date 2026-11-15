@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 const html = fs.readFileSync(new URL("../src/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
@@ -52,4 +53,44 @@ test("global lorebooks persist with cards and remain outside conversation saves"
   assert.match(serverSource, /pathname === "\/api\/global-lorebook" && method === "GET"/u);
   assert.match(serverSource, /pathname === "\/api\/global-lorebook" && method === "PUT"/u);
   assert.doesNotMatch(routeSource, /statePayload/u);
+});
+
+test("lorebook content never chains to global or card entries through prepared input", () => {
+  const scope = vm.createContext({
+    safeText: value => typeof value === "string" ? value.trim() : "",
+    getLatestUserMessage: current => [...current.conversation].reverse().find(message => message.role === "user"),
+    getPreviousAssistantMessage: current => [...current.conversation].slice(0, -1).reverse().find(message => message.role === "assistant"),
+    getActiveRoleCard: () => ({ id: "card" }),
+    resolveUserDisplayName: () => "user",
+    getRenderedRoleCardLorebookEntries: current => current.entries,
+    getAttachedLorebookEntryIdsSinceLastCompression: current => new Set(current.attached || []),
+    getLorebookEntryIdentity: entry => entry.id,
+    isPermanentLorebookEntry: entry => Boolean(entry.permanent),
+    splitLorebookKeywords: keywords => keywords || [],
+    passesLorebookProbability: entry => entry.probability !== 0
+  });
+  for (const [name, next] of [["getLorebookContextSource", "getLorebookEntryIdentity"], ["doesLorebookKeywordGroupMatch", "doesLorebookEntryMatchSource"], ["doesLorebookEntryMatchSource", "isPermanentLorebookEntry"], ["resolveTriggeredLorebookEntries", "getPermanentRoleCardLorebookEntries"]]) {
+    vm.runInContext(functionSource(name, next), scope);
+  }
+  const entries = [
+    { id: "global:a", keywords: ["alpha"], content: "beta", enabled: true },
+    { id: "card:b", keywords: ["beta"], content: "gamma", enabled: true },
+    { id: "global:c", keywords: ["gamma"], content: "delta", enabled: true },
+    { id: "disabled", keywords: ["alpha"], enabled: false },
+    { id: "permanent", keywords: ["alpha"], permanent: true },
+    { id: "zero", keywords: ["alpha"], probability: 0 }
+  ];
+  const current = { entries, conversation: [
+    { id: "assistant-1", role: "assistant", content: "quiet" },
+    { id: "user-1", role: "user", content: "alpha", baseModelContent: "alpha beta gamma", modelContent: "alpha\n\n【觸發世界書 Lorebooks】beta gamma" }
+  ] };
+  const ids = () => Array.from(scope.resolveTriggeredLorebookEntries(current, { id: "card" }), entry => entry.id);
+  assert.deepEqual(ids(), ["global:a"]);
+  current.attached = ["global:a"];
+  current.conversation.push({ id: "assistant-2", role: "assistant", content: "quiet" }, { id: "user-2", role: "user", content: "繼續", baseModelContent: "beta gamma", modelContent: "beta gamma" });
+  assert.deepEqual(ids(), []);
+  current.conversation.at(-1).content = "beta";
+  assert.deepEqual(ids(), ["card:b"]);
+  current.conversation.at(-2).content = "gamma";
+  assert.deepEqual(ids(), ["card:b", "global:c"]);
 });

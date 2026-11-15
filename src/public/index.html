@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20261027-pricing-sources" />
+    <link rel="stylesheet" href="/styles.css?v=20261115-word-rules" />
     <link rel="modulepreload" href="/ui-language.js" />
     <link rel="modulepreload" href="/vendor/opencc-t2cn.js" />
     <link rel="modulepreload" href="/vendor/opencc-cn2t.js" />
@@ -190,12 +190,17 @@
       </form>
     </dialog>
 
-    <dialog id="wordReplacementsDialog" class="dialog prompt-viewer-dialog">
+    <dialog id="wordReplacementsDialog" class="dialog prompt-viewer-dialog word-replacements-dialog">
       <form id="wordReplacementsForm" method="dialog" class="stack">
-        <h3>改詞</h3>
-        <label class="checkbox-label"><input id="wordReplacementsEnabled" type="checkbox" /> 啟用改詞</label>
+        <div class="word-replacements-heading">
+          <div><h3>改詞</h3><p>全局規則 · 所有故事共用</p></div>
+          <label class="checkbox-label word-replacements-toggle"><input id="wordReplacementsEnabled" type="checkbox" /> 啟用改詞</label>
+        </div>
+        <div class="word-replacements-toolbar"><strong>替換規則</strong><span id="wordReplacementsCount" aria-live="polite"></span></div>
+        <div class="word-replacements-columns" aria-hidden="true"><span>啟用</span><span>原詞</span><span></span><span>替換詞</span><span></span></div>
+        <p id="wordReplacementsError" class="word-replacements-error" role="status" hidden></p>
         <div id="wordReplacementsList" class="word-replacements-list"></div>
-        <button id="addWordReplacementBtn" type="button" class="secondary">新增規則</button>
+        <button id="addWordReplacementBtn" type="button" class="secondary word-replacements-add">＋ 新增規則</button>
         <div class="dialog-actions">
           <button type="submit">保存</button>
           <button id="closeWordReplacementsBtn" type="button">關閉</button>
@@ -679,6 +684,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20261028-gemini-reasoning"></script>
+    <script type="module" src="/app.js?v=20261115-word-rules"></script>
   </body>
 </html>

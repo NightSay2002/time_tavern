@@ -33,11 +33,14 @@ function activePairs(rules, reverse = false) {
     .sort((a, b) => b[0].length - a[0].length);
 }
 
-function replaceWithPairs(text, pairs) {
+function replaceWithPairs(text, pairs, used = null) {
   if (!pairs.length || typeof text !== "string") return text;
   const pattern = new RegExp(pairs.map(([word]) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "gu");
   const lookup = new Map(pairs);
-  return text.replace(pattern, (match) => lookup.get(match));
+  return text.replace(pattern, (match) => {
+    used?.add(match);
+    return lookup.get(match);
+  });
 }
 
 export function restoreReplacedWords(text, rules) {
@@ -47,16 +50,19 @@ export function restoreReplacedWords(text, rules) {
 export function prepareWordReplacementMessages(messages, rules) {
   const pairs = activePairs(rules);
   if (!pairs.length) return messages;
+  const used = new Set();
   const result = messages.map((message) => ({
     ...message,
     content: typeof message.content === "string"
-      ? replaceWithPairs(message.content, pairs)
+      ? replaceWithPairs(message.content, pairs, used)
       : Array.isArray(message.content)
-        ? message.content.map((part) => part?.type === "text" ? { ...part, text: replaceWithPairs(part.text, pairs) } : part)
+        ? message.content.map((part) => part?.type === "text" ? { ...part, text: replaceWithPairs(part.text, pairs, used) } : part)
         : message.content
   }));
+  const usedPairs = pairs.filter(([from]) => used.has(from));
+  if (!usedPairs.length) return result;
   const instruction = "【改詞規則】\n你需要將所有指定詞語替換成對應的第二個詞，意思仍然是原來的詞。請完全按照這個規則回覆；提供給你的內容也已依照此規則替換。\n" +
-    pairs.map(([from, to]) => `${from}改為${to}`).join("\n");
+    usedPairs.map(([from, to]) => `${from}改為${to}`).join("\n");
   const lastUser = result.findLastIndex((message) => message.role === "user");
   if (lastUser < 0) {
     result.push({ role: "user", content: instruction });

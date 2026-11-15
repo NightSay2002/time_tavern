@@ -54,7 +54,7 @@ export function buildGeminiNativeRequest(url, request) {
       const budget = { none: 0, low: 1024, medium: 8192, high: 24576 }[request.reasoning_effort];
       if (budget !== undefined) generationConfig.thinkingConfig = { thinkingBudget: budget };
     } else {
-      generationConfig.thinkingConfig = { thinkingLevel: request.reasoning_effort.toUpperCase() };
+      generationConfig.thinkingConfig = { thinkingLevel: request.reasoning_effort === "xhigh" ? "xhigh" : request.reasoning_effort.toUpperCase() };
     }
   }
   if (/^gemini-(?:2[.]5|[3-9](?:[.]\d+)?)-/iu.test(model) &&

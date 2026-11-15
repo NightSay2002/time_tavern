@@ -9,6 +9,9 @@ import { buildChatApiCompletionsUrl, resolveChatApiModelForEndpoint } from "../s
 const web = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const matrix = [
+  ["gemini-4-carbon", ["low", "medium", "high"]],
+  ["models/gemini-4-carbon", ["low", "medium", "high"]],
+  ["gemini-4-hydrogen", ["low", "medium", "high", "xhigh"]],
   ["gemini-4-argon", ["low", "medium", "high"]],
   ["models/gemini-4-argon", ["low", "medium", "high"]],
   ["gemini-3.8-flash", ["low", "medium", "high"]],
@@ -45,7 +48,7 @@ test("Google model capabilities are shared by web and server and reject unsuppor
     assert.equal(webCanDisable("gemini", model), efforts.includes("none"), model);
     assert.equal(canDisableChatApiReasoning("gemini", model), efforts.includes("none"), model);
     assert.equal(canSetChatApiReasoningStrength("gemini", model), efforts.some(value => value !== "none"), model);
-    for (const value of ["", "none", "minimal", "low", "medium", "high", "max", "invalid"]) {
+    for (const value of ["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "invalid"]) {
       assert.equal(resolveChatApiReasoningEffort("gemini", value, model), efforts.includes(value) ? value : "", `${model}: ${value}`);
     }
   }
@@ -71,8 +74,8 @@ test("Google request bodies send only the selected supported effort for text, im
 function uiScope() {
   const makeField = (value = "") => ({ value, disabled: false, closest: () => ({ classList: { toggle() {} } }) });
   const fields = new Map();
-  const efforts = ["", "none", "minimal", "low", "medium", "high", "max"];
-  for (const prefix of ["CHAT_API", "CHAT_IMAGE_API"]) {
+  const efforts = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
+  for (const prefix of ["CHAT_API", "CHAT_MODEL_API", "CHAT_IMAGE_API"]) {
     fields.set(`envField_${prefix}_PROVIDER`, makeField("gemini"));
     fields.set(`envField_${prefix}_MODEL`, makeField("gemini-4-argon"));
     fields.set(`envField_${prefix}_REASONING_EFFORT`, { ...makeField(), options: efforts.map(value => ({ value })) });
@@ -80,6 +83,8 @@ function uiScope() {
     fields.set(`envField_${prefix}_KEY`, makeField("test-only-key"));
   }
   fields.set("envField_CHAT_IMAGE_INPUT_MODE", makeField("specialist"));
+  fields.set("envField_CHAT_MODEL_API_MODE", makeField("specialist"));
+  fields.set("envField_CHAT_MODEL_API_TEMPERATURE", makeField("0.7"));
   fields.set("envField_CHAT_IMAGE_API_TEMPERATURE", makeField("0.7"));
   const scope = vm.createContext({
     activeChatApiProviderSetting: "gemini", canDisableChatApiReasoning: webCanDisable,
@@ -87,18 +92,19 @@ function uiScope() {
     document: { getElementById: id => fields.get(id), querySelector: () => null },
     syncApiBaseUrlField() {}, syncApiCatalogControls() {}, setChatImageApiTestStatus() {}
   });
-  loadFunctions(scope, web, ["syncChatApiReasoningField", "syncChatImageApiFields"]);
+  loadFunctions(scope, web, ["syncChatApiReasoningField", "syncModelApiFields", "syncChatImageApiFields"]);
   return { scope, fields };
 }
 
-test("both Google selectors expose the same supported options, including medium and minimal", () => {
+test("all Google selectors expose the strengths supported by each model", () => {
   const { scope, fields } = uiScope();
   for (const [model, efforts] of matrix) {
-    for (const prefix of ["CHAT_API", "CHAT_IMAGE_API"]) {
+    for (const prefix of ["CHAT_API", "CHAT_MODEL_API", "CHAT_IMAGE_API"]) {
       fields.get(`envField_${prefix}_MODEL`).value = model;
       const input = fields.get(`envField_${prefix}_REASONING_EFFORT`);
       input.value = "max";
       if (prefix === "CHAT_API") scope.syncChatApiReasoningField();
+      else if (prefix === "CHAT_MODEL_API") scope.syncModelApiFields();
       else scope.syncChatImageApiFields();
       assert.equal(input.disabled, efforts.length === 0, `${prefix}: ${model}`);
       assert.deepEqual(input.options.filter(option => !option.hidden).map(option => option.value), ["", ...efforts]);

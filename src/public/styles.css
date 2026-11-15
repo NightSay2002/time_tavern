@@ -4067,7 +4067,7 @@ body.novelai-studio-body .novelai-small-preview {
   .mobile-info-toggle {
     display: inline-flex;
     position: fixed;
-    top: 8px;
+    top: calc(var(--app-mobile-viewport-offset-top, 0px) + 8px);
     left: 8px;
     z-index: 6;
     width: 40px;
@@ -4087,7 +4087,7 @@ body.novelai-studio-body .novelai-small-preview {
   .mobile-info-drawer {
     display: block;
     position: fixed;
-    top: 0;
+    top: var(--app-mobile-viewport-offset-top, 0px);
     left: 0;
     right: 0;
     z-index: 5;
@@ -6207,25 +6207,90 @@ body.is-novelai-drop-active .nai-drop-overlay {
   .update-notes-content { padding: 18px 14px; }
   .update-notes-content h4 { font-size: 18px; }
 }
-.word-replacements-list {
-  display: grid;
-  gap: 8px;
+.word-replacements-dialog {
+  width: min(760px, 94vw);
 }
 
+.word-replacements-dialog > form {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-right: 0;
+}
+
+.word-replacements-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 4px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.word-replacements-heading h3 { font-size: 22px; }
+.word-replacements-heading p { margin: 5px 0 0; color: #aebbd4; font-size: 13px; }
+.word-replacements-toggle { margin: 0; padding: 8px 10px; background: rgba(255, 255, 255, 0.06); border-radius: 6px; }
+.word-replacements-toolbar { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 4px 0; }
+.word-replacements-toolbar span { color: #aebbd4; font-size: 13px; }
+
+.word-replacements-columns,
 .word-replacement-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) 40px;
+  grid-template-columns: 42px minmax(0, 1fr) 20px minmax(0, 1fr) 40px;
   align-items: center;
   gap: 8px;
 }
 
+.word-replacements-columns { padding: 0 4px; color: #aebbd4; font-size: 13px; }
+.word-replacements-columns span:first-child { text-align: center; }
+
+.word-replacements-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-height: 50px;
+  max-height: min(52vh, 500px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 4px 2px 0;
+}
+
+.word-replacements-list:empty::after {
+  content: "尚未新增規則";
+  padding: 24px 12px;
+  color: #aebbd4;
+  text-align: center;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+}
+
+.word-replacement-row {
+  padding: 6px 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.word-replacement-row input[type="checkbox"] { justify-self: center; }
 .word-replacement-row input[type="text"] {
   min-width: 0;
+  width: 100%;
 }
+
+.word-replacement-row input.is-duplicate { border-color: #ff6e82; background: rgba(116, 27, 45, 0.45); color: #fff; box-shadow: 0 0 0 1px #ff6e82; }
+.word-replacement-arrow { color: #aebbd4; text-align: center; }
+.word-replacements-error { margin: 0; color: #ff9aa8; font-size: 13px; }
+.word-replacements-add { align-self: flex-start; width: auto; }
 
 .word-replacement-remove {
   width: 40px;
   min-width: 0;
   padding: 4px;
   font-size: 1.25rem;
+}
+
+@media (max-width: 480px) {
+  .word-replacements-columns, .word-replacement-row { grid-template-columns: 34px minmax(0, 1fr) 16px minmax(0, 1fr) 36px; gap: 4px; }
+  .word-replacement-remove { width: 36px; }
 }

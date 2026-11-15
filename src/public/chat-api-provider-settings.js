@@ -75,7 +75,10 @@ export function getGeminiReasoningEfforts(model = "") {
   if (/^gemini-3-pro(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
     return ["low", "high"];
   }
-  if (/^gemini-(?:4-argon|3[.]8-flash|3[.]1-pro)(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
+  if (/^gemini-4-hydrogen(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
+    return ["low", "medium", "high", "xhigh"];
+  }
+  if (/^gemini-(?:4-argon|4-carbon|3[.]8-flash|3[.]1-pro)(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {
     return ["low", "medium", "high"];
   }
   if (/^gemini-(?:3[.]6-flash|3[.]5-flash-lite|3[.]1-flash-lite|3-flash|robotics-er-2)(?:-preview)?(?:-[0-9-]+)?$/u.test(name)) {

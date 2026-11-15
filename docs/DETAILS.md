@@ -52,7 +52,7 @@
 | `CHAT_IMAGE_API_OPENROUTER_PROVIDER` | 空白 | 圖片 API 獨立的 OpenRouter 推理供應商／端點；空白自動路由。 |
 | `CHAT_IMAGE_API_BASE_URL` | 依 provider | 只有圖片 provider 為 `custom` 時生效；官方 provider 使用固定網址。 |
 | `CHAT_IMAGE_API_MODEL` | 空 | 專用圖片模型；完整 deployment URL 已包含模型時可留空。 |
-| `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，Gemini 可依模型選擇 `minimal`、`low`、`medium`、`high` 或 `none`。 |
+| `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，Gemini 可依模型選擇 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `none`。 |
 | `CHAT_IMAGE_API_TEMPERATURE` | API 預設 | 圖片模型獨立 temperature，範圍 `0–2`；思考開啟時不送出。 |
 | `CHAT_IMAGE_API_KEY` | 空 | 專用圖片 API Key；只保存於 `.env` 與 `data/environment.env`。 |
 | `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
@@ -123,6 +123,7 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 - 官方牌價估算：只限供應商與模型 ID 同時精確匹配的已核對項目，沒有匹配就顯示「價格未知」。不以名稱子字串配對，也不讓自訂服務或 OpenRouter 借用直連平台價格。估算記錄來源網址、核對日期、費率及限制；圖片處理使用自己的供應商，而不是主對話設定。
 - OpenRouter 端點估算：讀取指定模型的端點價格時，在記憶體快取最多 50 個模型、一小時。沒有實際費用時，只有目前明確指定的完整端點 tag 與快取精確匹配、Token 及費率足夠、且沒有另外的非零圖片／請求／搜尋／思考／快取寫入費率，才估算。自動路由、端點根名稱、過期價格或缺少必要資料均顯示未知；不為每次生成額外查價。
 - 牌價快照於 2026-10-28 更新：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[Gemini](https://ai.google.dev/gemini-api/docs/pricing)、[智譜](https://open.bigmodel.cn/pricing)、[OpenAI](https://developers.openai.com/api/docs/pricing)。新增 Argon、Gemini 3.8／3.6／3.5／3.1、GLM 5.3／Flash／FlashX、已核對的免費 Flash、GPT-4.1／4o 與部分 GPT-6 模型，保留既有項目。Argon 優惠價按請求日期計算，2026-12-01 UTC 起切換已公布的標準價；Gemini 3.8／3.6 於 2027-01-01 UTC 起切換。DeepSeek 使用高峰牌價作保守估算；GLM 使用標準牌價，不猜測限時折扣。其他免費額度、特殊服務層級和額外收費以平台帳單為準。
+- Gemini 4 Carbon／Hydrogen 牌價於 2026-11-15 核對。Carbon 依請求時間在 2026-12-01 UTC 切換官方優惠價及標準價；Hydrogen 使用官方標準付費價格。估算不代表免費額度或實際帳單。
 - 官方牌價快照不是即時帳單，也不會因取得 `/models` 自動更新；沒有可靠價格 API 時，不抓取網頁或混用 OpenRouter 價格。新模型或未核對版本可設定自訂單價；沒有價格或足夠用量時仍顯示具體原因，不捏造金額。沒有發出請求的本地佔位回覆不列入未知費用統計。
 - 歷史紀錄已有金額和價格來源一律保留，不因切換供應商或修改單價而重算。只有未有金額、已保存供應商與完整用量，且日期落在已核實價格有效期間內的紀錄才補估（例如 Argon）；不套用目前手動單價或過期 OpenRouter 快取來倒推舊費用。舊紀錄沒有可確認來源的金額標示為估算，核對日期留空。沒有足夠資料的紀錄不會被填入 0。
 
@@ -155,7 +156,7 @@ API 成功但 `content` 空白時，仍維持原有一次空白回應重試；�
 - DeepSeek 支援關閉及 `low`、`high`、`max`；未指定時維持高強度。
 - GLM 4.5 以上可關閉思考；`reasoning_effort` 強度只在 GLM 5.2 以上送出。
 - Google 對話及圖片 API 使用獨立的 `CHAT_API_REASONING_EFFORT` 與 `CHAT_IMAGE_API_REASONING_EFFORT`：Gemini 2.5 轉成原生 `thinkingBudget`，Gemini 3 及以後的支援模型轉成 `thinkingLevel`。前後端共用模型能力判斷，未知模型使用 API 預設，不猜測能力；未選或不支援的值不送出。詳見 [Google 思考設定](https://ai.google.dev/api/generate-content#ThinkingConfig)。
-- `gemini-4-argon`、Gemini 3.8 Flash、3.1 Pro 支援低／中／高；Argon 官方預設為中。Gemini 3 Pro 提供低／高。Gemini 3 Flash、3.1 Flash-Lite、3.5 Flash-Lite、3.6 Flash 及 Robotics ER 2 另提供 `minimal`（極低）；3.1 Flash-Lite Image 只提供極低／高。
+- `gemini-4-carbon`、`gemini-4-argon`、Gemini 3.8 Flash、3.1 Pro 支援低／中／高；Carbon 和 Argon 官方預設為中。`gemini-4-hydrogen` 支援低／中／高／`xhigh`（極高），預設為高，極高可能增加延遲與 token 用量。Gemini 3 Pro 提供低／高。Gemini 3 Flash、3.1 Flash-Lite、3.5 Flash-Lite、3.6 Flash 及 Robotics ER 2 另提供 `minimal`（極低）；3.1 Flash-Lite Image 只提供極低／高。
 - Gemini 2.5 Pro／Flash／Flash-Lite 可選低／中／高，其中 Flash／Flash-Lite 可選 `none`；2.5 Pro、Gemini 3 及 Argon 不提供關閉。Google 不提供 `max`；切換供應商留下的 `max` 不會送到 Google。
 - OpenAI 只在支援 `reasoning_effort: none` 的 GPT-5.1 以上非 Pro 模型顯示關閉；其他模型與自訂 provider 保留 API 預設。
 - 只要目前請求實際解析為 `none`，網頁與 Discord 都不會把「使用者自訂補充」附加到該次模型輸入；使用者原訊息及已存資料不會刪除。
@@ -197,6 +198,7 @@ GLM 與圖片輸入：
 - 開場對話支援多分頁；選擇分頁後可修改「開場名稱」，分頁文字即時更新，按角色卡「保存」一起儲存。名稱留空會使用「開場 1、開場 2」等預設名稱。
 - 單卡世界書會在關鍵字命中時插入正文 Prompt。
 - 角色卡區的「全局世界書」可建立所有角色卡共用的條目；總開關與每條條目均可獨立啟停，觸發規則沿用單卡世界書，助手模式不套用。
+- 世界書關鍵字只比對本次使用者實際輸入和上一則可見 AI 對話，不掃描附加到模型輸入的世界書、系統補充或其他自動生成內容；全局與角色卡條目不會互相連鎖觸發。AI 在對話中自然說出的文字仍會正常參與下回合的判斷。
 - 支援 SillyTavern JSON、PNG、JPG/JPEG 匯入。
 - 匯出時有封面輸出帶資料 JPG，沒有封面輸出 JSON。
 
@@ -402,6 +404,8 @@ Git 追蹤的 `defaults/app-defaults.json` 與 `defaults/novelai-defaults.json` 
 Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入 `prompts/`。目前正在使用的 Prompt 同時保存在 `data/app-state.json`；按下「使用作者預設」後會立即套用作者版本。
 
 改詞規則包含在全局設定匯入、匯出及作者預設中；舊版設定檔沒有改詞欄位時保留現有規則。首次啟動使用隨附作者預設。
+
+每次送出時，只附上在本次完整模型請求文字中實際替換的規則；未命中任何規則時不附加改詞說明。編輯器會即時標示重複的原詞或替換詞，停用的規則亦須避免重複。
 
 可提交的發布內容：
 

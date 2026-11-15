@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
 import { normalizeWordReplacements, validateWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer } from "../src/word-replacements.js";
 
 const rules = { enabled: true, entries: [
@@ -33,6 +35,25 @@ test("replacements do not cascade and longest matches take precedence", () => {
   assert.equal(restoreReplacedWords("X b c", config), "ab a b");
 });
 
+test("only rules actually matched anywhere in the request appear in its instruction", () => {
+  const config = { enabled: true, entries: [{ from: "ab", to: "X" }, { from: "a", to: "Y" }, { from: "unused", to: "Z" }] };
+  const messages = [{ role: "system", content: "ab" }, { role: "assistant", content: "nothing" }, { role: "user", content: "hello" }];
+  const result = prepareWordReplacementMessages(messages, config);
+  assert.equal(result[0].content, "X");
+  assert.match(result[2].content, /ab改為X/u);
+  assert.doesNotMatch(result[2].content, /a改為Y|unused改為Z/u);
+  assert.deepEqual(prepareWordReplacementMessages([{ role: "user", content: "nothing" }], config), [{ role: "user", content: "nothing" }]);
+});
+
+test("matched image text and messages without a user still get the applicable instruction", () => {
+  const config = { enabled: true, entries: [{ from: "a", to: "X" }, { from: "b", to: "Y" }] };
+  const result = prepareWordReplacementMessages([{ role: "system", content: [{ type: "text", text: "a" }, { type: "image_url", image_url: { url: "data:image/png;base64,b" } }] }], config);
+  assert.equal(result[0].content[0].text, "X");
+  assert.equal(result[0].content[1].image_url.url, "data:image/png;base64,b");
+  assert.match(result[1].content, /a改為X/u);
+  assert.doesNotMatch(result[1].content, /b改為Y/u);
+});
+
 test("streaming restores replacement words split across chunks and overlapping prefixes", () => {
   const config = { enabled: true, entries: [{ from: "一", to: "abc" }, { from: "二", to: "ab" }] };
   let output = "";
@@ -53,4 +74,30 @@ test("disabled rules leave requests and responses unchanged", () => {
 test("validation prevents ambiguous duplicate replacements and empty terms", () => {
   assert.throws(() => validateWordReplacements({ entries: [{ from: "a", to: "x" }, { from: "b", to: "x" }] }), /重複/u);
   assert.throws(() => validateWordReplacements({ entries: [{ from: "", to: "x" }] }), /不能留空/u);
+});
+
+test("editor immediately marks duplicates in both columns and clears them after correction", () => {
+  const source = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function updateWordReplacementValidation(");
+  assert.ok(start >= 0);
+  const input = value => ({ value, classList: { toggle(_name, value) { this.duplicate = value; } }, setAttribute(_name, value) { this.invalid = value; }, setCustomValidity(value) { this.validation = value; } });
+  const row = (from, to, enabled) => ({ from: input(from), to: input(to), checkbox: { checked: enabled }, querySelector(selector) { return selector === ".word-replacement-from" ? this.from : selector === ".word-replacement-to" ? this.to : this.checkbox; } });
+  const rows = [row(" cat ", "x", true), row("cat", "y", false), row("dog", "x", true)];
+  const count = {}, error = {};
+  const scope = vm.createContext({ el: { wordReplacementsList: { children: rows } }, document: { getElementById: id => id === "wordReplacementsCount" ? count : error } });
+  vm.runInContext(source.slice(start, source.indexOf("\n}", start) + 2), scope);
+  scope.updateWordReplacementValidation();
+  assert.equal(rows[0].from.classList.duplicate, true);
+  assert.equal(rows[1].from.invalid, "true");
+  assert.equal(rows[0].to.invalid, "true");
+  assert.equal(rows[2].to.invalid, "true");
+  assert.ok(rows[0].from.validation);
+  assert.equal(error.hidden, false);
+  assert.equal(count.textContent, "2 / 3 條啟用");
+  rows[1].from.value = "bird";
+  rows[2].to.value = "z";
+  scope.updateWordReplacementValidation();
+  assert.equal(rows[0].from.invalid, "false");
+  assert.equal(rows[0].from.validation, "");
+  assert.equal(error.hidden, true);
 });

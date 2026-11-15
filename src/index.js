@@ -273,6 +273,9 @@ const ASSISTANT_FEEDBACK_PROMPT_PREFIXES = {
   [ASSISTANT_FEEDBACK_DISLIKE]: "【user 不喜歡你這次的正文輸出】"
 };
 const CHAT_API_COST_PRICING = [
+  { provider: "gemini", label: "Gemini 4 Carbon (introductory)", aliases: ["gemini-4-carbon"], currency: "USD", updatedAt: "2026-11-15", effectiveFrom: "2026-11-11T00:00:00Z", effectiveBefore: "2026-12-01T00:00:00Z", inputCacheHitPerMillion: 0.10, inputCacheMissPerMillion: 2, outputPerMillion: 10 },
+  { provider: "gemini", label: "Gemini 4 Carbon", aliases: ["gemini-4-carbon"], currency: "USD", updatedAt: "2026-11-15", effectiveFrom: "2026-12-01T00:00:00Z", inputCacheHitPerMillion: 0.20, inputCacheMissPerMillion: 4, outputPerMillion: 20 },
+  { provider: "gemini", label: "Gemini 4 Hydrogen", aliases: ["gemini-4-hydrogen"], currency: "USD", updatedAt: "2026-11-15", effectiveFrom: "2026-11-13T00:00:00Z", inputCacheHitPerMillion: 0.075, inputCacheMissPerMillion: 1.50, outputPerMillion: 7.50 },
   { provider: "gemini", label: "Gemini 4 Argon (introductory)", aliases: ["gemini-4-argon"], currency: "USD", effectiveFrom: "2026-10-27T00:00:00Z", effectiveBefore: "2026-12-01T00:00:00Z", inputCacheHitPerMillion: 0.10, inputCacheMissPerMillion: 2, outputPerMillion: 10 },
   { provider: "gemini", label: "Gemini 4 Argon", aliases: ["gemini-4-argon"], currency: "USD", effectiveFrom: "2026-12-01T00:00:00Z", inputCacheHitPerMillion: 0.20, inputCacheMissPerMillion: 4, outputPerMillion: 20 },
   ...["gemini-3.8-flash", "gemini-3.6-flash"].flatMap(model => [
@@ -310,7 +313,7 @@ const CHAT_API_COST_PRICING = [
 ].map((pricing) => {
   const provider = pricing.provider || (pricing.aliases[0].startsWith("gemini") ? "gemini" : "openai");
   return {
-    ...pricing, provider, source: "official_pricing", updatedAt: "2026-10-28",
+    ...pricing, provider, source: "official_pricing", updatedAt: pricing.updatedAt || "2026-10-28",
     sourceUrl: provider === "deepseek" ? "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
       : provider === "gemini" ? "https://ai.google.dev/gemini-api/docs/pricing"
         : provider === "zhipu" ? "https://open.bigmodel.cn/pricing"
@@ -6184,9 +6187,7 @@ function getRenderedRoleCardLorebookEntries(currentState, activeRoleCard, userDi
 function getLorebookContextSource(state, runtimeUserName = "", purpose = "reasoner") {
   const latestUser = getLatestUserMessage(state);
   const previousAssistant = getPreviousAssistantMessage(state, latestUser?.id || "");
-  const latestUserContent = latestUser
-    ? getUserBaseModelContent(latestUser) || safeText(latestUser?.content)
-    : "";
+  const latestUserContent = latestUser ? safeText(latestUser.content) : "";
   const previousAssistantContent = previousAssistant
     ? safeText(previousAssistant?.content)
     : "";

@@ -61,6 +61,27 @@ test("Gemini introductory prices use the request date and only backfill verified
   assert.equal(p.normalizeAiLog({ createdAt: "2026-01-01", model: "gemini-4-argon", usage }).usage.cost, null);
 });
 
+test("Carbon and Hydrogen use their official paid rates and Carbon switches at the UTC boundary", () => {
+  const p = pricingScope();
+  const usage = p.normalizeAiUsage(tokens, "gemini");
+  const carbon = p.calculateAiUsageCost(usage, "gemini-4-carbon", "2026-11-30T23:59:59Z");
+  assert.equal(carbon.inputCacheHitPerMillion, 0.1);
+  assert.equal(carbon.inputCacheMissPerMillion, 2);
+  assert.equal(carbon.outputPerMillion, 10);
+  assert.ok(Math.abs(carbon.amount - 0.00262) < 1e-10);
+  const standard = p.calculateAiUsageCost(usage, "gemini-4-carbon", "2026-12-01T00:00:00Z");
+  assert.equal(standard.inputCacheHitPerMillion, 0.2);
+  assert.equal(standard.inputCacheMissPerMillion, 4);
+  assert.equal(standard.outputPerMillion, 20);
+  const hydrogen = p.calculateAiUsageCost(usage, "gemini-4-hydrogen", "2026-11-15T00:00:00Z");
+  assert.equal(hydrogen.inputCacheHitPerMillion, 0.075);
+  assert.equal(hydrogen.inputCacheMissPerMillion, 1.5);
+  assert.equal(hydrogen.outputPerMillion, 7.5);
+  assert.ok(Math.abs(hydrogen.amount - 0.001965) < 1e-10);
+  assert.equal(p.calculateAiUsageCost(usage, "gemini-4-hydrogen", "2026-01-01T00:00:00Z"), null);
+  assert.equal(p.calculateAiUsageCost(p.normalizeAiUsage(tokens, "custom"), "gemini-4-hydrogen", "2026-11-15T00:00:00Z"), null);
+});
+
 test("all providers honor exact manual unit prices but actual charges and stored snapshots win", () => {
   const p = pricingScope();
   for (const provider of ["deepseek", "gemini", "openai", "zhipu", "openrouter", "custom"]) {

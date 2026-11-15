@@ -6,7 +6,7 @@
   getOfficialChatApiBaseUrl,
   normalizeChatApiProviderSetting,
   resolveChatApiReasoningEffort
-} from "./chat-api-provider-settings.js?v=20261028-gemini-reasoning";
+} from "./chat-api-provider-settings.js?v=20261115-mobile-gemini";
 import {
   createUiLanguageController,
   normalizeUiLanguage,
@@ -553,6 +553,7 @@ const ENV_FIELD_GROUPS = [
           ["low", "低"],
           ["medium", "中"],
           ["high", "高"],
+          ["xhigh", "極高"],
           ["max", "最大"]
         ],
         help: "依供應商與模型能力控制思考；只有支援關閉的模型才可選擇關閉。關閉後會使用溫度，並不附帶使用者自訂補充。"
@@ -612,7 +613,7 @@ const ENV_FIELD_GROUPS = [
       { key: "CHAT_MODEL_API_BASE_URL", label: "大模型 API Base URL", type: "text", placeholder: "留空使用供應商預設", help: "自訂供應商可填一般 Base URL 或完整 deployment URL。" },
       { key: "CHAT_MODEL_API_OPENROUTER_PROVIDER", label: "OpenRouter 推理供應商", type: "select", options: [["", "自動路由"]] },
       { key: "CHAT_MODEL_API_MODEL", label: "大模型 API 模型", type: "text", help: "完整 deployment URL 已包含模型時可留空。" },
-      { key: "CHAT_MODEL_API_REASONING_EFFORT", label: "大模型思考模式強度", type: "select", options: [["", "使用 API 預設"], ["none", "關閉（使用溫度）"], ["minimal", "極低"], ["low", "低"], ["medium", "中"], ["high", "高"], ["max", "最大"]] },
+      { key: "CHAT_MODEL_API_REASONING_EFFORT", label: "大模型思考模式強度", type: "select", options: [["", "使用 API 預設"], ["none", "關閉（使用溫度）"], ["minimal", "極低"], ["low", "低"], ["medium", "中"], ["high", "高"], ["xhigh", "極高"], ["max", "最大"]] },
       { key: "CHAT_MODEL_API_TEMPERATURE", label: "大模型溫度", type: "number", min: "0", max: "2", step: "0.1", inputMode: "decimal", help: "思考開啟時保留設定，但不送出溫度。" },
       { key: "CHAT_MODEL_API_KEY", label: "大模型 API Key", type: "password", autocomplete: "off", help: "只保存於本機 .env 與 data/environment.env。" }
     ]
@@ -677,6 +678,7 @@ const ENV_FIELD_GROUPS = [
           ["low", "低"],
           ["medium", "中"],
           ["high", "高"],
+          ["xhigh", "極高"],
           ["max", "最大"]
         ],
         help: "只控制圖片理解模型；依供應商與模型能力送出思考設定。DeepSeek 留空時使用高強度。"
@@ -2120,7 +2122,7 @@ function syncChatApiReasoningField() {
     }
   }
   Array.from(input.options || []).forEach((option) => {
-    if (!["minimal", "low", "medium", "high", "max"].includes(option.value)) {
+    if (!["minimal", "low", "medium", "high", "xhigh", "max"].includes(option.value)) {
       return;
     }
     const supported = strengths.includes(option.value);
@@ -8910,7 +8912,7 @@ async function openTimeTrackingDialog() {
   }
 }
 
-function addWordReplacementRow(entry = {}) {
+function addWordReplacementRow(entry = {}, update = true) {
   const row = document.createElement("div");
   row.className = "word-replacement-row";
   const enabled = document.createElement("input");
@@ -8919,12 +8921,14 @@ function addWordReplacementRow(entry = {}) {
   enabled.setAttribute("aria-label", "啟用此規則");
   const from = document.createElement("input");
   from.type = "text";
+  from.className = "word-replacement-from";
   from.placeholder = "原詞";
   from.setAttribute("aria-label", "原詞");
   from.maxLength = 100;
   from.value = entry.from || "";
   const to = document.createElement("input");
   to.type = "text";
+  to.className = "word-replacement-to";
   to.placeholder = "替換詞";
   to.setAttribute("aria-label", "替換詞");
   to.maxLength = 100;
@@ -8935,9 +8939,48 @@ function addWordReplacementRow(entry = {}) {
   remove.textContent = "×";
   remove.title = "刪除規則";
   remove.setAttribute("aria-label", "刪除規則");
-  remove.addEventListener("click", () => row.remove());
-  row.append(enabled, from, to, remove);
+  const arrow = document.createElement("span");
+  arrow.className = "word-replacement-arrow";
+  arrow.textContent = "→";
+  arrow.setAttribute("aria-hidden", "true");
+  remove.addEventListener("click", () => { row.remove(); updateWordReplacementValidation(); });
+  from.addEventListener("input", updateWordReplacementValidation);
+  to.addEventListener("input", updateWordReplacementValidation);
+  enabled.addEventListener("change", updateWordReplacementValidation);
+  row.append(enabled, from, arrow, to, remove);
   el.wordReplacementsList.append(row);
+  if (update) {
+    updateWordReplacementValidation();
+    row.scrollIntoView({ block: "nearest" });
+    from.focus();
+  }
+}
+
+function updateWordReplacementValidation() {
+  const rows = [...el.wordReplacementsList.children];
+  let duplicates = false;
+  for (const selector of [".word-replacement-from", ".word-replacement-to"]) {
+    const inputs = rows.map(row => row.querySelector(selector));
+    const counts = new Map();
+    for (const input of inputs) {
+      const value = input.value.trim();
+      if (value) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    for (const input of inputs) {
+      const duplicate = (counts.get(input.value.trim()) || 0) > 1;
+      input.classList.toggle("is-duplicate", duplicate);
+      input.setAttribute("aria-invalid", String(duplicate));
+      input.setCustomValidity(duplicate ? "此詞已經輸入，請修改重複項目。" : "");
+      duplicates ||= duplicate;
+    }
+  }
+  const count = document.getElementById("wordReplacementsCount");
+  if (count) count.textContent = `${rows.filter(row => row.querySelector('input[type="checkbox"]').checked).length} / ${rows.length} 條啟用`;
+  const error = document.getElementById("wordReplacementsError");
+  if (error) {
+    error.hidden = !duplicates;
+    error.textContent = duplicates ? "紅色欄位重複了，原詞和替換詞各自不能重複。" : "";
+  }
 }
 
 async function openWordReplacementsDialog() {
@@ -8945,7 +8988,8 @@ async function openWordReplacementsDialog() {
     const { wordReplacements } = await request("/api/word-replacements");
     el.wordReplacementsEnabled.checked = Boolean(wordReplacements?.enabled);
     el.wordReplacementsList.replaceChildren();
-    (wordReplacements?.entries || []).forEach(addWordReplacementRow);
+    (wordReplacements?.entries || []).forEach(entry => addWordReplacementRow(entry, false));
+    updateWordReplacementValidation();
     el.wordReplacementsDialog.showModal();
   } catch (error) {
     showToast(error.message, "error");
@@ -8955,9 +8999,9 @@ async function openWordReplacementsDialog() {
 async function saveWordReplacements(event) {
   event.preventDefault();
   const entries = [...el.wordReplacementsList.children].map((row) => ({
-    enabled: row.children[0].checked,
-    from: row.children[1].value,
-    to: row.children[2].value
+    enabled: row.querySelector('input[type="checkbox"]').checked,
+    from: row.querySelector(".word-replacement-from").value,
+    to: row.querySelector(".word-replacement-to").value
   }));
   try {
     await request("/api/word-replacements", {
