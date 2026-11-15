@@ -40,6 +40,8 @@ npm start
 
 啟動後開啟 [主頁](http://localhost:3234) 或 [NovelAI 頁面](http://localhost:3234/novelai.html)。第一次使用時，在主頁「環境設定」選擇對話 API 供應商、模型並填入 API Key，保存後選擇角色卡或助手開始對話。
 
+隨附作者預設啟用了獨立的 DeepSeek 大模型 API，需另外設定大模型 API Key，或在環境設定中改為沿用對話 API。
+
 NovelAI Token、Discord Bot 與 QQ Bot 均為選配；各平台的設定方式與指令見[詳細文件](docs/DETAILS.md)。
 
 ## 資料與更新
