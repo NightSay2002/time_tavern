@@ -31,6 +31,10 @@ function convertSystemText(value = "") {
   return convertTraditionalToSimplified(value).replaceAll("存盘", "存档");
 }
 
+export function normalizeWordReplacementKey(value = "") {
+  return convertSystemText(String(value ?? "").trim());
+}
+
 export function normalizeUiLanguage(value = "") {
   return value === UI_LANGUAGE_SIMPLIFIED
     ? UI_LANGUAGE_SIMPLIFIED

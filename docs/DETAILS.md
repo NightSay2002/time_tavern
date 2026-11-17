@@ -55,7 +55,7 @@
 | `CHAT_IMAGE_API_REASONING_EFFORT` | 依 provider | 圖片模型獨立思考強度；DeepSeek 空值使用 `high`，Gemini 可依模型選擇 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `none`。 |
 | `CHAT_IMAGE_API_TEMPERATURE` | API 預設 | 圖片模型獨立 temperature，範圍 `0–2`；思考開啟時不送出。 |
 | `CHAT_IMAGE_API_KEY` | 空 | 專用圖片 API Key；只保存於 `.env` 與 `data/environment.env`。 |
-| `AI_MIN_REPLY_CHARS` | `600` | 回覆太短時嘗試補救。 |
+| `AI_MIN_REPLY_CHARS` | `600` | 回覆達 200 字但低於此值時嘗試補寫；錯誤訊息及不足 200 字的回覆不補寫。字數不計空白字元。 |
 | `DISCORD_BOT_TOKEN` | 空 | Discord Bot Token。 |
 | `DISCORD_CLIENT_ID` | 從 token 推斷 | 產生 Bot 邀請連結用。 |
 | `DISCORD_ALLOWED_USER_ID` | 空 | 設定後只接受該 Discord User ID 的指令、訊息、編輯與反應。 |
@@ -98,7 +98,7 @@ Provider 固定 Base URL（對話與圖片處理共用此對照）：
 
 只有 DeepSeek 保留舊版未填模型時的預設；其他供應商模型留空時，連接測試與生成會先提示設定模型，不會退回 DeepSeek 模型。模型清單仍可在模型尚未填寫時取得；完整 deployment URL 內含模型的例外維持原狀。Gemini 若在不支援的地區直連，模型清單也可能回傳 HTTP 400；需要 Proxy 時應先填好 Proxy，再取得清單。
 
-Gemini 模型清單仍使用上表的相容介面；網頁對話使用 Google 原生 `streamGenerateContent` 串流輸出，非串流呼叫、圖片理解與連接測試使用 `generateContent`。四類可調整安全過濾設定為 `BLOCK_NONE`。Google 不可調整的保護仍會生效，這項設定不保證所有內容都能生成。詳見 [Google 安全設定](https://ai.google.dev/gemini-api/docs/safety-settings?authuser=7&hl=en)。
+Gemini 模型清單仍使用上表的相容介面；網頁對話使用 Google 原生 `streamGenerateContent` 串流輸出，非串流呼叫、圖片理解與連接測試使用 `generateContent`。四類可調整安全過濾設定為 `OFF`。Google 不可調整的保護仍會生效，這項設定不保證所有內容都能生成。詳見 [Google 安全設定](https://ai.google.dev/gemini-api/docs/safety-settings?authuser=7&hl=en)。
 
 Gemini 不會自動加入額外的酒館預設提示詞；正文、助手、壓縮及圖片辨識使用各自現有的提示設定。
 
@@ -117,6 +117,8 @@ OpenRouter 的模型作者與實際推理供應商不同。兩組 API 都可由[
 對話、壓縮、助手與圖片理解共用以下計價規則；AI 紀錄的「實際費用」及「估算費用」按幣種分開加總，未知顯示筆數並排除於總金額，明確回傳的 0 仍保留。
 
 展開的 AI 紀錄只顯示送出內容、思考過程與輸出，費用和快取數據仍在摘要列。Gemini 支援的思考模型會請求思考摘要；供應商未回傳摘要或快取命中數時不推測，舊紀錄也無法補回未保存的內容。
+
+Gemini 呼叫紀錄會標示用量資料中的 `cachedContentTokenCount` 是否曾出現；單獨回傳快取數字的串流事件也會合併保存。欄位未出現不會自動記為 0；沒有收到用量資料時會另外標示，舊紀錄不會補造標記。串流中斷前尚未完成的用量資料未必能保存。
 
 - 實際費用優先：OpenRouter 回傳的 `usage.cost` 按 USD 記錄；所有平台亦可使用 `usage.cost: { "amount": 0.01, "currency": "USD" }`、`usage.cost_usd`／`costUsd`、`cost_cny`／`costCny` 或帶 `currency` 的數值 `cost` 明確回報金額與幣種。未知格式或沒有幣種的非 OpenRouter 數值不猜測。串流最後只回傳 cost 的事件也會保留，不覆蓋先前 Token 數。
 - 自訂單價：環境設定「API 計價」可新增供應商、精確模型 ID、端點、幣種與每百萬 tokens 的輸入／快取讀取／輸出價格；保存到 `.env` 的 `API_PRICING_OVERRIDES` JSON 陣列並同步備份。自訂 API 端點填完整 `/chat/completions` 網址（保存時不保留 query 或認證資訊），OpenRouter 填完整端點 tag；官方直連留空。只對精確匹配的後續請求生效，不會因切換模型而套錯；實際費用優先，其次自訂單價、指定端點費率、官方牌價。快取單價留空代表未知，明確填 0 才是免費。
@@ -198,6 +200,7 @@ GLM 與圖片輸入：
 - 開場對話支援多分頁；選擇分頁後可修改「開場名稱」，分頁文字即時更新，按角色卡「保存」一起儲存。名稱留空會使用「開場 1、開場 2」等預設名稱。
 - 單卡世界書會在關鍵字命中時插入正文 Prompt。
 - 角色卡區的「全局世界書」可建立所有角色卡共用的條目；總開關與每條條目均可獨立啟停，觸發規則沿用單卡世界書，助手模式不套用。
+- 角色卡編輯器的「加入全局世界書」會立即複製目前編輯中的有效條目，包含尚未保存的修改；角色卡原條目保留。全局已有的同名條目與本批重複名稱會略過（忽略首尾空白、大小寫及繁簡差異），不覆蓋既有內容。新條目使用獨立 ID，保留啟用狀態、關鍵字、永久啟用與機率；全局總開關不變，未完成條目會略過並提示數量。
 - 世界書關鍵字只比對本次使用者實際輸入和上一則可見 AI 對話，不掃描附加到模型輸入的世界書、系統補充或其他自動生成內容；全局與角色卡條目不會互相連鎖觸發。AI 在對話中自然說出的文字仍會正常參與下回合的判斷。
 - 支援 SillyTavern JSON、PNG、JPG/JPEG 匯入。
 - 匯出時有封面輸出帶資料 JPG，沒有封面輸出 JSON。
@@ -405,7 +408,7 @@ Prompt 模式與助手 Prompt 都包含在全局設定 JSON，不再分散寫入
 
 改詞規則包含在全局設定匯入、匯出及作者預設中；舊版設定檔沒有改詞欄位時保留現有規則。首次啟動使用隨附作者預設。
 
-每次送出時，只附上在本次完整模型請求文字中實際替換的規則；未命中任何規則時不附加改詞說明。編輯器會即時標示重複的原詞或替換詞，停用的規則亦須避免重複。
+每次送出時，只附上在本次完整模型請求文字中實際替換的規則；未命中任何規則時不附加改詞說明。原詞及替換詞會自動辨識繁體、簡體字形；實際替換值保留規則中設定的文字。編輯器會即時標示重複的原詞或替換詞，繁簡字形視為重複，停用的規則亦須避免重複。
 
 可提交的發布內容：
 
@@ -434,6 +437,7 @@ NovelAI 圖片歷史與參考圖草稿保存在瀏覽器，不包含在 `data/` 
 | `POST` | `/api/restart` | 排程重啟 server。 |
 | `GET` / `PUT` | `/api/time-tracking` | 讀取或保存時間統計。 |
 | `GET` / `PUT` | `/api/global-lorebook` | 讀取或保存所有角色卡共用的全局世界書。 |
+| `POST` | `/api/global-lorebook/entries` | 將條目追加到全局世界書，只加入不重名的有效條目。 |
 | `GET` / `PUT` | `/api/context-compression` | 讀取或保存模型內容。 |
 | `GET` | `/api/defaults/export` | 取得不含密鑰與對話的全局設定 JSON。 |
 | `POST` | `/api/defaults/import` | 匯入選定的全局設定並保留本機密鑰與對話存檔。 |

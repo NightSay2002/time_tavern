@@ -1407,6 +1407,15 @@ dialog.session-picker-dialog {
   flex: 1;
 }
 
+.role-lorebook-actions {
+  flex-wrap: wrap;
+}
+
+.role-lorebook-actions button {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
 .discord-chat-header {
   display: flex;
   align-items: center;

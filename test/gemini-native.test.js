@@ -13,7 +13,7 @@ const base = {
   ]
 };
 
-test("native Gemini requests retain conversation, images, reasoning and four BLOCK_NONE thresholds", () => {
+test("native Gemini requests retain conversation, images, reasoning and four OFF thresholds", () => {
   const request = buildGeminiNativeRequest(url, base);
   assert.equal(request.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-argon:generateContent");
   assert.deepEqual(request.body.systemInstruction.parts, [{ text: "system rules" }]);
@@ -23,7 +23,7 @@ test("native Gemini requests retain conversation, images, reasoning and four BLO
   assert.equal(request.body.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
   assert.equal(request.body.generationConfig.thinkingConfig.includeThoughts, true);
   assert.equal(request.body.safetySettings.length, 4);
-  assert.ok(request.body.safetySettings.every(item => item.threshold === "BLOCK_NONE"));
+  assert.ok(request.body.safetySettings.every(item => item.threshold === "OFF"));
   assert.equal(new Set(request.body.safetySettings.map(item => item.category)).size, 4);
 });
 
@@ -84,6 +84,7 @@ test("native Gemini preserves thought summary separately from final text", async
     assert.equal(message.content, "answer");
     assert.equal(message.reasoning_content, "summary");
     assert.equal(converted.usage.prompt_tokens_details.cached_tokens, 5705);
+    assert.equal(converted.usage.gemini_cache_field_present, true);
   }
 });
 
@@ -110,7 +111,7 @@ test("non-streaming native response retains safety reason, usage and image input
 test("native Gemini streaming preserves split UTF-8 chunks, safety and usage", async () => {
   const request = buildGeminiNativeRequest(url, { ...base, stream: true });
   assert.equal(request.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-argon:streamGenerateContent?alt=sse");
-  assert.ok(request.body.safetySettings.every(item => item.threshold === "BLOCK_NONE"));
+  assert.ok(request.body.safetySettings.every(item => item.threshold === "OFF"));
   const events = [
     { candidates: [{ content: { parts: [{ text: "你好" }] } }] },
     { candidates: [{ content: { parts: [{ text: "世界" }] }, finishReason: "STOP" }] },
@@ -138,8 +139,10 @@ test("later Gemini usage events omit absent cache and thought details", async ()
   const response = await fetchGeminiNative(url, options, async () => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("")));
   const [first, last] = (await response.text()).trim().split("\n\n").map(block => JSON.parse(block.slice(6)));
   assert.equal(first.usage.prompt_tokens_details.cached_tokens, 5705);
+  assert.equal(first.usage.gemini_cache_field_present, true);
   assert.equal(first.usage.completion_tokens_details.reasoning_tokens, 20);
   assert.equal(last.usage.prompt_tokens_details, undefined);
+  assert.equal(last.usage.gemini_cache_field_present, false);
   assert.equal(last.usage.completion_tokens_details, undefined);
 });
 

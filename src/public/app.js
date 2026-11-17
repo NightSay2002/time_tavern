@@ -10,10 +10,11 @@
 import {
   createUiLanguageController,
   normalizeUiLanguage,
+  normalizeWordReplacementKey,
   readStoredUiLanguage,
   UI_LANGUAGE_SIMPLIFIED,
   UI_LANGUAGE_TRADITIONAL
-} from "./ui-language.js";
+} from "./ui-language.js?v=20261115-word-variants";
 import { formatApiPriceOverridesEnv, parseApiPriceOverrides } from "./api-price-overrides.js";
 
 const el = {
@@ -113,6 +114,7 @@ const el = {
   roleCardOpening: document.getElementById("roleCardOpening"),
   roleCardLorebookList: document.getElementById("roleCardLorebookList"),
   addRoleCardLorebookBtn: document.getElementById("addRoleCardLorebookBtn"),
+  copyRoleCardLorebooksToGlobalBtn: document.getElementById("copyRoleCardLorebooksToGlobalBtn"),
   cancelRoleCardDialog: document.getElementById("cancelRoleCardDialog"),
 
   coverCropDialog: document.getElementById("coverCropDialog"),
@@ -3208,6 +3210,9 @@ function formatUsage(usage) {
     cacheHit !== null ? `Cache Hit ${cacheHit}` : "",
     cacheMiss !== null ? `Cache Miss ${cacheMiss}` : "",
     cacheRate ? `命中率 ${cacheRate}` : prompt !== null ? "命中率 未提供" : "",
+    usage.geminiCacheFieldStatus === "present" ? "Gemini 快取欄位 有" :
+      usage.geminiCacheFieldStatus === "missing" ? "Gemini 快取欄位 未出現" :
+        usage.geminiCacheFieldStatus === "no_usage" ? "Gemini 未收到用量" : "",
     cost !== null ? `${getUsageCostLabel(usage)} ${formatCurrencyAmount(cost, getUsageCostCurrency(usage))}` : getUsageCostLabel(usage)
   ].filter(Boolean).join(" / ");
 }
@@ -8963,11 +8968,11 @@ function updateWordReplacementValidation() {
     const inputs = rows.map(row => row.querySelector(selector));
     const counts = new Map();
     for (const input of inputs) {
-      const value = input.value.trim();
+      const value = normalizeWordReplacementKey(input.value);
       if (value) counts.set(value, (counts.get(value) || 0) + 1);
     }
     for (const input of inputs) {
-      const duplicate = (counts.get(input.value.trim()) || 0) > 1;
+      const duplicate = (counts.get(normalizeWordReplacementKey(input.value)) || 0) > 1;
       input.classList.toggle("is-duplicate", duplicate);
       input.setAttribute("aria-invalid", String(duplicate));
       input.setCustomValidity(duplicate ? "此詞已經輸入，請修改重複項目。" : "");
@@ -8979,7 +8984,7 @@ function updateWordReplacementValidation() {
   const error = document.getElementById("wordReplacementsError");
   if (error) {
     error.hidden = !duplicates;
-    error.textContent = duplicates ? "紅色欄位重複了，原詞和替換詞各自不能重複。" : "";
+    error.textContent = duplicates ? "紅色欄位重複了，原詞和替換詞各自不能重複（包括繁簡字形）。" : "";
   }
 }
 
@@ -9029,6 +9034,29 @@ async function openGlobalLorebookDialog() {
     el.globalLorebookDialog?.showModal();
   } catch (error) {
     showToast(error.message, "error");
+  }
+}
+
+async function copyRoleCardLorebooksToGlobal() {
+  const entries = collectRoleCardLorebooksFromEditor();
+  if (!entries.length) {
+    showToast("目前角色卡沒有可加入的世界書條目。");
+    return;
+  }
+  const button = el.copyRoleCardLorebooksToGlobalBtn;
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
+  try {
+    const result = await request("/api/global-lorebook/entries", {
+      method: "POST",
+      body: JSON.stringify({ entries })
+    });
+    if (appState) appState.globalLorebook = normalizeGlobalLorebook(result.globalLorebook);
+    showToast(`已加入全局世界書 ${result.addedCount} 條；略過同名 ${result.skippedCount} 條${result.invalidCount ? `；略過未完成 ${result.invalidCount} 條` : ""}`);
+  } catch (error) {
+    showToast(error.message || "加入全局世界書失敗", "error");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -9916,6 +9944,8 @@ function bindEvents() {
       renderRoleCardLorebookEditor(roleCardLorebooksDraft);
     });
   }
+
+  el.copyRoleCardLorebooksToGlobalBtn?.addEventListener("click", copyRoleCardLorebooksToGlobal);
 
   el.chatImageButton?.addEventListener("click", () => {
     el.chatImageInput?.click();

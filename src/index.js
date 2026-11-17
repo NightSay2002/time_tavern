@@ -1669,6 +1669,12 @@ function normalizeAiUsage(input, apiProvider = "", apiEndpoint = "") {
     source.cache_read_tokens
   );
   const promptCacheMissTokens = nonNegativeUsageNumber(source.promptCacheMissTokens ?? source.prompt_cache_miss_tokens);
+  const geminiCacheFieldPresent = source.geminiCacheFieldPresent ?? source.gemini_cache_field_present;
+  const geminiCacheFieldStatus = typeof geminiCacheFieldPresent === "boolean"
+    ? (geminiCacheFieldPresent ? "present" : "missing")
+    : ["present", "missing", "no_usage"].includes(source.geminiCacheFieldStatus)
+      ? source.geminiCacheFieldStatus
+      : apiProvider === "gemini" ? "no_usage" : "";
   const accountingEndpoint = apiEndpoint || source.accountingEndpoint || "";
   let cost = normalizeAiUsageCost(source.cost || source);
   const explicitUsd = nonNegativeUsageNumber(source.cost_usd ?? source.costUsd);
@@ -1700,6 +1706,7 @@ function normalizeAiUsage(input, apiProvider = "", apiEndpoint = "") {
     totalTokens: Number.isFinite(totalTokens) ? totalTokens : null,
     promptCacheHitTokens: Number.isFinite(promptCacheHitTokens) ? promptCacheHitTokens : null,
     promptCacheMissTokens: Number.isFinite(promptCacheMissTokens) ? promptCacheMissTokens : null,
+    ...(geminiCacheFieldStatus ? { geminiCacheFieldStatus } : {}),
     cost,
     costUnavailableReason: safeText(source.costUnavailableReason),
     billingStatus: safeText(source.billingStatus),
@@ -5283,6 +5290,30 @@ function normalizeGlobalLorebook(input) {
   };
 }
 
+function appendGlobalLorebookEntries(currentState, input = []) {
+  const globalLorebook = normalizeGlobalLorebook(currentState.globalLorebook);
+  const entries = normalizeRoleCardLorebooks(input);
+  const names = new Set(globalLorebook.entries.map(entry => normalizeChineseTextForMatch(entry.key)));
+  const added = [];
+  let skippedCount = 0;
+  const timestamp = nowIso();
+  for (const entry of entries) {
+    const name = normalizeChineseTextForMatch(entry.key);
+    if (names.has(name)) {
+      skippedCount++;
+      continue;
+    }
+    names.add(name);
+    added.push({ ...entry, id: newId("lore"), createdAt: timestamp, updatedAt: timestamp });
+  }
+  if (added.length) {
+    globalLorebook.entries.push(...added);
+    globalLorebook.updatedAt = timestamp;
+    currentState.globalLorebook = globalLorebook;
+  }
+  return { globalLorebook, addedCount: added.length, skippedCount, invalidCount: input.length - entries.length };
+}
+
 function normalizeRoleCardCustomSection(input) {
   const raw = input && typeof input === "object" ? input : {};
   return {
@@ -7372,6 +7403,14 @@ function serializeLooseListItem(value) {
 
 function countVisibleCharacters(text) {
   return safeText(text).replace(/\s+/g, "").length;
+}
+
+function shouldExpandAssistantReply(text, minimum = getMinimumReplyChars()) {
+  const content = safeText(text);
+  const length = countVisibleCharacters(content);
+  return !isSystemAssistantErrorContent(content) &&
+    !/^(?:\[error\]|error\s*[:：]|錯誤\s*[:：]|错误\s*[:：])/iu.test(content) &&
+    length >= 200 && length < minimum;
 }
 
 function dedupeStringArray(items = []) {
@@ -10025,7 +10064,10 @@ function hasUsageTokens(usage) {
   return Boolean(
     normalized.promptTokens !== null ||
       normalized.completionTokens !== null ||
-      normalized.totalTokens !== null
+      normalized.totalTokens !== null ||
+      normalized.promptCacheHitTokens !== null ||
+      normalized.promptCacheMissTokens !== null ||
+      Boolean(normalized.geminiCacheFieldStatus)
   );
 }
 
@@ -10053,7 +10095,7 @@ async function ensureMinimumAssistantLength(state, assistantText, runtimeUserNam
   const maxExpandAttempts = 2;
 
   for (let attempt = 0; attempt < maxExpandAttempts; attempt += 1) {
-    if (!output || countVisibleCharacters(output) >= minimum) {
+    if (!shouldExpandAssistantReply(output, minimum)) {
       break;
     }
 
@@ -10078,7 +10120,7 @@ async function ensureMinimumAssistantLength(state, assistantText, runtimeUserNam
     }
   }
 
-  if (output && countVisibleCharacters(output) < minimum) {
+  if (shouldExpandAssistantReply(output, minimum)) {
     console.warn(`回覆字數仍不足 ${minimum} 字，已達補寫上限。`);
   }
   return { content: output, warning };
@@ -10903,7 +10945,13 @@ async function readChatApiStreamBody(response, handlers = {}) {
     const contentDelta = extractChatApiMessageText(delta.content);
     const nextFinishReason = safeText(choice?.finish_reason);
     if (payload?.usage && (hasUsageTokens(payload.usage) || Object.hasOwn(payload.usage, "cost"))) {
+      const previousDetails = rawUsage.prompt_tokens_details;
+      const cacheFieldAlreadyPresent = rawUsage.gemini_cache_field_present === true;
       rawUsage = { ...rawUsage, ...payload.usage };
+      if (previousDetails && payload.usage.prompt_tokens_details) {
+        rawUsage.prompt_tokens_details = { ...previousDetails, ...payload.usage.prompt_tokens_details };
+      }
+      if (cacheFieldAlreadyPresent) rawUsage.gemini_cache_field_present = true;
       usage = normalizeAiUsage(rawUsage, handlers.apiProvider, handlers.apiEndpoint);
     }
 
@@ -11341,7 +11389,7 @@ async function ensureMinimumAssistantLengthStreaming(
   const onContentDelta = typeof handlers.onContentDelta === "function" ? handlers.onContentDelta : null;
 
   for (let attempt = 0; attempt < maxExpandAttempts; attempt += 1) {
-    if (!output || countVisibleCharacters(output) >= minimum) {
+    if (!shouldExpandAssistantReply(output, minimum)) {
       break;
     }
 
@@ -11518,7 +11566,7 @@ function createConversationTurnDeps(options = {}) {
       !hasActiveAssistantTarget(currentState) &&
       !generation?.excludeFromModel &&
       !modelProcessingResult.skipReasoner &&
-      countVisibleCharacters(assistantText) < getMinimumReplyChars()
+      shouldExpandAssistantReply(assistantText)
     ),
     ensureMinimumAssistantLength: ({ state: currentState, assistantText, runtimeUserName }) => streaming
       ? ensureMinimumAssistantLengthStreaming(currentState, assistantText, runtimeUserName, handlers)
@@ -12977,6 +13025,29 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         globalLorebook: state.globalLorebook
       });
+      return;
+    }
+
+    if (pathname === "/api/global-lorebook/entries" && method === "POST") {
+      const body = await readBody(req);
+      if (!Array.isArray(body?.entries)) {
+        sendJson(res, 400, { error: "世界書條目必須是陣列。" });
+        return;
+      }
+      const result = await withStateLock(() => {
+        const previous = state.globalLorebook;
+        const appended = appendGlobalLorebookEntries(state, body.entries);
+        if (appended.addedCount) {
+          try {
+            saveState(state);
+          } catch (error) {
+            state.globalLorebook = previous;
+            throw error;
+          }
+        }
+        return appended;
+      });
+      sendJson(res, 200, result);
       return;
     }
 

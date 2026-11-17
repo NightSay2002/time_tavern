@@ -38,6 +38,25 @@ function createScope(responses) {
 }
 
 for (const stream of [false, true]) {
+  test(`${stream ? "streaming" : "non-streaming"} matches simplified input and restores simplified output`, async () => {
+    const response = {
+      ok: true,
+      streamed: { content: "画家", reasoningContent: "", finishReason: "stop", usage: null },
+      json: async () => ({ choices: [{ message: { content: "画家" }, finish_reason: "stop" }] })
+    };
+    const { scope } = createScope([response]);
+    scope.state.wordReplacements = { enabled: true, entries: [{ from: "頭髮", to: "畫家" }] };
+    let sent;
+    scope.fetchChatApiWithRetry = async (_url, options) => { sent = JSON.parse(options.body); return response; };
+    scope.readChatApiStreamBody = async (res, options) => { options.onContentDelta("画"); options.onContentDelta("家"); return res.streamed; };
+    let deltas = "";
+    const method = stream ? scope.callChatApiCompletionStreamRaw : scope.callChatApiCompletionRaw;
+    const result = await method({ messages: [{ role: "user", content: "头发" }], onContentDelta: part => { deltas += part; } });
+    assert.match(sent.messages[0].content, /^畫家/u);
+    assert.equal(result.content, "頭髮");
+    if (stream) assert.equal(deltas, "頭髮");
+  });
+
   test(`${stream ? "streaming" : "non-streaming"} applies global word rules to the real request and restores the reply`, async () => {
     const response = {
       ok: true,
@@ -187,7 +206,7 @@ test("Gemini chat emits native stream deltas before completion and retains diagn
   scope.fetchModelApi = async (url, options) => {
     requests += 1;
     assert.match(url, /:streamGenerateContent\?alt=sse$/u);
-    assert.ok(JSON.parse(options.body).safetySettings.every(item => item.threshold === "BLOCK_NONE"));
+    assert.ok(JSON.parse(options.body).safetySettings.every(item => item.threshold === "OFF"));
     const stream = new ReadableStream({ start(controller) {
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "first" }] } }] })}\n\n`));
       release = () => {

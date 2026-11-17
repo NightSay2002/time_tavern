@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { normalizeWordReplacements, validateWordReplacements, prepareWordReplacementMessages, restoreReplacedWords, createWordRestorer } from "../src/word-replacements.js";
+import { localizeSystemText } from "../src/ui-language.js";
 
 const rules = { enabled: true, entries: [
   { from: "操", to: "錒", enabled: true },
@@ -54,6 +55,38 @@ test("matched image text and messages without a user still get the applicable in
   assert.doesNotMatch(result[1].content, /b改為Y/u);
 });
 
+test("traditional and simplified source and replacement words work in both directions", () => {
+  const config = { enabled: true, entries: [{ from: "頭髮", to: "畫家" }, { from: "软件", to: "龙" }] };
+  const messages = [{ role: "user", content: "頭髮、头发、軟體、软件" }];
+  const result = prepareWordReplacementMessages(messages, config)[0].content;
+  assert.ok(result.startsWith("畫家、畫家、龙、龙\n"));
+  assert.equal((result.match(/頭髮改為畫家/gu) || []).length, 1);
+  assert.equal((result.match(/软件改為龙/gu) || []).length, 1);
+  assert.equal(restoreReplacedWords("畫家、画家、龙、龍", config), "頭髮、頭髮、软件、软件");
+});
+
+test("simplified replacement words restore correctly across streaming chunks", () => {
+  const config = { enabled: true, entries: [{ from: "頭髮", to: "畫家" }] };
+  let output = "";
+  const stream = createWordRestorer(config, text => { output += text; });
+  for (const part of ["画", "家", "和", "畫", "家"]) stream.push(part);
+  stream.flush();
+  assert.equal(output, "頭髮和頭髮");
+});
+
+test("simplified custom supplement remains after the matched rule instruction", () => {
+  const config = { enabled: true, entries: [{ from: "頭髮", to: "畫家" }] };
+  const marker = localizeSystemText("【使用者自訂補充】", "zh-Hans");
+  const content = `头发\n\n${marker}示例`;
+  const result = prepareWordReplacementMessages([{ role: "user", content }], config)[0].content;
+  assert.ok(result.indexOf("【改詞規則】") < result.indexOf(marker));
+});
+
+test("traditional and simplified equivalents are duplicate rules", () => {
+  assert.throws(() => validateWordReplacements({ entries: [{ from: "頭髮", to: "a" }, { from: "头发", to: "b" }] }), /重複/u);
+  assert.throws(() => validateWordReplacements({ entries: [{ from: "a", to: "畫家" }, { from: "b", to: "画家" }] }), /重複/u);
+});
+
 test("streaming restores replacement words split across chunks and overlapping prefixes", () => {
   const config = { enabled: true, entries: [{ from: "一", to: "abc" }, { from: "二", to: "ab" }] };
   let output = "";
@@ -84,7 +117,7 @@ test("editor immediately marks duplicates in both columns and clears them after 
   const row = (from, to, enabled) => ({ from: input(from), to: input(to), checkbox: { checked: enabled }, querySelector(selector) { return selector === ".word-replacement-from" ? this.from : selector === ".word-replacement-to" ? this.to : this.checkbox; } });
   const rows = [row(" cat ", "x", true), row("cat", "y", false), row("dog", "x", true)];
   const count = {}, error = {};
-  const scope = vm.createContext({ el: { wordReplacementsList: { children: rows } }, document: { getElementById: id => id === "wordReplacementsCount" ? count : error } });
+  const scope = vm.createContext({ el: { wordReplacementsList: { children: rows } }, document: { getElementById: id => id === "wordReplacementsCount" ? count : error }, normalizeWordReplacementKey: value => localizeSystemText(String(value ?? "").trim(), "zh-Hans") });
   vm.runInContext(source.slice(start, source.indexOf("\n}", start) + 2), scope);
   scope.updateWordReplacementValidation();
   assert.equal(rows[0].from.classList.duplicate, true);
@@ -100,4 +133,9 @@ test("editor immediately marks duplicates in both columns and clears them after 
   assert.equal(rows[0].from.invalid, "false");
   assert.equal(rows[0].from.validation, "");
   assert.equal(error.hidden, true);
+  rows[0].from.value = "頭髮";
+  rows[1].from.value = "头发";
+  scope.updateWordReplacementValidation();
+  assert.equal(rows[0].from.invalid, "true");
+  assert.equal(rows[1].from.invalid, "true");
 });

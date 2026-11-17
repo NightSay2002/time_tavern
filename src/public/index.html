@@ -6,7 +6,7 @@
     <title>時分居酒屋</title>
     <link rel="icon" type="image/png" href="/assets/img/icon.png" />
     <link rel="apple-touch-icon" href="/assets/img/icon.png" />
-    <link rel="stylesheet" href="/styles.css?v=20261115-word-rules" />
+    <link rel="stylesheet" href="/styles.css?v=20261117-lorebook-copy" />
     <link rel="modulepreload" href="/ui-language.js" />
     <link rel="modulepreload" href="/vendor/opencc-t2cn.js" />
     <link rel="modulepreload" href="/vendor/opencc-cn2t.js" />
@@ -274,7 +274,10 @@
           <h4>世界書 Lorebooks</h4>
           <p class="form-hint">條目會在最近對話或本輪輸入命中關鍵字時，自動插入到角色卡區塊下方。</p>
           <div id="roleCardLorebookList"></div>
-          <button id="addRoleCardLorebookBtn" type="button" class="secondary">＋ 新增世界書條目</button>
+          <div class="inline-actions role-lorebook-actions">
+            <button id="addRoleCardLorebookBtn" type="button" class="secondary">＋ 新增世界書條目</button>
+            <button id="copyRoleCardLorebooksToGlobalBtn" type="button" class="secondary">加入全局世界書</button>
+          </div>
         </section>
         <div class="dialog-actions">
           <button type="submit">保存</button>
@@ -684,6 +687,6 @@
 
     <div id="toast" class="toast"></div>
     <script src="/effects.js?v=20260525-low-power" defer></script>
-    <script type="module" src="/app.js?v=20261115-word-rules"></script>
+    <script type="module" src="/app.js?v=20261117-lorebook-copy"></script>
   </body>
 </html>

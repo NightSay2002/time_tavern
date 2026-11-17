@@ -103,7 +103,7 @@ test("Gemini connection test reserves thinking output tokens and retains the sel
   assert.equal(timers.size, 0);
 });
 
-test("Gemini connection test uses native BLOCK_NONE without the preset", async () => {
+test("Gemini connection test uses native OFF without the preset", async () => {
   const { scope } = scopeForTest();
   scope.fetchGeminiNative = fetchGeminiNative;
   scope.fetchModelApi = async (url, options) => {
@@ -111,7 +111,7 @@ test("Gemini connection test uses native BLOCK_NONE without the preset", async (
     const body = JSON.parse(options.body);
     assert.equal(body.generationConfig.maxOutputTokens, 4096);
     assert.equal(body.systemInstruction, undefined);
-    assert.ok(body.safetySettings.length === 4 && body.safetySettings.every(item => item.threshold === "BLOCK_NONE"));
+    assert.ok(body.safetySettings.length === 4 && body.safetySettings.every(item => item.threshold === "OFF"));
     return json({ candidates: [{ content: { parts: [{ text: "OK" }] }, finishReason: "STOP" }] });
   };
   const result = await scope.testChatApiConnection(env);

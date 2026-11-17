@@ -69,7 +69,7 @@ export function buildGeminiNativeRequest(url, request) {
       contents,
       ...(systemParts.length ? { systemInstruction: { parts: systemParts } } : {}),
       generationConfig,
-      safetySettings: SAFETY_CATEGORIES.map((category) => ({ category, threshold: "BLOCK_NONE" }))
+      safetySettings: SAFETY_CATEGORIES.map((category) => ({ category, threshold: "OFF" }))
     }
   };
 }
@@ -94,6 +94,7 @@ function convertGeminiResponse(payload, stream = false) {
       completion_tokens: Number.isFinite(visible) ? visible + (Number.isFinite(thoughts) ? thoughts : 0)
         : Number.isFinite(inferredOutput) && inferredOutput >= 0 ? inferredOutput : undefined,
       total_tokens: rawUsage.totalTokenCount,
+      gemini_cache_field_present: Object.hasOwn(rawUsage, "cachedContentTokenCount"),
       ...(Number.isFinite(rawUsage.cachedContentTokenCount) ? { prompt_tokens_details: { cached_tokens: rawUsage.cachedContentTokenCount } } : {}),
       ...(Number.isFinite(thoughts) ? { completion_tokens_details: { reasoning_tokens: thoughts } } : {})
     };

@@ -25,7 +25,8 @@ test("AI log compaction hashes repeated chunks once and restores every character
   vm.runInContext(section("function getAiLogTextFields(", "function getAiLogsFingerprint("), context);
   const prefix = "共同前文".repeat(8192);
   const logs = Array.from({ length: 200 }, (_, i) => ({
-    id: String(i), requestMessages: [{ role: "user", content: `${prefix}${i}` }],
+    id: String(i), usage: { geminiCacheFieldStatus: i % 2 ? "present" : "missing" },
+    requestMessages: [{ role: "user", content: `${prefix}${i}` }],
     responseText: `reply ${i}`, debugReasoningContent: ""
   }));
   const result = context.compactAiLogsForStorage(logs);
@@ -34,6 +35,7 @@ test("AI log compaction hashes repeated chunks once and restores every character
   assert.equal(restored.length, logs.length);
   restored.forEach((entry, index) => {
     assert.equal(entry.id, logs[index].id);
+    assert.equal(entry.usage.geminiCacheFieldStatus, logs[index].usage.geminiCacheFieldStatus);
     assert.equal(entry.requestMessages[0].content, logs[index].requestMessages[0].content);
     assert.equal(entry.responseText, logs[index].responseText);
     assert.equal(entry.debugReasoningContent, logs[index].debugReasoningContent);

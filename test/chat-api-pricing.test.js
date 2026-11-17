@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import { getManualApiPricing } from "../src/public/api-price-overrides.js";
+import { fetchGeminiNative } from "../src/gemini-native.js";
 
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const web = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
@@ -288,6 +289,44 @@ test("streamed cost-only usage events preserve previously reported tokens and en
   assert.equal(result.usage.cost.amount, 0.2);
   assert.equal(result.usage.cost.type, "actual");
   assert.equal(result.usage.accountingEndpoint, "vendor/fp8");
+});
+
+test("Gemini cache-only stream events survive later usage events and log normalization", async () => {
+  const p = pricingScope();
+  const options = { headers: { Authorization: "Bearer test-only" }, body: JSON.stringify({ model: "gemini-4-carbon", stream: true, messages: [{ role: "user", content: "fixture" }] }) };
+  const total = { usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 20, totalTokenCount: 1020 } };
+  const cache = { usageMetadata: { cachedContentTokenCount: 800 } };
+  for (const events of [[total, cache, total], [cache, total]]) {
+    const data = [...events, { candidates: [{ content: { parts: [{ text: "OK" }] }, finishReason: "STOP" }] }]
+      .map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+    const response = await fetchGeminiNative("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", options, async () => new Response(data));
+    const result = await p.readChatApiStreamBody(response, { apiProvider: "gemini" });
+    assert.equal(result.usage.promptTokens, 1000);
+    assert.equal(result.usage.promptCacheHitTokens, 800);
+    assert.equal(result.usage.geminiCacheFieldStatus, "present");
+    const saved = p.normalizeAiLog(JSON.parse(JSON.stringify({ model: "gemini-4-carbon", usage: result.usage })));
+    assert.equal(saved.usage.promptCacheHitTokens, 800);
+    assert.equal(saved.usage.geminiCacheFieldStatus, "present");
+  }
+});
+
+test("Gemini tracks explicit zero, omitted cache fields and absent usage separately", async () => {
+  const p = pricingScope();
+  const options = { headers: { Authorization: "Bearer test-only" }, body: JSON.stringify({ model: "gemini-4-carbon", stream: true, messages: [{ role: "user", content: "fixture" }] }) };
+  for (const [metadata, status, hit] of [[{ promptTokenCount: 1000, cachedContentTokenCount: 0 }, "present", 0], [{ promptTokenCount: 1000 }, "missing", null], [{}, "missing", null], [undefined, "no_usage", null]]) {
+    const event = { candidates: [{ content: { parts: [{ text: "OK" }] }, finishReason: "STOP" }], ...(metadata === undefined ? {} : { usageMetadata: metadata }) };
+    const response = await fetchGeminiNative("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", options, async () => new Response(`data: ${JSON.stringify(event)}\n\n`));
+    const result = await p.readChatApiStreamBody(response, { apiProvider: "gemini" });
+    assert.equal(result.usage.geminiCacheFieldStatus, status);
+    assert.equal(result.usage.promptCacheHitTokens, hit);
+    assert.equal(p.normalizeAiLog({ usage: result.usage }).usage.geminiCacheFieldStatus, status);
+  }
+  assert.equal(p.normalizeAiLog({ usage: { promptTokens: 1000, accountingProvider: "gemini" } }).usage.geminiCacheFieldStatus, undefined);
+  const ui = uiScope();
+  assert.match(ui.formatUsage({ geminiCacheFieldStatus: "present" }), /Gemini 快取欄位 有/u);
+  assert.match(ui.formatUsage({ geminiCacheFieldStatus: "missing" }), /Gemini 快取欄位 未出現/u);
+  assert.match(ui.formatUsage({ geminiCacheFieldStatus: "no_usage" }), /Gemini 未收到用量/u);
+  assert.doesNotMatch(ui.formatUsage({ promptTokens: 1000 }), /Gemini 快取欄位/u);
 });
 
 test("web distinguishes actual, estimated, zero and unknown charges", () => {

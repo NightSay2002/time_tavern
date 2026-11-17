@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 
 const html = fs.readFileSync(new URL("../src/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../src/public/app.js", import.meta.url), "utf8");
@@ -23,6 +29,9 @@ test("web exposes a global lorebook editor with global and per-entry switches", 
   assert.match(dialog, /id="addGlobalLorebookEntryBtn"/u);
   assert.match(appSource, /enabledBtn\.textContent = entry\.enabled !== false \? "啟用" : "停用"/u);
   assert.match(appSource, /request\("\/api\/global-lorebook"/u);
+  const cardDialog = html.match(/<dialog id="roleCardDialog"[\s\S]*?<\/dialog>/u)?.[0] || "";
+  assert.match(cardDialog, /id="copyRoleCardLorebooksToGlobalBtn"[^>]*type="button"/u);
+  assert.match(appSource, /copyRoleCardLorebooksToGlobalBtn\?\.addEventListener\("click", copyRoleCardLorebooksToGlobal\)/u);
 });
 
 test("global lorebooks share role-card trigger rules but stay out of assistant mode", () => {
@@ -93,4 +102,81 @@ test("lorebook content never chains to global or card entries through prepared i
   assert.deepEqual(ids(), ["card:b"]);
   current.conversation.at(-2).content = "gamma";
   assert.deepEqual(ids(), ["card:b", "global:c"]);
+});
+
+test("copying card lorebooks only appends new names and persists independent entries", { timeout: 30000 }, async t => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-lorebook-copy-"));
+  fs.cpSync(path.join(root, "src"), path.join(directory, "src"), { recursive: true });
+  fs.cpSync(path.join(root, "defaults"), path.join(directory, "defaults"), { recursive: true });
+  fs.copyFileSync(path.join(root, "package.json"), path.join(directory, "package.json"));
+  fs.symlinkSync(path.join(root, "node_modules"), path.join(directory, "node_modules"), "dir");
+  const listener = net.createServer();
+  await new Promise((resolve, reject) => { listener.once("error", reject); listener.listen(0, "127.0.0.1", resolve); });
+  const port = listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const server = spawn(process.execPath, ["src/index.js"], {
+    cwd: directory,
+    env: { PATH: process.env.PATH, HOME: directory, PORT: String(port), NODE_ENV: "test" },
+    stdio: ["ignore", "ignore", "pipe"]
+  });
+  let errors = "";
+  server.stderr.on("data", chunk => { errors += chunk.toString(); });
+  t.after(async () => {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await once(server, "exit");
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  let ready = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (server.exitCode !== null) throw new Error(`Test server exited: ${errors}`);
+    try { ready = (await fetch(`${base}/api/global-lorebook`)).ok; } catch {}
+    if (ready) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(ready, true);
+  const get = async url => (await fetch(`${base}${url}`)).json();
+  const send = async (url, method, body, status = 200) => {
+    const response = await fetch(`${base}${url}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal(response.status, status);
+    return response.json();
+  };
+  const existing = { id: "same-id", key: "學校", keywords: ["學校"], content: "原有內容", enabled: true };
+  const initial = await send("/api/global-lorebook", "PUT", { enabled: false, entries: [existing] });
+  const cardsBefore = await get("/api/role-cards");
+  await send("/api/global-lorebook/entries", "POST", { entries: "invalid" }, 400);
+  const drafts = [
+    { ...existing, key: " 学校 ", content: "不可覆蓋" },
+    { id: "same-id", key: "天氣", keywords: ["雨"], secondaryKeywords: ["風"], content: "編輯中的內容", enabled: false, probability: 37 },
+    { key: "天气", keywords: ["天"], content: "同批重名" },
+    { key: "星空", content: "永久條目", permanent: true, probability: 80 },
+    { key: "未完成", keywords: ["空"] },
+    { key: "缺少關鍵字", content: "不能觸發" }
+  ];
+  const result = await send("/api/global-lorebook/entries", "POST", { entries: drafts });
+  assert.equal(result.addedCount, 2);
+  assert.equal(result.skippedCount, 2);
+  assert.equal(result.invalidCount, 2);
+  assert.equal(result.globalLorebook.enabled, false);
+  assert.deepEqual(result.globalLorebook.entries[0], initial.globalLorebook.entries[0]);
+  const weather = result.globalLorebook.entries[1];
+  assert.notEqual(weather.id, "same-id");
+  assert.equal(weather.content, "編輯中的內容");
+  assert.equal(weather.enabled, false);
+  assert.equal(weather.probability, 37);
+  assert.deepEqual(weather.keywords, ["雨"]);
+  assert.deepEqual(weather.secondaryKeywords, ["風"]);
+  assert.equal(result.globalLorebook.entries[2].permanent, true);
+  const persisted = JSON.parse(fs.readFileSync(path.join(directory, "data/cardstate.json"), "utf8"));
+  assert.deepEqual(persisted.globalLorebook, result.globalLorebook);
+  const repeated = await send("/api/global-lorebook/entries", "POST", { entries: drafts });
+  assert.equal(repeated.addedCount, 0);
+  assert.equal(repeated.skippedCount, 4);
+  assert.deepEqual(repeated.globalLorebook, result.globalLorebook);
+  const concurrent = await Promise.all(["山", "山"].map(key => send("/api/global-lorebook/entries", "POST", { entries: [{ key, content: key, permanent: true }] })));
+  assert.equal(concurrent.reduce((total, item) => total + item.addedCount, 0), 1);
+  assert.deepEqual(await get("/api/role-cards"), cardsBefore);
 });
